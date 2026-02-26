@@ -10,9 +10,13 @@ export default class Routes {
      */
     static register = [];
     #routerRoutes = [];
-    constructor(router) {
+    router;
+    context;
+    constructor(router, context) {
+        this.router = router;
+        this.context = context;
         this.constructor.register.forEach((RouteClass) => {
-            const route = new RouteClass(router);
+            const route = new RouteClass(router, context);
             this.#routerRoutes.push(...route.routerRoutes);
         });
     }

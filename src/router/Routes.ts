@@ -17,14 +17,19 @@ export default class Routes {
      * Array of nested route classes to register
      * @type {Array}
      */
-    static register: (new (router: any) => Routes)[] = [];
+    static register: (new (router: any, context?: any) => Routes)[] = [];
 
     #routerRoutes: RouteRegistration[] = [];
+    protected router: any;
+    protected context: any;
 
-    constructor(router: any) {
+    constructor(router: any, context?: any) {
 
-        (this.constructor as typeof Routes).register.forEach((RouteClass: new (router: any) => Routes) => {
-            const route = new RouteClass(router);
+        this.router = router;
+        this.context = context;
+
+        (this.constructor as typeof Routes).register.forEach((RouteClass: new (router: any, context?: any) => Routes) => {
+            const route = new RouteClass(router, context);
             this.#routerRoutes.push(...route.routerRoutes);
         });
 
