@@ -1,5 +1,5 @@
 import { IncomingMessage, ServerResponse } from 'http';
-interface RequestEvent {
+export interface RequestEvent {
     path: string;
     method: string;
     body: any;
@@ -10,19 +10,19 @@ interface RequestEvent {
     authorizer?: any;
     lambdaOptions?: any;
 }
-interface RouteResponse {
+export interface RouteResponse {
     status?: number;
     headers?: Record<string, string>;
     body?: any;
     isBase64Encoded?: boolean;
 }
-interface RouterOptions {
+export interface RouterOptions {
     context?: any;
     initRoutes?: (new (router: Router, context?: any) => any)[];
     bearerToken?: string | null;
     middleware?: Middleware[];
 }
-type Middleware = (event: RequestEvent) => Promise<RouteResponse | void>;
+export type Middleware = (event: RequestEvent) => Promise<RouteResponse | void>;
 export default class Router {
     #private;
     static MethodsWithBody: string[];
@@ -38,5 +38,4 @@ export default class Router {
         lambdaOptions?: any;
     }): Promise<void>;
 }
-export {};
 //# sourceMappingURL=Router.d.ts.map

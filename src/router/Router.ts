@@ -8,7 +8,7 @@ interface RouteRegistration {
     middleware?: Middleware[];
 }
 
-interface RequestEvent {
+export interface RequestEvent {
     path: string;
     method: string;
     body: any;
@@ -20,21 +20,21 @@ interface RequestEvent {
     lambdaOptions?: any;
 }
 
-interface RouteResponse {
+export interface RouteResponse {
     status?: number;
     headers?: Record<string, string>;
     body?: any;
     isBase64Encoded?: boolean;
 }
 
-interface RouterOptions {
+export interface RouterOptions {
     context?: any;
     initRoutes?: (new (router: Router, context?: any) => any)[];
     bearerToken?: string | null;
     middleware?: Middleware[];
 }
 
-type Middleware = (event: RequestEvent) => Promise<RouteResponse | void>;
+export type Middleware = (event: RequestEvent) => Promise<RouteResponse | void>;
 
 export default class Router {
 
@@ -152,7 +152,7 @@ export default class Router {
             cookies: {}, // TO DO
             params: {},
             query: event?.queryStringParameters || {},
-            headers: event.headers,
+            headers: event.headers || {},
             authorizer: event.requestContext.authorizer || null
         });
 

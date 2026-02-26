@@ -4,6 +4,9 @@ export { default as Router } from './router/Router.js';
 export { default as Routes } from './router/Routes.js';
 export { default as StaticFileHandler } from './router/StaticFileHandler.js';
 
+// Router Types
+export type { RequestEvent, RouteResponse, RouterOptions, Middleware } from './router/Router.js';
+
 // WebSocket
 export { default as WebSocketServer } from './websocket/WebSocketServer.js';
 export { default as WebSocketMessageFormatter } from './websocket/WebSocketMessageFormatter.js';

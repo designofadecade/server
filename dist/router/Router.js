@@ -80,7 +80,7 @@ export default class Router {
             cookies: {}, // TO DO
             params: {},
             query: event?.queryStringParameters || {},
-            headers: event.headers,
+            headers: event.headers || {},
             authorizer: event.requestContext.authorizer || null
         });
         return {
