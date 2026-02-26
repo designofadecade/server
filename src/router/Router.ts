@@ -14,8 +14,8 @@ interface RequestEvent {
     body: any;
     cookies: Record<string, string>;
     params: Record<string, string>;
-    query: Record<string, any>;
-    headers: Record<string, any>;
+    query: Record<string, string>;
+    headers: Record<string, string | string[] | undefined>;
     authorizer?: any;
     lambdaOptions?: any;
 }
@@ -264,7 +264,8 @@ export default class Router {
         const authHeader = headers?.authorization || (headers as any)?.Authorization;
         if (!authHeader) return null;
 
-        const token = authHeader.replace(/^Bearer\s+/i, '');
+        const authValue = Array.isArray(authHeader) ? authHeader[0] : authHeader;
+        const token = authValue?.replace(/^Bearer\s+/i, '') || '';
         if (!token) return null;
 
         try {
@@ -325,7 +326,8 @@ export default class Router {
                     })
                 };
 
-            const token = authHeader.replace(/^Bearer\s+/i, '');
+            const authValue = Array.isArray(authHeader) ? authHeader[0] : authHeader;
+            const token = authValue?.replace(/^Bearer\s+/i, '') || '';
 
             if (token !== this.#bearerToken)
                 return {

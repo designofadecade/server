@@ -167,7 +167,8 @@ export default class Router {
         const authHeader = headers?.authorization || headers?.Authorization;
         if (!authHeader)
             return null;
-        const token = authHeader.replace(/^Bearer\s+/i, '');
+        const authValue = Array.isArray(authHeader) ? authHeader[0] : authHeader;
+        const token = authValue?.replace(/^Bearer\s+/i, '') || '';
         if (!token)
             return null;
         try {
@@ -225,7 +226,8 @@ export default class Router {
                         statusCode: 401
                     })
                 };
-            const token = authHeader.replace(/^Bearer\s+/i, '');
+            const authValue = Array.isArray(authHeader) ? authHeader[0] : authHeader;
+            const token = authValue?.replace(/^Bearer\s+/i, '') || '';
             if (token !== this.#bearerToken)
                 return {
                     status: 403,
