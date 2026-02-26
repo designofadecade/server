@@ -14,6 +14,7 @@ export { default as Events } from './events/Events.js';
 export { default as EventsManager } from './events/EventsManager.js';
 // Utilities
 export { default as HtmlSanitizer } from './sanitizer/HtmlSanitizer.js';
+export { default as HtmlRenderer } from './utils/HtmlRenderer.js';
 export { default as Local } from './local/Local.js';
 export { logger as Logger } from './logger/Logger.js';
 export { default as ApiClient } from './client/ApiClient.js';
