@@ -1,6 +1,6 @@
 {
   "name": "@designofadecade/server",
-  "version": "1.1.10",
+  "version": "1.2.0",
   "description": "Design of a Decade Server - A modern TypeScript server with WebSocket support",
   "type": "module",
   "main": "./dist/index.js",
