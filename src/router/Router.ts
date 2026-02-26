@@ -4,11 +4,11 @@ interface RouteRegistration {
     path: string;
     methods: string[];
     pattern: URLPattern;
-    handler: (event: RequestEvent) => Promise<RouteResponse>;
-    middleware?: Middleware[];
+    handler: (event: RouterRequest) => Promise<RouterResponse>;
+    middleware?: RouterMiddleware[];
 }
 
-export interface RequestEvent {
+export interface RouterRequest {
     path: string;
     method: string;
     body: any;
@@ -20,7 +20,7 @@ export interface RequestEvent {
     lambdaOptions?: any;
 }
 
-export interface RouteResponse {
+export interface RouterResponse {
     status?: number;
     headers?: Record<string, string>;
     body?: any;
@@ -31,10 +31,10 @@ export interface RouterOptions {
     context?: any;
     initRoutes?: (new (router: Router, context?: any) => any)[];
     bearerToken?: string | null;
-    middleware?: Middleware[];
+    middleware?: RouterMiddleware[];
 }
 
-export type Middleware = (event: RequestEvent) => Promise<RouteResponse | void>;
+export type RouterMiddleware = (event: RouterRequest) => Promise<RouterResponse | void>;
 
 export default class Router {
 
@@ -42,12 +42,12 @@ export default class Router {
 
     #routes = {
         cache: new Map<string, RouteRegistration | null>(),
-        static: new Map<string, { handler: (event: RequestEvent) => Promise<RouteResponse> }>(),
+        static: new Map<string, { handler: (event: RouterRequest) => Promise<RouterResponse> }>(),
         dynamic: new Map<string, RouteRegistration[]>(),
     };
 
     #bearerToken: string | null = null;
-    #globalMiddleware: Middleware[] = [];
+    #globalMiddleware: RouterMiddleware[] = [];
 
     constructor({ context, initRoutes = [], bearerToken = null, middleware = [] }: RouterOptions = {}) {
 
@@ -104,7 +104,7 @@ export default class Router {
 
     }
 
-    #findRouteHandler(path: string, method: string): RouteRegistration | { handler: (event: RequestEvent) => Promise<RouteResponse> } | null {
+    #findRouteHandler(path: string, method: string): RouteRegistration | { handler: (event: RouterRequest) => Promise<RouterResponse> } | null {
 
         // Normalize path: remove trailing slash (except for root "/")
         const normalizedPath = path.length > 1 ? path.replace(/\/+$/, '') : path;
@@ -310,7 +310,7 @@ export default class Router {
         });
     }
 
-    async #request(event: RequestEvent): Promise<RouteResponse> {
+    async #request(event: RouterRequest): Promise<RouterResponse> {
 
         if (this.#bearerToken) {
             const authHeader = event.headers?.authorization || event.headers?.Authorization;
