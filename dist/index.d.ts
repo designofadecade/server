@@ -13,5 +13,15 @@ export { default as HtmlRenderer } from './utils/HtmlRenderer.js';
 export { default as Local } from './local/Local.js';
 export { logger as Logger } from './logger/Logger.js';
 export { default as ApiClient } from './client/ApiClient.js';
+import HtmlSanitizer from './sanitizer/HtmlSanitizer.js';
+import HtmlRenderer from './utils/HtmlRenderer.js';
+import Local from './local/Local.js';
+import ApiClient from './client/ApiClient.js';
+export declare const Utils: {
+    HtmlSanitizer: typeof HtmlSanitizer;
+    HtmlRenderer: typeof HtmlRenderer;
+    Local: typeof Local;
+    ApiClient: typeof ApiClient;
+};
 export { default as Slack } from './notifications/Slack.js';
 //# sourceMappingURL=index.d.ts.map
