@@ -1,0 +1,39 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ES2022",
+    "lib": ["ES2022"],
+    "moduleResolution": "node",
+    "resolveJsonModule": true,
+    "allowJs": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "paths": {
+      "@designofadecade/router": ["./src/router"],
+      "@designofadecade/events": ["./src/events"],
+      "@designofadecade/local": ["./src/local"],
+      "@designofadecade/logger": ["./src/logger"],
+      "@designofadecade/middleware": ["./src/middleware"],
+      "@designofadecade/notifications": ["./src/notifications"],
+      "@designofadecade/sanitizer": ["./src/sanitizer"],
+      "@designofadecade/server": ["./src/server"],
+      "@designofadecade/state": ["./src/state"],
+      "@designofadecade/utils": ["./src/utils"],
+      "@designofadecade/websocket": ["./src/websocket"],
+      "@designofadecade/client": ["./src/client"]
+    }
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist", "**/*.test.ts", "**/*.test.js"]
+}

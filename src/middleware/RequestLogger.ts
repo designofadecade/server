@@ -1,0 +1,109 @@
+/**
+ * Request logging middleware for API routes
+ * Extends the base Logger with HTTP-specific context
+ * 
+ * @module RequestLogger
+ */
+
+import { logger } from '../logger/Logger.js';
+
+interface RequestLoggerInterface {
+    info: (message: string, context?: Record<string, any>) => void;
+    error: (message: string, context?: Record<string, any>) => void;
+    warn: (message: string, context?: Record<string, any>) => void;
+    debug: (message: string, context?: Record<string, any>) => void;
+}
+
+interface RequestEvent {
+    requestContext?: {
+        requestId?: string;
+        http?: {
+            method: string;
+            path: string;
+        };
+        identity?: {
+            sourceIp?: string;
+        };
+    };
+    httpMethod?: string;
+    path?: string;
+    headers?: Record<string, any>;
+    body?: string;
+    queryStringParameters?: Record<string, any>;
+    pathParameters?: Record<string, any>;
+}
+
+interface ResponseObject {
+    statusCode: number;
+    [key: string]: any;
+}
+
+/**
+ * Creates a request-scoped logger with HTTP context
+ * 
+ * @param {Object} event - AWS Lambda event or custom request object
+ * @param {string} event.requestContext.requestId - Request ID
+ * @param {string} event.httpMethod - HTTP method
+ * @param {string} event.path - Request path
+ * @returns {Object} Logger with request context
+ */
+export function createRequestLogger(event: RequestEvent): RequestLoggerInterface {
+    const requestContext = {
+        requestId: event.requestContext?.requestId || 'unknown',
+        method: event.httpMethod || event.requestContext?.http?.method,
+        path: event.path || event.requestContext?.http?.path,
+        sourceIp: event.requestContext?.identity?.sourceIp,
+        userAgent: event.headers?.['user-agent']
+    };
+
+    return {
+        info: (message: string, context: Record<string, any> = {}) => {
+            logger.info(message, { ...requestContext, ...context });
+        },
+        error: (message: string, context: Record<string, any> = {}) => {
+            logger.error(message, { ...requestContext, ...context });
+        },
+        warn: (message: string, context: Record<string, any> = {}) => {
+            logger.warn(message, { ...requestContext, ...context });
+        },
+        debug: (message: string, context: Record<string, any> = {}) => {
+            logger.debug(message, { ...requestContext, ...context });
+        }
+    };
+}
+
+/**
+ * Middleware to automatically log incoming requests
+ * 
+ * @param {Object} event - AWS Lambda event
+ * @returns {void}
+ */
+export function logRequest(event: RequestEvent): void {
+    const requestLogger = createRequestLogger(event);
+
+    requestLogger.info('Incoming request', {
+        body: event.body ? JSON.parse(event.body) : undefined,
+        queryParams: event.queryStringParameters,
+        pathParams: event.pathParameters
+    });
+}
+
+/**
+ * Middleware to log outgoing responses
+ * 
+ * @param {Object} event - AWS Lambda event
+ * @param {Object} response - API response
+ * @param {number} durationMs - Request duration in milliseconds
+ * @returns {void}
+ */
+export function logResponse(event: RequestEvent, response: ResponseObject, durationMs: number): void {
+    const requestLogger = createRequestLogger(event);
+
+    const level = response.statusCode >= 400 ? 'error' : 'info';
+
+    requestLogger[level]('Request completed', {
+        statusCode: response.statusCode,
+        durationMs,
+        success: response.statusCode < 400
+    });
+}
