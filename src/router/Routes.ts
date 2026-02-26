@@ -1,3 +1,5 @@
+import type Router from './Router.js';
+
 interface RouteRegistration {
     path: string;
     methods: string[];
@@ -17,18 +19,18 @@ export default class Routes {
      * Array of nested route classes to register
      * @type {Array}
      */
-    static register: (new (router: any, context?: any) => Routes)[] = [];
+    static register: (new (router: Router, context?: any) => Routes)[] = [];
 
     #routerRoutes: RouteRegistration[] = [];
-    protected router: any;
+    protected router: Router;
     protected context: any;
 
-    constructor(router: any, context?: any) {
+    constructor(router: Router, context?: any) {
 
         this.router = router;
         this.context = context;
 
-        (this.constructor as typeof Routes).register.forEach((RouteClass: new (router: any, context?: any) => Routes) => {
+        (this.constructor as typeof Routes).register.forEach((RouteClass: new (router: Router, context?: any) => Routes) => {
             const route = new RouteClass(router, context);
             this.#routerRoutes.push(...route.routerRoutes);
         });

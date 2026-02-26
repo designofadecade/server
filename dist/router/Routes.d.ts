@@ -1,3 +1,4 @@
+import type Router from './Router.js';
 interface RouteRegistration {
     path: string;
     methods: string[];
@@ -15,10 +16,10 @@ export default class Routes {
      * Array of nested route classes to register
      * @type {Array}
      */
-    static register: (new (router: any, context?: any) => Routes)[];
-    protected router: any;
+    static register: (new (router: Router, context?: any) => Routes)[];
+    protected router: Router;
     protected context: any;
-    constructor(router: any, context?: any);
+    constructor(router: Router, context?: any);
     get routerRoutes(): RouteRegistration[];
     addRoute(path: string, methods: string | string[], handler: (event: any) => Promise<any>): void;
 }
