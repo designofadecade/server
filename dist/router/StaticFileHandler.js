@@ -1,5 +1,6 @@
 import fs from 'fs/promises';
 import path from 'path';
+import { logger } from '../logger/Logger.js';
 /**
  * StaticFileHandler - Serves static files with security and proper MIME types
  *
@@ -127,7 +128,7 @@ export default class StaticFileHandler {
                     body: 'Not Found'
                 };
             }
-            console.error('Static file error:', error);
+            logger.error('Static file error', { error: error.message, code: error.code });
             return {
                 status: 500,
                 headers: { 'Content-Type': 'text/plain' },

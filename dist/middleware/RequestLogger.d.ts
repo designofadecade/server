@@ -5,40 +5,40 @@
  * @module RequestLogger
  */
 interface RequestLoggerInterface {
-    info: (message: string, context?: Record<string, any>) => void;
-    error: (message: string, context?: Record<string, any>) => void;
-    warn: (message: string, context?: Record<string, any>) => void;
-    debug: (message: string, context?: Record<string, any>) => void;
+  info: (message: string, context?: Record<string, any>) => void;
+  error: (message: string, context?: Record<string, any>) => void;
+  warn: (message: string, context?: Record<string, any>) => void;
+  debug: (message: string, context?: Record<string, any>) => void;
 }
 interface RequestEvent {
-    requestContext?: {
-        requestId?: string;
-        http?: {
-            method: string;
-            path: string;
-        };
-        identity?: {
-            sourceIp?: string;
-        };
+  requestContext?: {
+    requestId?: string;
+    http?: {
+      method: string;
+      path: string;
     };
-    httpMethod?: string;
-    path?: string;
-    headers?: Record<string, any>;
-    body?: string;
-    queryStringParameters?: Record<string, any>;
-    pathParameters?: Record<string, any>;
+    identity?: {
+      sourceIp?: string;
+    };
+  };
+  httpMethod?: string;
+  path?: string;
+  headers?: Record<string, any>;
+  body?: string;
+  queryStringParameters?: Record<string, any>;
+  pathParameters?: Record<string, any>;
 }
 interface ResponseObject {
-    statusCode: number;
-    [key: string]: any;
+  statusCode: number;
+  [key: string]: any;
 }
 /**
  * Creates a request-scoped logger with HTTP context
  *
- * @param {Object} event - AWS Lambda event or custom request object
- * @param {string} event.requestContext.requestId - Request ID
- * @param {string} event.httpMethod - HTTP method
- * @param {string} event.path - Request path
+ * @param {Object} request - AWS Lambda event or custom request object
+ * @param {string} request.requestContext.requestId - Request ID
+ * @param {string} request.httpMethod - HTTP method
+ * @param {string} request.path - Request path
  * @returns {Object} Logger with request context
  */
 export declare function createRequestLogger(event: RequestEvent): RequestLoggerInterface;
@@ -57,6 +57,10 @@ export declare function logRequest(event: RequestEvent): void;
  * @param {number} durationMs - Request duration in milliseconds
  * @returns {void}
  */
-export declare function logResponse(event: RequestEvent, response: ResponseObject, durationMs: number): void;
+export declare function logResponse(
+  event: RequestEvent,
+  response: ResponseObject,
+  durationMs: number
+): void;
 export {};
 //# sourceMappingURL=RequestLogger.d.ts.map

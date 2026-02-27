@@ -1,3 +1,4 @@
+import { logger } from '../logger/Logger.js';
 export default class WebSocketMessageFormatter {
     /**
      * Parses a raw WebSocket message string into a structured object.
@@ -18,13 +19,13 @@ export default class WebSocketMessageFormatter {
      */
     static parse(rawMessage) {
         if (!rawMessage || typeof rawMessage !== 'string') {
-            console.warn("Received invalid message data:", rawMessage);
+            logger.warn('Received invalid message data', { messageType: typeof rawMessage });
             return null;
         }
         try {
             const parsedObject = JSON.parse(rawMessage);
             if (typeof parsedObject.type !== 'string' || typeof parsedObject.payload === 'undefined') {
-                console.error("Parsed message lacks required 'type' or 'payload' fields.");
+                logger.error('Parsed message lacks required fields', { hasType: !!parsedObject.type, hasPayload: !!parsedObject.payload });
                 return null;
             }
             // Preserve id if present, otherwise return just type and payload
@@ -35,7 +36,7 @@ export default class WebSocketMessageFormatter {
             };
         }
         catch (error) {
-            console.error("Failed to parse incoming WebSocket message as JSON:", error);
+            logger.error('Failed to parse incoming WebSocket message as JSON', { error: error instanceof Error ? error.message : String(error) });
             return null;
         }
     }
@@ -65,7 +66,7 @@ export default class WebSocketMessageFormatter {
             return JSON.stringify(messageObject);
         }
         catch (error) {
-            console.error("Failed to serialize WebSocket message:", error);
+            logger.error('Failed to serialize WebSocket message', { error: error.message });
             // Provide more specific error message for circular references
             const errorMsg = error.message.includes('circular')
                 ? 'Circular reference in payload'

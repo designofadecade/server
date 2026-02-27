@@ -1,85 +1,171 @@
-import Router from "../router/Router.js";
-import Routes from "../router/Routes.js";
+/**
+ * Local development utilities for Lambda handlers
+ *
+ * Provides utilities to run AWS Lambda handlers locally using a Node.js server.
+ * Converts HTTP requests to Lambda event format and responses back to HTTP.
+ *
+ * @class Local
+ * @example
+ * // Wrap your Lambda handler for local development
+ * import { handler } from './lambda/handler.js';
+ * import Local from '@designofadecade/local';
+ *
+ * const localHandler = Local.LambdaProxyRouter(handler, {
+ *     requestContext: { stage: 'dev' }
+ * });
+ *
+ * // Use with Node.js http server
+ * http.createServer((req, res) => {
+ *     localHandler.request(req, res);
+ * }).listen(3000);
+ */
+
+import Router from '../router/Router.js';
+import Routes from '../router/Routes.js';
+import type { RouterRequest, RouterResponse } from '../router/Router.js';
+import type { IncomingMessage, ServerResponse } from 'http';
 
 interface LambdaProxyRouterOptions {
-    requestContext?: Record<string, any>;
-    event?: Record<string, any>;
+  requestContext?: Record<string, unknown>;
+  event?: Record<string, unknown>;
+}
+
+interface LambdaEvent {
+  rawPath: string;
+  headers: Record<string, string | string[] | undefined>;
+  queryStringParameters: Record<string, string>;
+  cookies: Record<string, string>;
+  requestContext: {
+    http: {
+      method: string;
+      path: string;
+    };
+    authorizer: unknown;
+    [key: string]: unknown;
+  };
+  body: string | null;
+  [key: string]: unknown;
+}
+
+interface LambdaResponse {
+  statusCode: number;
+  headers?: Record<string, string>;
+  cookies?: string[];
+  body?: string;
+  isBase64Encoded?: boolean;
 }
 
 export default class Local {
+  /**
+   * Lambda proxy router for local development
+   *
+   * Creates a router that wraps AWS Lambda handlers and allows them to be
+   * run locally with a Node.js HTTP server. Automatically converts between
+   * HTTP requests and Lambda event format.
+   *
+   * @param {Function} LambdaHandler - AWS Lambda handler function
+   * @param {Object} options - Configuration options
+   * @param {Object} options.requestContext - Additional requestContext fields for Lambda event
+   * @param {Object} options.event - Additional event fields for Lambda event
+   * @returns {Object} Object with request method for handling HTTP requests
+   *
+   * @example
+   * const handler = Local.LambdaProxyRouter(
+   *     async (event) => {
+   *         return {
+   *             statusCode: 200,
+   *             body: JSON.stringify({ message: 'Hello!' })
+   *         };
+   *     },
+   *     { requestContext: { stage: 'local' } }
+   * );
+   */
+  static LambdaProxyRouter(
+    LambdaHandler: (event: LambdaEvent) => Promise<LambdaResponse>,
+    options: LambdaProxyRouterOptions = {}
+  ) {
+    const router = new Router({
+      initRoutes: [
+        class LocalRoutes extends Routes {
+          constructor(router: Router) {
+            super(router);
 
-    static LambdaProxyRouter(LambdaHandler: (event: any) => Promise<any>, options: LambdaProxyRouterOptions = {}) {
+            this.addRoute(
+              '*',
+              ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'],
+              async (request: RouterRequest): Promise<RouterResponse> => {
+                const lambdaOptions =
+                  (request.lambdaOptions as {
+                    requestContext?: Record<string, unknown>;
+                    event?: Record<string, unknown>;
+                  }) || {};
 
-        const router = new Router({
-            initRoutes: [
-                class LocalRoutes extends Routes {
-
-                    constructor(router: any) {
-                        super(router);
-
-                        this.addRoute('*', ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'], async (event: any) => {
-
-                            const lambdaOptions = event.lambdaOptions || {};
-
-                            const LambdaResponse = await LambdaHandler({
-                                "rawPath": event.path,
-                                "headers": event.headers,
-                                "queryStringParameters": event.query,
-                                "cookies": event.cookies,
-                                "requestContext": {
-                                    "http": {
-                                        "method": event.method,
-                                        "path": event.path
-                                    },
-                                    "authorizer": event.authorizer || null,
-                                    ...(lambdaOptions.requestContext || {})
-                                },
-                                "body": event.body ? JSON.stringify(event.body) : null,
-                                ...(lambdaOptions.event || {})
-                            });
-
-                            let body = LambdaResponse.body || null;
-                            if (LambdaResponse.headers?.['content-type']?.includes('application/json') && body) {
-                                try {
-                                    body = JSON.parse(body);
-                                } catch {
-                                }
-                            }
-
-                            return {
-                                status: LambdaResponse.statusCode,
-                                headers: LambdaResponse.headers,
-                                cookies: LambdaResponse.cookies,
-                                body: body,
-                                isBase64Encoded: LambdaResponse.isBase64Encoded || false
-                            }
-
-                        });
-
-                    }
-
-                }
-            ]
-        });
-
-        return {
-            request: (req: any, res: any, requestOptions: { requestContext?: Record<string, any>; event?: Record<string, any> } = {}) => {
-                return router.nodeJSRequest(req, res, {
-                    cors: true,
-                    lambdaOptions: {
-                        requestContext: {
-                            ...options.requestContext,
-                            ...requestOptions.requestContext
-                        },
-                        event: {
-                            ...options.event,
-                            ...requestOptions.event
-                        }
-                    }
+                const LambdaResponse: LambdaResponse = await LambdaHandler({
+                  rawPath: request.path,
+                  headers: request.headers,
+                  queryStringParameters: request.query,
+                  cookies: request.cookies,
+                  requestContext: {
+                    http: {
+                      method: request.method,
+                      path: request.path,
+                    },
+                    authorizer: request.authorizer || null,
+                    ...(lambdaOptions.requestContext || {}),
+                  },
+                  body: request.body ? JSON.stringify(request.body) : null,
+                  ...(lambdaOptions.event || {}),
                 });
-            }
-        }
 
-    }
+                let body = LambdaResponse.body || null;
+                if (
+                  LambdaResponse.headers?.['content-type']?.includes('application/json') &&
+                  body
+                ) {
+                  try {
+                    body = JSON.parse(body);
+                  } catch {
+                    // Silently fail if body is not valid JSON
+                  }
+                }
 
+                // Note: Lambda cookies are handled via Set-Cookie headers, not separate cookies property
+                return {
+                  status: LambdaResponse.statusCode,
+                  headers: LambdaResponse.headers,
+                  body: body,
+                  isBase64Encoded: LambdaResponse.isBase64Encoded || false,
+                };
+              }
+            );
+          }
+        },
+      ],
+    });
+
+    return {
+      request: (
+        req: IncomingMessage,
+        res: ServerResponse,
+        requestOptions: {
+          requestContext?: Record<string, unknown>;
+          event?: Record<string, unknown>;
+        } = {}
+      ) => {
+        return router.nodeJSRequest(req, res, {
+          cors: true,
+          lambdaOptions: {
+            requestContext: {
+              ...options.requestContext,
+              ...requestOptions.requestContext,
+            },
+            event: {
+              ...options.event,
+              ...requestOptions.event,
+            },
+          },
+        });
+      },
+    };
+  }
 }

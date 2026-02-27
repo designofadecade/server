@@ -15,6 +15,7 @@
  * @module HtmlSanitizer
  * @version 2.0.0
  */
+import { logger } from '../logger/Logger.js';
 // ============================================================================
 // Configuration Constants
 // ============================================================================
@@ -86,7 +87,7 @@ export default class HtmlSanitizer {
             return '';
         }
         if (!Array.isArray(allowedTags) || allowedTags.length === 0) {
-            console.warn('[HtmlSanitizer] No allowed tags provided, stripping all HTML');
+            logger.warn('HtmlSanitizer: No allowed tags provided, stripping all HTML');
             return this.stripAllTags(html);
         }
         // ====================================================================
@@ -94,20 +95,20 @@ export default class HtmlSanitizer {
         // ====================================================================
         const validAllowedTags = allowedTags.filter((tag) => {
             if (typeof tag !== 'string' || !TAG_NAME_PATTERN.test(tag)) {
-                console.warn('[HtmlSanitizer] Invalid tag name ignored:', tag);
+                logger.warn('HtmlSanitizer: Invalid tag name ignored', { tag });
                 return false;
             }
             return true;
         }).map((tag) => tag.toLowerCase());
         if (validAllowedTags.length === 0) {
-            console.warn('[HtmlSanitizer] No valid allowed tags, stripping all HTML');
+            logger.warn('HtmlSanitizer: No valid allowed tags, stripping all HTML');
             return this.stripAllTags(html);
         }
         // ====================================================================
         // Step 3: DoS Protection
         // ====================================================================
         if (html.length > MAX_INPUT_SIZE) {
-            console.error('[HtmlSanitizer] Input exceeds maximum size, truncating');
+            logger.error('HtmlSanitizer: Input exceeds maximum size for clean(), truncating', { size: html.length, max: MAX_INPUT_SIZE });
             html = html.substring(0, MAX_INPUT_SIZE);
         }
         // ====================================================================
@@ -145,7 +146,7 @@ export default class HtmlSanitizer {
                     }
                     else {
                         // Invalid URL - remove href but keep anchor tag
-                        console.warn('[HtmlSanitizer] Unsafe URL removed from anchor tag:', url);
+                        logger.warn('HtmlSanitizer: Unsafe URL removed from anchor tag', { url });
                         return '<a>';
                     }
                 }
@@ -256,7 +257,7 @@ export default class HtmlSanitizer {
         }
         // DoS protection - reject excessively large inputs
         if (html.length > MAX_INPUT_SIZE) {
-            console.error('[HtmlSanitizer] Input exceeds maximum size, truncating');
+            logger.error('HtmlSanitizer: Input exceeds maximum size for stripAllTags, truncating', { size: html.length, max: MAX_INPUT_SIZE });
             html = html.substring(0, MAX_INPUT_SIZE);
         }
         // Remove HTML comments
@@ -312,7 +313,7 @@ export default class HtmlSanitizer {
         }
         // DoS protection
         if (text.length > MAX_INPUT_SIZE) {
-            console.error('[HtmlSanitizer] Attribute value exceeds maximum size, truncating');
+            logger.error('HtmlSanitizer: Attribute value exceeds maximum size, truncating', { size: text.length, max: MAX_INPUT_SIZE });
             text = text.substring(0, MAX_INPUT_SIZE);
         }
         // Order matters: & first to avoid double-escaping
@@ -348,7 +349,7 @@ export default class HtmlSanitizer {
         }
         // DoS protection
         if (text.length > MAX_INPUT_SIZE) {
-            console.error('[HtmlSanitizer] HTML content exceeds maximum size, truncating');
+            logger.error('HtmlSanitizer: HTML content exceeds maximum size, truncating', { size: text.length, max: MAX_INPUT_SIZE });
             text = text.substring(0, MAX_INPUT_SIZE);
         }
         // Order matters: & first to avoid double-escaping
@@ -396,14 +397,14 @@ export default class HtmlSanitizer {
         }
         // DoS protection - reject excessively long URLs
         if (url.length > MAX_URL_LENGTH) {
-            console.warn('[HtmlSanitizer] URL exceeds maximum length:', url.length);
+            logger.warn('HtmlSanitizer: URL exceeds maximum length', { length: url.length, max: MAX_URL_LENGTH });
             return false;
         }
         // Normalize to lowercase for protocol checking
         const urlLower = url.toLowerCase();
         // Check for dangerous protocols first (XSS vectors)
         if (DANGEROUS_PROTOCOLS.test(urlLower)) {
-            console.warn('[HtmlSanitizer] Dangerous protocol detected in URL:', url);
+            logger.warn('HtmlSanitizer: Dangerous protocol detected in URL', { url });
             return false;
         }
         // Allow safe protocols
@@ -411,7 +412,7 @@ export default class HtmlSanitizer {
         if (url.includes(':')) {
             const isValid = SAFE_PROTOCOLS.test(url);
             if (!isValid) {
-                console.warn('[HtmlSanitizer] Unknown/unsafe protocol in URL:', url);
+                logger.warn('HtmlSanitizer: Unknown/unsafe protocol in URL', { url });
             }
             return isValid;
         }
@@ -421,13 +422,13 @@ export default class HtmlSanitizer {
             try {
                 const decoded = decodeURIComponent(url);
                 if (DANGEROUS_PROTOCOLS.test(decoded)) {
-                    console.warn('[HtmlSanitizer] Encoded dangerous protocol detected:', url);
+                    logger.warn('HtmlSanitizer: Encoded dangerous protocol detected', { url });
                     return false;
                 }
             }
             catch (e) {
                 // If decoding fails, reject to be safe
-                console.warn('[HtmlSanitizer] Failed to decode URL - rejecting:', url);
+                logger.warn('HtmlSanitizer: Failed to decode URL - rejecting', { url });
                 return false;
             }
         }
@@ -491,7 +492,7 @@ export default class HtmlSanitizer {
         // DoS protection - RFC 5321 maximum is 254 characters
         const MAX_EMAIL_LENGTH = 254;
         if (email.length > MAX_EMAIL_LENGTH) {
-            console.warn('[HtmlSanitizer] Email exceeds maximum length:', email.length);
+            logger.warn('HtmlSanitizer: Email exceeds maximum length', { length: email.length, max: MAX_EMAIL_LENGTH });
             return false;
         }
         // ====================================================================
@@ -602,7 +603,7 @@ export default class HtmlSanitizer {
         }
         // DoS protection
         if (text.length > MAX_INPUT_SIZE) {
-            console.error('[HtmlSanitizer] Input exceeds maximum size for entity decoding');
+            logger.error('HtmlSanitizer: Input exceeds maximum size for entity decoding', { size: text.length, max: MAX_INPUT_SIZE });
             text = text.substring(0, MAX_INPUT_SIZE);
         }
         // Common HTML entities to decode
@@ -631,7 +632,7 @@ export default class HtmlSanitizer {
                     return String.fromCharCode(code);
                 }
                 catch (e) {
-                    console.warn('[HtmlSanitizer] Invalid character code:', code);
+                    logger.warn('HtmlSanitizer: Invalid character code', { code });
                     return match;
                 }
             }
@@ -646,7 +647,7 @@ export default class HtmlSanitizer {
                     return String.fromCharCode(code);
                 }
                 catch (e) {
-                    console.warn('[HtmlSanitizer] Invalid hex character code:', hex);
+                    logger.warn('HtmlSanitizer: Invalid hex character code', { hex });
                     return match;
                 }
             }

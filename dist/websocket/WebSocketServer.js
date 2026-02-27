@@ -20,14 +20,14 @@ export default class WebSocketServer extends EventEmitter {
         // Error handler for the WebSocket server itself
         this.#wss.on('error', (error) => {
             if (error.code === 'EADDRINUSE') {
-                console.error(`✗ WebSocket port ${port} is already in use`);
+                logger.error('WebSocket port is already in use', { port });
                 process.exit(1);
             }
-            console.error('✗ WebSocket Server error:', error);
+            logger.error('WebSocket Server error', { error: error.message, code: error.code });
             process.exit(1);
         });
         this.#wss.on('listening', () => {
-            console.log(`✓ WebSocket Server listening on ${host}:${port}`);
+            logger.info('WebSocket Server listening', { host, port });
         });
         this.#wss.on('connection', (ws) => {
             logger.info('WebSocket client connected');
@@ -82,11 +82,11 @@ export default class WebSocketServer extends EventEmitter {
             if (this.#wss) {
                 this.#wss.close((error) => {
                     if (error) {
-                        console.error('✗ Error closing WebSocket Server:', error);
+                        logger.error('Error closing WebSocket Server', { error: error.message });
                         reject(error);
                     }
                     else {
-                        console.log('✓ WebSocket Server closed');
+                        logger.info('WebSocket Server closed');
                         resolve();
                     }
                 });

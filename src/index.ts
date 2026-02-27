@@ -3,9 +3,15 @@ export { default as Server } from './server/Server.js';
 export { default as Router } from './router/Router.js';
 export { default as Routes } from './router/Routes.js';
 export { default as StaticFileHandler } from './router/StaticFileHandler.js';
+export { default as Context } from './context/Context.js';
 
 // Router Types
-export type { RouterRequest, RouterResponse, RouterOptions, RouterMiddleware } from './router/Router.js';
+export type {
+  RouterRequest,
+  RouterResponse,
+  RouterOptions,
+  RouterMiddleware,
+} from './router/Router.js';
 
 // WebSocket
 export { default as WebSocketServer } from './websocket/WebSocketServer.js';
@@ -27,6 +33,17 @@ export { logger } from './logger/Logger.js';
 export { default as ApiClient } from './client/ApiClient.js';
 export { default as RouteError } from './router/RouteError.js';
 
+// Documentation
+export { OpenApiGenerator, generateSwaggerUI } from './docs/OpenApiGenerator.js';
+export type {
+  OpenApiInfo,
+  OpenApiServer,
+  OpenApiParameter,
+  OpenApiResponse,
+  OpenApiRouteConfig,
+  OpenApiConfig,
+} from './docs/OpenApiGenerator.js';
+
 // Utilities (grouped namespace - classes only)
 import HtmlSanitizer from './sanitizer/HtmlSanitizer.js';
 import HtmlRenderer from './utils/HtmlRenderer.js';
@@ -34,10 +51,10 @@ import Local from './local/Local.js';
 import ApiClient from './client/ApiClient.js';
 
 export const Utils = {
-    HtmlSanitizer,
-    HtmlRenderer,
-    Local,
-    ApiClient
+  HtmlSanitizer,
+  HtmlRenderer,
+  Local,
+  ApiClient,
 };
 
 // Integrations

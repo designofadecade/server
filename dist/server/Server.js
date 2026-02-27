@@ -1,4 +1,20 @@
 import Http from 'http';
+import { logger } from '../logger/Logger.js';
+/**
+ * HTTP Server wrapper with Node.js http module
+ *
+ * Provides a simple HTTP server with automatic error handling,
+ * port validation, and graceful shutdown capabilities.
+ *
+ * @class Server
+ * @example
+ * const server = new Server({ port: 3000 }, (req, res) => {
+ *   res.end('Hello World');
+ * });
+ *
+ * // Graceful shutdown
+ * await server.close();
+ */
 export default class Server {
     #server = null;
     #initPort = 3000;
@@ -26,14 +42,14 @@ export default class Server {
         // Attach error handler before listen to avoid race conditions
         this.#server.on('error', (error) => {
             if (error.code === 'EADDRINUSE') {
-                console.error(`✗ Port ${this.#initPort} is already in use`);
+                logger.error('Port is already in use', { port: this.#initPort });
                 process.exit(1);
             }
-            console.error('✗ HTTP Server error:', error);
+            logger.error('HTTP Server error', { error: error.message, code: error.code });
             process.exit(1);
         });
         this.#server.listen(this.#initPort, this.#initHost, () => {
-            console.log(`✓ HTTP Server listening on ${this.#initHost}:${this.#initPort}`);
+            logger.info('HTTP Server listening', { host: this.#initHost, port: this.#initPort });
         });
     }
     close() {
@@ -41,11 +57,11 @@ export default class Server {
             if (this.#server) {
                 this.#server.close((error) => {
                     if (error) {
-                        console.error('✗ Error closing HTTP Server:', error);
+                        logger.error('Error closing HTTP Server', { error: error.message });
                         reject(error);
                     }
                     else {
-                        console.log('✓ HTTP Server closed');
+                        logger.info('HTTP Server closed');
                         resolve();
                     }
                 });

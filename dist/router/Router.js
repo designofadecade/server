@@ -76,7 +76,7 @@ class Router {
     }
     async lambdaEvent(event) {
         let body = _a.MethodsWithBody.includes(event.requestContext.http.method) ? event.body : null;
-        if (event.headers['content-type']?.includes('application/json')) {
+        if (event.headers['content-type']?.includes('application/json') && body) {
             try {
                 body = JSON.parse(body);
             }
@@ -91,7 +91,7 @@ class Router {
             path: event.requestContext.http.path,
             method: event.requestContext.http.method,
             body: body,
-            cookies: {}, // TO DO
+            cookies: this.#parseLambdaCookies(event.cookies || []),
             params: {},
             query: event?.queryStringParameters || {},
             headers: event.headers || {},
@@ -159,10 +159,10 @@ class Router {
                 res.end('');
         }
         catch (error) {
-            logger.error('Router error', { error: error.message, stack: error.stack });
+            logger.error('Router error', { error: error instanceof Error ? error.message : String(error), stack: error instanceof Error ? error.stack : undefined });
             res.statusCode = 500;
             res.setHeader('Content-Type', 'application/json');
-            const errorResponse = RouteError.create(500, 'Internal Server Error', error.message);
+            const errorResponse = RouteError.create(500, 'Internal Server Error', error instanceof Error ? error.message : String(error));
             res.end(typeof errorResponse.body === 'string' ? errorResponse.body : JSON.stringify(errorResponse.body));
         }
     }
@@ -171,6 +171,18 @@ class Router {
             return {};
         return Object.fromEntries(cookieHeader.split(';').map(cookie => {
             const [key, ...rest] = cookie.trim().split('=');
+            return [key, rest.join('=')];
+        }));
+    }
+    /**
+     * Parse Lambda HTTP API v2.0 cookies array into key-value object
+     * Lambda provides cookies as an array like: ["cookie1=value1", "cookie2=value2"]
+     */
+    #parseLambdaCookies(cookies) {
+        if (!Array.isArray(cookies) || cookies.length === 0)
+            return {};
+        return Object.fromEntries(cookies.map(cookie => {
+            const [key, ...rest] = cookie.split('=');
             return [key, rest.join('=')];
         }));
     }
@@ -196,7 +208,7 @@ class Router {
             };
         }
         catch (error) {
-            logger.error('Failed to decode JWT', { error: error.message });
+            logger.error('Failed to decode JWT', { error: error instanceof Error ? error.message : String(error) });
             return null;
         }
     }
@@ -231,9 +243,9 @@ class Router {
             });
         });
     }
-    async #request(event) {
+    async #request(request) {
         if (this.#bearerToken) {
-            const authHeader = event.headers?.authorization || event.headers?.Authorization;
+            const authHeader = request.headers?.authorization || request.headers?.Authorization;
             if (!authHeader)
                 return RouteError.create(401, 'Unauthorized', 'Missing Authorization header');
             const authValue = Array.isArray(authHeader) ? authHeader[0] : authHeader;
@@ -241,20 +253,20 @@ class Router {
             if (token !== this.#bearerToken)
                 return RouteError.create(403, 'Forbidden', 'Invalid authorization token');
         }
-        const route = this.#findRouteHandler(event.path, event.method);
+        const route = this.#findRouteHandler(request.path, request.method);
         if (!route)
-            return RouteError.create(404, 'Not Found', `Route ${event.method} ${event.path} does not exist`);
+            return RouteError.create(404, 'Not Found', `Route ${request.method} ${request.path} does not exist`);
         // Match dynamic route parameters
-        if ('pattern' in route && route.path !== event.path && route.pattern) {
-            const match = route.pattern.exec(event.path);
+        if ('pattern' in route && route.path !== request.path && route.pattern) {
+            const match = route.pattern.exec(request.path);
             if (match?.pathname?.groups) {
-                event.params = match.pathname.groups;
+                request.params = match.pathname.groups;
             }
         }
         try {
             // Run global middleware
             for (const middleware of this.#globalMiddleware) {
-                const middlewareResult = await middleware(event);
+                const middlewareResult = await middleware(request);
                 if (middlewareResult) {
                     // Middleware returned a response, short-circuit
                     return middlewareResult;
@@ -263,7 +275,7 @@ class Router {
             // Run route-specific middleware
             if ('middleware' in route && route.middleware && Array.isArray(route.middleware)) {
                 for (const middleware of route.middleware) {
-                    const middlewareResult = await middleware(event);
+                    const middlewareResult = await middleware(request);
                     if (middlewareResult) {
                         // Middleware returned a response, short-circuit
                         return middlewareResult;
@@ -271,19 +283,19 @@ class Router {
                 }
             }
             // Execute route handler
-            const result = await route.handler(event);
+            const result = await route.handler(request);
             if (!result || typeof result !== 'object')
                 throw new Error('Handler must return a response object');
             return result;
         }
         catch (error) {
             logger.error('Route handler error', {
-                error: error.message,
-                stack: error.stack,
-                path: event.path,
-                method: event.method
+                error: error instanceof Error ? error.message : String(error),
+                stack: error instanceof Error ? error.stack : undefined,
+                path: request.path,
+                method: request.method
             });
-            return RouteError.create(500, 'Internal Server Error', error.message);
+            return RouteError.create(500, 'Internal Server Error', error instanceof Error ? error.message : String(error));
         }
     }
 }

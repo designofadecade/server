@@ -32,7 +32,11 @@ export default defineConfig({
             exclude: [
                 'node_modules/',
                 'src/**/*.test.{js,ts}',
+                'src/**/*.bench.{js,ts}',
             ],
         },
+    },
+    benchmark: {
+        include: ['src/**/*.bench.{js,ts}'],
     },
 });

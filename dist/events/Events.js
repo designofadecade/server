@@ -1,3 +1,29 @@
+/**
+ * Event handler registration for EventsManager
+ *
+ * Abstract base class for organizing event handlers. Extend this class
+ * to group related WebSocket event handlers together and register them
+ * with the EventsManager.
+ *
+ * @class Events
+ * @example
+ * class ChatEvents extends Events {
+ *     constructor(manager: EventsManager) {
+ *         super(manager);
+ *
+ *         this.addListener('chat:message', async (msg) => {
+ *             console.log('Received message:', msg.payload);
+ *             manager.broadcast('chat:new', msg.payload);
+ *         });
+ *     }
+ * }
+ *
+ * // Register with EventsManager
+ * const eventsManager = new EventsManager({
+ *     registerWebSocketServer: wss,
+ *     initEvents: [ChatEvents]
+ * });
+ */
 export default class Events {
     /**
      * Array of nested event classes to register

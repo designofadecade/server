@@ -3,6 +3,7 @@ export { default as Server } from './server/Server.js';
 export { default as Router } from './router/Router.js';
 export { default as Routes } from './router/Routes.js';
 export { default as StaticFileHandler } from './router/StaticFileHandler.js';
+export { default as Context } from './context/Context.js';
 // WebSocket
 export { default as WebSocketServer } from './websocket/WebSocketServer.js';
 export { default as WebSocketMessageFormatter } from './websocket/WebSocketMessageFormatter.js';

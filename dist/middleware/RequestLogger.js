@@ -8,10 +8,10 @@ import { logger } from '../logger/Logger.js';
 /**
  * Creates a request-scoped logger with HTTP context
  *
- * @param {Object} event - AWS Lambda event or custom request object
- * @param {string} event.requestContext.requestId - Request ID
- * @param {string} event.httpMethod - HTTP method
- * @param {string} event.path - Request path
+ * @param {Object} request - AWS Lambda event or custom request object
+ * @param {string} request.requestContext.requestId - Request ID
+ * @param {string} request.httpMethod - HTTP method
+ * @param {string} request.path - Request path
  * @returns {Object} Logger with request context
  */
 export function createRequestLogger(event) {

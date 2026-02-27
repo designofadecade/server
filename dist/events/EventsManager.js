@@ -1,3 +1,27 @@
+/**
+ * WebSocket event management system
+ *
+ * Manages WebSocket event handlers and message broadcasting.
+ * Integrates with WebSocketServer to handle incoming messages
+ * and provides organized event handling through Events classes.
+ *
+ * @class EventsManager
+ * @example
+ * const eventsManager = new EventsManager({
+ *     registerWebSocketServer: wss,
+ *     initEvents: [UserEvents, ChatEvents]
+ * });
+ *
+ * // Broadcast to all connected clients
+ * eventsManager.broadcast('notification', { message: 'Hello!' });
+ *
+ * @example
+ * // Register individual events
+ * eventsManager.registerEvents([
+ *     { type: 'ping', handler: async (msg) => console.log('Ping!') },
+ *     { type: 'update', handler: async (msg) => handleUpdate(msg) }
+ * ]);
+ */
 import WebSocketMessageFormatter from '../websocket/WebSocketMessageFormatter.js';
 import { logger } from '../logger/Logger.js';
 export default class EventsManager {

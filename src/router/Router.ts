@@ -2,401 +2,442 @@ import { IncomingMessage, ServerResponse } from 'http';
 import { logger } from '../logger/Logger.js';
 import RouteError from './RouteError.js';
 
+interface LambdaHttpEvent {
+  requestContext: {
+    http: {
+      method: string;
+      path: string;
+    };
+    authorizer?: unknown;
+  };
+  headers: Record<string, string | string[] | undefined>;
+  body?: string | null;
+  cookies?: string[];
+  queryStringParameters?: Record<string, string>;
+  [key: string]: unknown;
+}
+
 interface RouteRegistration {
-    path: string;
-    methods: string[];
-    pattern: URLPattern;
-    handler: (event: RouterRequest) => Promise<RouterResponse>;
-    middleware?: RouterMiddleware[];
+  path: string;
+  methods: string[];
+  pattern: URLPattern;
+  handler: (request: RouterRequest) => Promise<RouterResponse>;
+  middleware?: RouterMiddleware[];
 }
 
 export interface RouterRequest {
-    path: string;
-    method: string;
-    body: any;
-    cookies: Record<string, string>;
-    params: Record<string, string>;
-    query: Record<string, string>;
-    headers: Record<string, string | string[] | undefined>;
-    authorizer?: any;
-    lambdaOptions?: any;
+  path: string;
+  method: string;
+  body: unknown;
+  cookies: Record<string, string>;
+  params: Record<string, string>;
+  query: Record<string, string>;
+  headers: Record<string, string | string[] | undefined>;
+  authorizer?: unknown;
+  lambdaOptions?: unknown;
 }
 
 export interface RouterResponse {
-    status?: number;
-    headers?: Record<string, string>;
-    body?: any;
-    isBase64Encoded?: boolean;
+  status?: number;
+  headers?: Record<string, string>;
+  body?: unknown;
+  isBase64Encoded?: boolean;
 }
 
 export interface RouterOptions {
-    context?: any;
-    initRoutes?: (new (router: Router, context?: any) => any)[];
-    bearerToken?: string | null;
-    middleware?: RouterMiddleware[];
+  context?: unknown;
+  initRoutes?: (new (router: Router, context?: unknown) => { routerRoutes: RouteRegistration[] })[];
+  bearerToken?: string | null;
+  middleware?: RouterMiddleware[];
 }
 
-export type RouterMiddleware = (event: RouterRequest) => Promise<RouterResponse | void>;
+export type RouterMiddleware = (request: RouterRequest) => Promise<RouterResponse | void>;
 
 export default class Router {
+  static MethodsWithBody = ['POST', 'PUT', 'PATCH'];
+  static #MAX_CACHE_SIZE = 1000;
+  static #MAX_BODY_SIZE = 1024 * 1024; // 1MB
 
-    static MethodsWithBody = ['POST', 'PUT', 'PATCH'];
-    static #MAX_CACHE_SIZE = 1000;
-    static #MAX_BODY_SIZE = 1024 * 1024; // 1MB
+  #routes = {
+    cache: new Map<string, RouteRegistration | null>(),
+    static: new Map<string, { handler: (request: RouterRequest) => Promise<RouterResponse> }>(),
+    dynamic: new Map<string, RouteRegistration[]>(),
+  };
 
-    #routes = {
-        cache: new Map<string, RouteRegistration | null>(),
-        static: new Map<string, { handler: (event: RouterRequest) => Promise<RouterResponse> }>(),
-        dynamic: new Map<string, RouteRegistration[]>(),
-    };
+  #bearerToken: string | null = null;
+  #globalMiddleware: RouterMiddleware[] = [];
 
-    #bearerToken: string | null = null;
-    #globalMiddleware: RouterMiddleware[] = [];
+  constructor({
+    context,
+    initRoutes = [],
+    bearerToken = null,
+    middleware = [],
+  }: RouterOptions = {}) {
+    this.#bearerToken = bearerToken;
+    this.#globalMiddleware = Array.isArray(middleware) ? middleware : [];
 
-    constructor({ context, initRoutes = [], bearerToken = null, middleware = [] }: RouterOptions = {}) {
+    if (Array.isArray(initRoutes))
+      this.#buildRoutesPatterns(
+        initRoutes
+          .map((RoutesClass) => new RoutesClass(this, context).routerRoutes)
+          .flat()
+          .filter((route) => route && route.path && route.handler)
+      );
+  }
 
-        this.#bearerToken = bearerToken;
-        this.#globalMiddleware = Array.isArray(middleware) ? middleware : [];
+  #buildRoutesPatterns(routes: RouteRegistration[]): void {
+    for (const route of routes) {
+      if (typeof route.path !== 'string' || typeof route.handler !== 'function') {
+        throw new Error('Each route must have a valid path string and handler function');
+      }
 
-        if (Array.isArray(initRoutes))
-            this.#buildRoutesPatterns(
-                initRoutes
-                    .map(RoutesClass => new RoutesClass(this, context).routerRoutes)
-                    .flat()
-                    .filter(route => route && route.path && route.handler)
-            );
+      // Normalize: collapse multiple slashes, remove trailing slash (except root)
+      let normalizedPath = route.path.replace(/\/+/g, '/');
+      normalizedPath =
+        normalizedPath.length > 1 ? normalizedPath.replace(/\/+$/, '') : normalizedPath;
 
-    }
+      for (const method of route.methods) {
+        const pathMethodKey = `${normalizedPath}::${method}`;
 
-    #buildRoutesPatterns(routes: RouteRegistration[]): void {
+        if (this.#routes.dynamic.has(normalizedPath) || this.#routes.static.has(pathMethodKey))
+          throw new Error(`Duplicate route detected: ${method} ${normalizedPath}`);
 
-        for (const route of routes) {
+        if (
+          normalizedPath.includes(':') ||
+          normalizedPath.includes('*') ||
+          normalizedPath.includes('(') ||
+          normalizedPath.includes('[')
+        ) {
+          if (!this.#routes.dynamic.has(method)) this.#routes.dynamic.set(method, []);
 
-            if (typeof route.path !== 'string' || typeof route.handler !== 'function') {
-                throw new Error('Each route must have a valid path string and handler function');
-            }
-
-            // Normalize: collapse multiple slashes, remove trailing slash (except root)
-            let normalizedPath = route.path.replace(/\/+/g, '/');
-            normalizedPath = normalizedPath.length > 1 ? normalizedPath.replace(/\/+$/, '') : normalizedPath;
-
-            for (const method of route.methods) {
-
-                const pathMethodKey = `${normalizedPath}::${method}`;
-
-                if (this.#routes.dynamic.has(normalizedPath) || this.#routes.static.has(pathMethodKey))
-                    throw new Error(`Duplicate route detected: ${method} ${normalizedPath}`);
-
-                if (normalizedPath.includes(':') || normalizedPath.includes('*') || normalizedPath.includes('(') || normalizedPath.includes('[')) {
-
-                    if (!this.#routes.dynamic.has(method))
-                        this.#routes.dynamic.set(method, []);
-
-                    this.#routes.dynamic.get(method)!.push(route);
-
-                }
-
-                else {
-                    this.#routes.static.set(pathMethodKey, {
-                        handler: route.handler
-                    });
-                }
-
-            }
-
+          this.#routes.dynamic.get(method)!.push(route);
+        } else {
+          this.#routes.static.set(pathMethodKey, {
+            handler: route.handler,
+          });
         }
-
+      }
     }
+  }
 
-    #findRouteHandler(path: string, method: string): RouteRegistration | { handler: (event: RouterRequest) => Promise<RouterResponse> } | null {
+  #findRouteHandler(
+    path: string,
+    method: string
+  ): RouteRegistration | { handler: (request: RouterRequest) => Promise<RouterResponse> } | null {
+    // Normalize path: remove trailing slash (except for root "/")
+    const normalizedPath = path.length > 1 ? path.replace(/\/+$/, '') : path;
 
-        // Normalize path: remove trailing slash (except for root "/")
-        const normalizedPath = path.length > 1 ? path.replace(/\/+$/, '') : path;
+    if (this.#routes.static.has(`${normalizedPath}::${method}`))
+      return this.#routes.static.get(`${normalizedPath}::${method}`)!;
 
-        if (this.#routes.static.has(`${normalizedPath}::${method}`))
-            return this.#routes.static.get(`${normalizedPath}::${method}`)!;
+    if (this.#routes.cache.has(`${normalizedPath}::${method}`))
+      return this.#routes.cache.get(`${normalizedPath}::${method}`)!;
 
-        if (this.#routes.cache.has(`${normalizedPath}::${method}`))
-            return this.#routes.cache.get(`${normalizedPath}::${method}`)!;
+    if (!this.#routes.dynamic.has(method)) return null;
 
-        if (!this.#routes.dynamic.has(method))
-            return null;
+    const route = this.#routes.dynamic.get(method)!.find((route) => {
+      if (!route.methods.includes(method)) return false;
+      if (route.path === normalizedPath) return true;
+      return route.pattern?.test(normalizedPath);
+    });
 
-        const route = this.#routes.dynamic.get(method)!.find(route => {
-            if (!route.methods.includes(method)) return false;
-            if (route.path === normalizedPath) return true;
-            return route.pattern?.test(normalizedPath);
-        });
+    this.#routes.cache.set(`${normalizedPath}::${method}`, route || null);
+    this.#pruneCache();
 
-        this.#routes.cache.set(`${normalizedPath}::${method}`, route || null);
-        this.#pruneCache();
+    return route || null;
+  }
 
-        return route || null;
-
+  #pruneCache(): void {
+    if (this.#routes.cache.size > Router.#MAX_CACHE_SIZE) {
+      const firstKey = this.#routes.cache.keys().next().value;
+      if (firstKey) {
+        this.#routes.cache.delete(firstKey);
+      }
     }
+  }
 
-    #pruneCache(): void {
-        if (this.#routes.cache.size > Router.#MAX_CACHE_SIZE) {
-            const firstKey = this.#routes.cache.keys().next().value;
-            if (firstKey) {
-                this.#routes.cache.delete(firstKey);
-            }
-        }
-    }
+  async lambdaEvent(
+    event: LambdaHttpEvent
+  ): Promise<{
+    statusCode: number;
+    headers?: Record<string, string>;
+    body: string;
+    isBase64Encoded?: boolean;
+  }> {
+    let body = Router.MethodsWithBody.includes(event.requestContext.http.method)
+      ? event.body
+      : null;
 
-    async lambdaEvent(event: any): Promise<{ statusCode: number; headers?: Record<string, string>; body: string; isBase64Encoded?: boolean }> {
-
-        let body = Router.MethodsWithBody.includes(event.requestContext.http.method) ? event.body : null;
-
-        if (event.headers['content-type']?.includes('application/json')) {
-            try {
-                body = JSON.parse(body);
-            } catch {
-                return {
-                    statusCode: 400,
-                    body: JSON.stringify({ error: 'Invalid JSON in request body' })
-                };
-            }
-        }
-
-        const response = await this.#request({
-            path: event.requestContext.http.path,
-            method: event.requestContext.http.method,
-            body: body,
-            cookies: {}, // TO DO
-            params: {},
-            query: event?.queryStringParameters || {},
-            headers: event.headers || {},
-            authorizer: event.requestContext.authorizer || null
-        });
-
+    if (event.headers['content-type']?.includes('application/json') && body) {
+      try {
+        body = JSON.parse(body as string);
+      } catch {
         return {
-            statusCode: response.status || 200,
-            headers: response.headers || { 'Content-Type': 'application/json' },
-            body: typeof response.body === 'string' ? response.body : JSON.stringify(response.body),
-            isBase64Encoded: response.isBase64Encoded || false
+          statusCode: 400,
+          body: JSON.stringify({ error: 'Invalid JSON in request body' }),
         };
-
+      }
     }
 
-    async nodeJSRequest(req: IncomingMessage, res: ServerResponse, { cors, lambdaOptions }: { cors?: boolean; lambdaOptions?: any } = {}): Promise<void> {
+    const response = await this.#request({
+      path: event.requestContext.http.path,
+      method: event.requestContext.http.method,
+      body: body,
+      cookies: this.#parseLambdaCookies(event.cookies || []),
+      params: {},
+      query: event?.queryStringParameters || {},
+      headers: event.headers || {},
+      authorizer: event.requestContext.authorizer || null,
+    });
 
+    return {
+      statusCode: response.status || 200,
+      headers: response.headers || { 'Content-Type': 'application/json' },
+      body: typeof response.body === 'string' ? response.body : JSON.stringify(response.body),
+      isBase64Encoded: response.isBase64Encoded || false,
+    };
+  }
 
-        if (cors) {
-            const origin = req.headers.origin || '*';
-            res.setHeader('Access-Control-Allow-Origin', origin);
-            res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
-            res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
-            res.setHeader('Access-Control-Allow-Credentials', 'true');
-            res.setHeader('Access-Control-Max-Age', '86400');
-        }
-
-        if (req.method === 'OPTIONS') {
-            res.statusCode = 204;
-            res.end();
-            return;
-        }
-
-        const requestUrl = new URL(req.url!, `http://${req.headers.host}`);
-
-        try {
-
-            const response = await this.#request({
-                path: requestUrl.pathname,
-                method: req.method!,
-                body: Router.MethodsWithBody.includes(req.method!) ? await this.#getNodeJSRequestBody(req) : null,
-                cookies: this.#parseCookies(req.headers?.cookie || ''),
-                params: {},
-                query: Object.fromEntries(requestUrl.searchParams),
-                headers: req.headers as Record<string, any>,
-                authorizer: this.#createAuthorizerFromHeaders(req.headers),
-                lambdaOptions: lambdaOptions || {}
-            });
-
-            if (!response || typeof response !== 'object') {
-                res.statusCode = 500;
-                res.setHeader('Content-Type', 'application/json');
-                res.end(JSON.stringify({ error: 'Invalid response from handler' }));
-                return;
-            }
-
-            res.statusCode = response.status || 200;
-
-            const headers = response.headers || {};
-            if (!headers['Content-Type'] && !headers['content-type']) {
-                headers['Content-Type'] = 'application/json';
-            }
-
-            Object.entries(headers).forEach(([name, value]) => {
-                res.setHeader(name, value);
-            });
-
-            if (response.body !== null && response.body !== undefined) {
-
-                if (Buffer.isBuffer(response.body))
-                    res.end(response.body);
-                else if (response.isBase64Encoded && typeof response.body === 'string')
-                    res.end(Buffer.from(response.body, 'base64'));
-                else if (typeof response.body === 'string')
-                    res.end(response.body);
-                else
-                    res.end(JSON.stringify(response.body));
-
-            }
-
-            else
-                res.end('');
-
-        }
-
-        catch (error: any) {
-
-            logger.error('Router error', { error: error.message, stack: error.stack });
-            res.statusCode = 500;
-            res.setHeader('Content-Type', 'application/json');
-            const errorResponse = RouteError.create(500, 'Internal Server Error', error.message);
-            res.end(typeof errorResponse.body === 'string' ? errorResponse.body : JSON.stringify(errorResponse.body));
-
-        }
-
+  async nodeJSRequest(
+    req: IncomingMessage,
+    res: ServerResponse,
+    { cors, lambdaOptions }: { cors?: boolean; lambdaOptions?: Record<string, unknown> } = {}
+  ): Promise<void> {
+    if (cors) {
+      const origin = req.headers.origin || '*';
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+      res.setHeader(
+        'Access-Control-Allow-Headers',
+        'Content-Type, Authorization, X-Requested-With'
+      );
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+      res.setHeader('Access-Control-Max-Age', '86400');
     }
 
-    #parseCookies(cookieHeader: string): Record<string, string> {
-        if (!cookieHeader) return {};
-        return Object.fromEntries(
-            cookieHeader.split(';').map(cookie => {
-                const [key, ...rest] = cookie.trim().split('=');
-                return [key, rest.join('=')];
-            })
-        );
+    if (req.method === 'OPTIONS') {
+      res.statusCode = 204;
+      res.end();
+      return;
     }
 
-    #createAuthorizerFromHeaders(headers: IncomingMessage['headers']): any {
-        const authHeader = headers?.authorization || (headers as any)?.Authorization;
-        if (!authHeader) return null;
+    const requestUrl = new URL(req.url!, `http://${req.headers.host}`);
 
-        const authValue = Array.isArray(authHeader) ? authHeader[0] : authHeader;
-        const token = authValue?.replace(/^Bearer\s+/i, '') || '';
-        if (!token) return null;
+    try {
+      const response = await this.#request({
+        path: requestUrl.pathname,
+        method: req.method!,
+        body: Router.MethodsWithBody.includes(req.method!)
+          ? await this.#getNodeJSRequestBody(req)
+          : null,
+        cookies: this.#parseCookies(req.headers?.cookie || ''),
+        params: {},
+        query: Object.fromEntries(requestUrl.searchParams),
+        headers: req.headers as Record<string, string | string[] | undefined>,
+        authorizer: this.#createAuthorizerFromHeaders(req.headers),
+        lambdaOptions: lambdaOptions || {},
+      });
 
-        try {
-            // Decode JWT (base64url decode the payload)
-            const parts = token.split('.');
-            if (parts.length !== 3) return null;
+      if (!response || typeof response !== 'object') {
+        res.statusCode = 500;
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ error: 'Invalid response from handler' }));
+        return;
+      }
 
-            const payload = parts[1];
-            const decoded = Buffer.from(payload, 'base64url').toString('utf8');
-            const claims = JSON.parse(decoded);
+      res.statusCode = response.status || 200;
 
-            // Return in same structure as Lambda authorizer for consistency
-            return {
-                lambda: claims  // Mimic HTTP API Lambda authorizer structure
-            };
-        } catch (error: any) {
-            logger.error('Failed to decode JWT', { error: error.message });
-            return null;
+      const headers = response.headers || {};
+      if (!headers['Content-Type'] && !headers['content-type']) {
+        headers['Content-Type'] = 'application/json';
+      }
+
+      Object.entries(headers).forEach(([name, value]) => {
+        res.setHeader(name, value);
+      });
+
+      if (response.body !== null && response.body !== undefined) {
+        if (Buffer.isBuffer(response.body)) res.end(response.body);
+        else if (response.isBase64Encoded && typeof response.body === 'string')
+          res.end(Buffer.from(response.body, 'base64'));
+        else if (typeof response.body === 'string') res.end(response.body);
+        else res.end(JSON.stringify(response.body));
+      } else res.end('');
+    } catch (error: unknown) {
+      logger.error('Router error', {
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      });
+      res.statusCode = 500;
+      res.setHeader('Content-Type', 'application/json');
+      const errorResponse = RouteError.create(
+        500,
+        'Internal Server Error',
+        error instanceof Error ? error.message : String(error)
+      );
+      res.end(
+        typeof errorResponse.body === 'string'
+          ? errorResponse.body
+          : JSON.stringify(errorResponse.body)
+      );
+    }
+  }
+
+  #parseCookies(cookieHeader: string): Record<string, string> {
+    if (!cookieHeader) return {};
+    return Object.fromEntries(
+      cookieHeader.split(';').map((cookie) => {
+        const [key, ...rest] = cookie.trim().split('=');
+        return [key, rest.join('=')];
+      })
+    );
+  }
+
+  /**
+   * Parse Lambda HTTP API v2.0 cookies array into key-value object
+   * Lambda provides cookies as an array like: ["cookie1=value1", "cookie2=value2"]
+   */
+  #parseLambdaCookies(cookies: string[]): Record<string, string> {
+    if (!Array.isArray(cookies) || cookies.length === 0) return {};
+    return Object.fromEntries(
+      cookies.map((cookie) => {
+        const [key, ...rest] = cookie.split('=');
+        return [key, rest.join('=')];
+      })
+    );
+  }
+
+  #createAuthorizerFromHeaders(headers: IncomingMessage['headers']): unknown {
+    const authHeader =
+      headers?.authorization || (headers as { Authorization?: string })?.Authorization;
+    if (!authHeader) return null;
+
+    const authValue = Array.isArray(authHeader) ? authHeader[0] : authHeader;
+    const token = authValue?.replace(/^Bearer\s+/i, '') || '';
+    if (!token) return null;
+
+    try {
+      // Decode JWT (base64url decode the payload)
+      const parts = token.split('.');
+      if (parts.length !== 3) return null;
+
+      const payload = parts[1];
+      const decoded = Buffer.from(payload, 'base64url').toString('utf8');
+      const claims = JSON.parse(decoded);
+
+      // Return in same structure as Lambda authorizer for consistency
+      return {
+        lambda: claims, // Mimic HTTP API Lambda authorizer structure
+      };
+    } catch (error: unknown) {
+      logger.error('Failed to decode JWT', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+  }
+
+  async #getNodeJSRequestBody(req: IncomingMessage): Promise<unknown> {
+    return new Promise((resolve, reject) => {
+      let body = '';
+      let size = 0;
+
+      req.on('data', (chunk) => {
+        size += chunk.length;
+        if (size > Router.#MAX_BODY_SIZE) {
+          req.destroy();
+          reject(new Error('Request body too large'));
+          return;
         }
+        body += chunk.toString();
+      });
+      req.on('end', () => {
+        if (req.headers['content-type']?.includes('application/json')) {
+          try {
+            resolve(JSON.parse(body));
+          } catch {
+            resolve(body);
+          }
+        } else {
+          resolve(body);
+        }
+      });
+      req.on('error', (err) => {
+        reject(err);
+      });
+    });
+  }
+
+  async #request(request: RouterRequest): Promise<RouterResponse> {
+    if (this.#bearerToken) {
+      const authHeader = request.headers?.authorization || request.headers?.Authorization;
+
+      if (!authHeader)
+        return RouteError.create(401, 'Unauthorized', 'Missing Authorization header');
+
+      const authValue = Array.isArray(authHeader) ? authHeader[0] : authHeader;
+      const token = authValue?.replace(/^Bearer\s+/i, '') || '';
+
+      if (token !== this.#bearerToken)
+        return RouteError.create(403, 'Forbidden', 'Invalid authorization token');
     }
 
-    async #getNodeJSRequestBody(req: IncomingMessage): Promise<any> {
-        return new Promise((resolve, reject) => {
-            let body = '';
-            let size = 0;
+    const route = this.#findRouteHandler(request.path, request.method);
 
-            req.on('data', (chunk) => {
-                size += chunk.length;
-                if (size > Router.#MAX_BODY_SIZE) {
-                    req.destroy();
-                    reject(new Error('Request body too large'));
-                    return;
-                }
-                body += chunk.toString();
-            });
-            req.on('end', () => {
-                if (req.headers['content-type']?.includes('application/json')) {
-                    try {
-                        resolve(JSON.parse(body));
-                    } catch {
-                        resolve(body);
-                    }
-                } else {
-                    resolve(body);
-                }
-            });
-            req.on('error', (err) => {
-                reject(err);
-            });
-        });
+    if (!route)
+      return RouteError.create(
+        404,
+        'Not Found',
+        `Route ${request.method} ${request.path} does not exist`
+      );
+
+    // Match dynamic route parameters
+    if ('pattern' in route && route.path !== request.path && route.pattern) {
+      const match = route.pattern.exec(request.path);
+      if (match?.pathname?.groups) {
+        request.params = match.pathname.groups;
+      }
     }
 
-    async #request(event: RouterRequest): Promise<RouterResponse> {
-
-        if (this.#bearerToken) {
-            const authHeader = event.headers?.authorization || event.headers?.Authorization;
-
-            if (!authHeader)
-                return RouteError.create(401, 'Unauthorized', 'Missing Authorization header');
-
-            const authValue = Array.isArray(authHeader) ? authHeader[0] : authHeader;
-            const token = authValue?.replace(/^Bearer\s+/i, '') || '';
-
-            if (token !== this.#bearerToken)
-                return RouteError.create(403, 'Forbidden', 'Invalid authorization token');
-
+    try {
+      // Run global middleware
+      for (const middleware of this.#globalMiddleware) {
+        const middlewareResult = await middleware(request);
+        if (middlewareResult) {
+          // Middleware returned a response, short-circuit
+          return middlewareResult;
         }
+      }
 
-        const route = this.#findRouteHandler(event.path, event.method);
-
-        if (!route)
-            return RouteError.create(404, 'Not Found', `Route ${event.method} ${event.path} does not exist`);
-
-        // Match dynamic route parameters
-        if ('pattern' in route && route.path !== event.path && route.pattern) {
-            const match = route.pattern.exec(event.path);
-            if (match?.pathname?.groups) {
-                event.params = match.pathname.groups;
-            }
+      // Run route-specific middleware
+      if ('middleware' in route && route.middleware && Array.isArray(route.middleware)) {
+        for (const middleware of route.middleware) {
+          const middlewareResult = await middleware(request);
+          if (middlewareResult) {
+            // Middleware returned a response, short-circuit
+            return middlewareResult;
+          }
         }
+      }
 
-        try {
+      // Execute route handler
+      const result = await route.handler(request);
+      if (!result || typeof result !== 'object')
+        throw new Error('Handler must return a response object');
 
-            // Run global middleware
-            for (const middleware of this.#globalMiddleware) {
-                const middlewareResult = await middleware(event);
-                if (middlewareResult) {
-                    // Middleware returned a response, short-circuit
-                    return middlewareResult;
-                }
-            }
-
-            // Run route-specific middleware
-            if ('middleware' in route && route.middleware && Array.isArray(route.middleware)) {
-                for (const middleware of route.middleware) {
-                    const middlewareResult = await middleware(event);
-                    if (middlewareResult) {
-                        // Middleware returned a response, short-circuit
-                        return middlewareResult;
-                    }
-                }
-            }
-
-            // Execute route handler
-            const result = await route.handler(event);
-            if (!result || typeof result !== 'object')
-                throw new Error('Handler must return a response object');
-
-            return result;
-
-        } catch (error: any) {
-            logger.error('Route handler error', {
-                error: error.message,
-                stack: error.stack,
-                path: event.path,
-                method: event.method
-            });
-            return RouteError.create(500, 'Internal Server Error', error.message);
-        }
-
+      return result;
+    } catch (error: unknown) {
+      logger.error('Route handler error', {
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+        path: request.path,
+        method: request.method,
+      });
+      return RouteError.create(
+        500,
+        'Internal Server Error',
+        error instanceof Error ? error.message : String(error)
+      );
     }
-
+  }
 }

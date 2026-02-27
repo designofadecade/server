@@ -2,77 +2,82 @@ import type Router from './Router.js';
 import type { RouterRequest, RouterResponse, RouterMiddleware } from './Router.js';
 
 interface RouteRegistration {
-    path: string;
-    methods: string[];
-    pattern: URLPattern;
-    handler: (event: RouterRequest) => Promise<RouterResponse>;
-    middleware?: RouterMiddleware[];
+  path: string;
+  methods: string[];
+  pattern: URLPattern;
+  handler: (request: RouterRequest) => Promise<RouterResponse>;
+  middleware?: RouterMiddleware[];
 }
 
 export default class Routes {
+  /**
+   * Base path prefix for all routes in this class
+   * @type {string}
+   */
+  static basePath = '';
 
-    /**
-     * Base path prefix for all routes in this class
-     * @type {string}
-     */
-    static basePath = '';
+  /**
+   * Array of nested route classes to register
+   * @type {Array}
+   */
+  static register: (new (router: Router, context?: unknown) => Routes)[] = [];
 
-    /**
-     * Array of nested route classes to register
-     * @type {Array}
-     */
-    static register: (new (router: Router, context?: unknown) => Routes)[] = [];
+  #routerRoutes: RouteRegistration[] = [];
+  protected router: Router;
+  protected context?: unknown;
 
-    #routerRoutes: RouteRegistration[] = [];
-    protected router: Router;
-    protected context?: unknown;
+  constructor(router: Router, context?: unknown) {
+    this.router = router;
+    this.context = context;
 
-    constructor(router: Router, context?: unknown) {
+    (this.constructor as typeof Routes).register.forEach(
+      (RouteClass: new (router: Router, context?: unknown) => Routes) => {
+        const route = new RouteClass(router, context);
+        this.#routerRoutes.push(...route.routerRoutes);
+      }
+    );
+  }
 
-        this.router = router;
-        this.context = context;
+  get routerRoutes(): RouteRegistration[] {
+    return this.#routerRoutes;
+  }
 
-        (this.constructor as typeof Routes).register.forEach((RouteClass: new (router: Router, context?: unknown) => Routes) => {
-            const route = new RouteClass(router, context);
-            this.#routerRoutes.push(...route.routerRoutes);
-        });
-
+  addRoute(
+    path: string,
+    methods: string | string[],
+    handler: (request: RouterRequest) => Promise<RouterResponse>,
+    middleware?: RouterMiddleware[]
+  ): void {
+    // Validate inputs
+    if (typeof path !== 'string') {
+      throw new Error('Path must be a string');
     }
 
-    get routerRoutes(): RouteRegistration[] {
-        return this.#routerRoutes;
+    if (typeof handler !== 'function') {
+      throw new Error('Handler must be a function');
     }
 
-    addRoute(path: string, methods: string | string[], handler: (event: RouterRequest) => Promise<RouterResponse>, middleware?: RouterMiddleware[]): void {
+    const normalizedPath = `${(this.constructor as typeof Routes).basePath}${path}`.replace(
+      /\/+/g,
+      '/'
+    );
 
-        // Validate inputs
-        if (typeof path !== 'string') {
-            throw new Error('Path must be a string');
-        }
+    // Normalize methods to array
+    const methodsArray = Array.isArray(methods) ? methods : [methods];
 
-        if (typeof handler !== 'function') {
-            throw new Error('Handler must be a function');
-        }
-
-        const normalizedPath = `${(this.constructor as typeof Routes).basePath}${path}`.replace(/\/+/g, '/');
-
-        // Normalize methods to array
-        const methodsArray = Array.isArray(methods) ? methods : [methods];
-
-        // Validate HTTP methods
-        const validMethods = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
-        const invalidMethods = methodsArray.filter(m => !validMethods.includes(m));
-        if (invalidMethods.length > 0) {
-            throw new Error(`Invalid HTTP methods: ${invalidMethods.join(', ')}`);
-        }
-
-        this.#routerRoutes.push({
-            path: normalizedPath,
-            methods: methodsArray,
-            pattern: new URLPattern({ pathname: normalizedPath }),
-            handler,
-            ...(middleware && { middleware })
-        });
+    // Validate HTTP methods
+    const validMethods = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
+    const invalidMethods = methodsArray.filter((m) => !validMethods.includes(m));
+    if (invalidMethods.length > 0) {
+      throw new Error(`Invalid HTTP methods: ${invalidMethods.join(', ')}`);
     }
 
+    this.#routerRoutes.push({
+      path: normalizedPath,
+      methods: methodsArray,
+      pattern: new URLPattern({ pathname: normalizedPath }),
+      handler,
+      ...(middleware && { middleware }),
+    });
+  }
 }
