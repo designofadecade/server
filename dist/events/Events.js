@@ -63,7 +63,7 @@ export default class Events {
         }
         this.#managerEvents.push({
             type,
-            handler
+            handler,
         });
     }
 }

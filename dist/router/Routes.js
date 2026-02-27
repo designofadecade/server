@@ -36,7 +36,7 @@ export default class Routes {
         const methodsArray = Array.isArray(methods) ? methods : [methods];
         // Validate HTTP methods
         const validMethods = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
-        const invalidMethods = methodsArray.filter(m => !validMethods.includes(m));
+        const invalidMethods = methodsArray.filter((m) => !validMethods.includes(m));
         if (invalidMethods.length > 0) {
             throw new Error(`Invalid HTTP methods: ${invalidMethods.join(', ')}`);
         }
@@ -45,7 +45,7 @@ export default class Routes {
             methods: methodsArray,
             pattern: new URLPattern({ pathname: normalizedPath }),
             handler,
-            ...(middleware && { middleware })
+            ...(middleware && { middleware }),
         });
     }
 }

@@ -20,7 +20,7 @@ export function createRequestLogger(event) {
         method: event.httpMethod || event.requestContext?.http?.method,
         path: event.path || event.requestContext?.http?.path,
         sourceIp: event.requestContext?.identity?.sourceIp,
-        userAgent: event.headers?.['user-agent']
+        userAgent: event.headers?.['user-agent'],
     };
     return {
         info: (message, context = {}) => {
@@ -34,7 +34,7 @@ export function createRequestLogger(event) {
         },
         debug: (message, context = {}) => {
             logger.debug(message, { ...requestContext, ...context });
-        }
+        },
     };
 }
 /**
@@ -48,7 +48,7 @@ export function logRequest(event) {
     requestLogger.info('Incoming request', {
         body: event.body ? JSON.parse(event.body) : undefined,
         queryParams: event.queryStringParameters,
-        pathParams: event.pathParameters
+        pathParams: event.pathParameters,
     });
 }
 /**
@@ -65,7 +65,7 @@ export function logResponse(event, response, durationMs) {
     requestLogger[level]('Request completed', {
         statusCode: response.statusCode,
         durationMs,
-        success: response.statusCode < 400
+        success: response.statusCode < 400,
     });
 }
 //# sourceMappingURL=RequestLogger.js.map

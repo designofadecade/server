@@ -19,33 +19,33 @@
  *     localHandler.request(req, res);
  * }).listen(3000);
  */
-import Router from "../router/Router.js";
-import Routes from "../router/Routes.js";
+import Router from '../router/Router.js';
+import Routes from '../router/Routes.js';
 export default class Local {
     /**
-         * Lambda proxy router for local development
-         *
-         * Creates a router that wraps AWS Lambda handlers and allows them to be
-         * run locally with a Node.js HTTP server. Automatically converts between
-         * HTTP requests and Lambda event format.
-         *
-         * @param {Function} LambdaHandler - AWS Lambda handler function
-         * @param {Object} options - Configuration options
-         * @param {Object} options.requestContext - Additional requestContext fields for Lambda event
-         * @param {Object} options.event - Additional event fields for Lambda event
-         * @returns {Object} Object with request method for handling HTTP requests
-         *
-         * @example
-         * const handler = Local.LambdaProxyRouter(
-         *     async (event) => {
-         *         return {
-         *             statusCode: 200,
-         *             body: JSON.stringify({ message: 'Hello!' })
-         *         };
-         *     },
-         *     { requestContext: { stage: 'local' } }
-         * );
-         */
+     * Lambda proxy router for local development
+     *
+     * Creates a router that wraps AWS Lambda handlers and allows them to be
+     * run locally with a Node.js HTTP server. Automatically converts between
+     * HTTP requests and Lambda event format.
+     *
+     * @param {Function} LambdaHandler - AWS Lambda handler function
+     * @param {Object} options - Configuration options
+     * @param {Object} options.requestContext - Additional requestContext fields for Lambda event
+     * @param {Object} options.event - Additional event fields for Lambda event
+     * @returns {Object} Object with request method for handling HTTP requests
+     *
+     * @example
+     * const handler = Local.LambdaProxyRouter(
+     *     async (event) => {
+     *         return {
+     *             statusCode: 200,
+     *             body: JSON.stringify({ message: 'Hello!' })
+     *         };
+     *     },
+     *     { requestContext: { stage: 'local' } }
+     * );
+     */
     static LambdaProxyRouter(LambdaHandler, options = {}) {
         const router = new Router({
             initRoutes: [
@@ -55,27 +55,29 @@ export default class Local {
                         this.addRoute('*', ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'], async (request) => {
                             const lambdaOptions = request.lambdaOptions || {};
                             const LambdaResponse = await LambdaHandler({
-                                "rawPath": request.path,
-                                "headers": request.headers,
-                                "queryStringParameters": request.query,
-                                "cookies": request.cookies,
-                                "requestContext": {
-                                    "http": {
-                                        "method": request.method,
-                                        "path": request.path
+                                rawPath: request.path,
+                                headers: request.headers,
+                                queryStringParameters: request.query,
+                                cookies: request.cookies,
+                                requestContext: {
+                                    http: {
+                                        method: request.method,
+                                        path: request.path,
                                     },
-                                    "authorizer": request.authorizer || null,
-                                    ...(lambdaOptions.requestContext || {})
+                                    authorizer: request.authorizer || null,
+                                    ...(lambdaOptions.requestContext || {}),
                                 },
-                                "body": request.body ? JSON.stringify(request.body) : null,
-                                ...(lambdaOptions.event || {})
+                                body: request.body ? JSON.stringify(request.body) : null,
+                                ...(lambdaOptions.event || {}),
                             });
                             let body = LambdaResponse.body || null;
-                            if (LambdaResponse.headers?.['content-type']?.includes('application/json') && body) {
+                            if (LambdaResponse.headers?.['content-type']?.includes('application/json') &&
+                                body) {
                                 try {
                                     body = JSON.parse(body);
                                 }
                                 catch {
+                                    // Silently fail if body is not valid JSON
                                 }
                             }
                             // Note: Lambda cookies are handled via Set-Cookie headers, not separate cookies property
@@ -83,12 +85,12 @@ export default class Local {
                                 status: LambdaResponse.statusCode,
                                 headers: LambdaResponse.headers,
                                 body: body,
-                                isBase64Encoded: LambdaResponse.isBase64Encoded || false
+                                isBase64Encoded: LambdaResponse.isBase64Encoded || false,
                             };
                         });
                     }
-                }
-            ]
+                },
+            ],
         });
         return {
             request: (req, res, requestOptions = {}) => {
@@ -97,15 +99,15 @@ export default class Local {
                     lambdaOptions: {
                         requestContext: {
                             ...options.requestContext,
-                            ...requestOptions.requestContext
+                            ...requestOptions.requestContext,
                         },
                         event: {
                             ...options.event,
-                            ...requestOptions.event
-                        }
-                    }
+                            ...requestOptions.event,
+                        },
+                    },
                 });
-            }
+            },
         };
     }
 }

@@ -32,7 +32,7 @@ export default class WebSocketServer extends EventEmitter {
         this.#wss.on('connection', (ws) => {
             logger.info('WebSocket client connected');
             ws.send(WebSocketMessageFormatter.format('ws:connected', {
-                message: 'WebSocket connection established'
+                message: 'WebSocket connection established',
             }));
             ws.on('message', async (message) => {
                 const messageString = message.toString();
@@ -44,7 +44,7 @@ export default class WebSocketServer extends EventEmitter {
                     const parsed = WebSocketMessageFormatter.parse(messageString);
                     if (!parsed) {
                         ws.send(WebSocketMessageFormatter.format('ws:error', {
-                            error: 'Invalid message format'
+                            error: 'Invalid message format',
                         }));
                         return;
                     }
@@ -53,7 +53,7 @@ export default class WebSocketServer extends EventEmitter {
                 catch (error) {
                     logger.error('Message handling error', { error: error.message });
                     ws.send(WebSocketMessageFormatter.format('ws:error', {
-                        error: error.message
+                        error: error.message,
                     }));
                 }
             });

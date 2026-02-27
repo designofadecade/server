@@ -12,14 +12,14 @@ class Router {
     };
     #bearerToken = null;
     #globalMiddleware = [];
-    constructor({ context, initRoutes = [], bearerToken = null, middleware = [] } = {}) {
+    constructor({ context, initRoutes = [], bearerToken = null, middleware = [], } = {}) {
         this.#bearerToken = bearerToken;
         this.#globalMiddleware = Array.isArray(middleware) ? middleware : [];
         if (Array.isArray(initRoutes))
             this.#buildRoutesPatterns(initRoutes
-                .map(RoutesClass => new RoutesClass(this, context).routerRoutes)
+                .map((RoutesClass) => new RoutesClass(this, context).routerRoutes)
                 .flat()
-                .filter(route => route && route.path && route.handler));
+                .filter((route) => route && route.path && route.handler));
     }
     #buildRoutesPatterns(routes) {
         for (const route of routes) {
@@ -28,19 +28,23 @@ class Router {
             }
             // Normalize: collapse multiple slashes, remove trailing slash (except root)
             let normalizedPath = route.path.replace(/\/+/g, '/');
-            normalizedPath = normalizedPath.length > 1 ? normalizedPath.replace(/\/+$/, '') : normalizedPath;
+            normalizedPath =
+                normalizedPath.length > 1 ? normalizedPath.replace(/\/+$/, '') : normalizedPath;
             for (const method of route.methods) {
                 const pathMethodKey = `${normalizedPath}::${method}`;
                 if (this.#routes.dynamic.has(normalizedPath) || this.#routes.static.has(pathMethodKey))
                     throw new Error(`Duplicate route detected: ${method} ${normalizedPath}`);
-                if (normalizedPath.includes(':') || normalizedPath.includes('*') || normalizedPath.includes('(') || normalizedPath.includes('[')) {
+                if (normalizedPath.includes(':') ||
+                    normalizedPath.includes('*') ||
+                    normalizedPath.includes('(') ||
+                    normalizedPath.includes('[')) {
                     if (!this.#routes.dynamic.has(method))
                         this.#routes.dynamic.set(method, []);
                     this.#routes.dynamic.get(method).push(route);
                 }
                 else {
                     this.#routes.static.set(pathMethodKey, {
-                        handler: route.handler
+                        handler: route.handler,
                     });
                 }
             }
@@ -55,7 +59,7 @@ class Router {
             return this.#routes.cache.get(`${normalizedPath}::${method}`);
         if (!this.#routes.dynamic.has(method))
             return null;
-        const route = this.#routes.dynamic.get(method).find(route => {
+        const route = this.#routes.dynamic.get(method).find((route) => {
             if (!route.methods.includes(method))
                 return false;
             if (route.path === normalizedPath)
@@ -75,7 +79,9 @@ class Router {
         }
     }
     async lambdaEvent(event) {
-        let body = _a.MethodsWithBody.includes(event.requestContext.http.method) ? event.body : null;
+        let body = _a.MethodsWithBody.includes(event.requestContext.http.method)
+            ? event.body
+            : null;
         if (event.headers['content-type']?.includes('application/json') && body) {
             try {
                 body = JSON.parse(body);
@@ -83,7 +89,7 @@ class Router {
             catch {
                 return {
                     statusCode: 400,
-                    body: JSON.stringify({ error: 'Invalid JSON in request body' })
+                    body: JSON.stringify({ error: 'Invalid JSON in request body' }),
                 };
             }
         }
@@ -95,13 +101,13 @@ class Router {
             params: {},
             query: event?.queryStringParameters || {},
             headers: event.headers || {},
-            authorizer: event.requestContext.authorizer || null
+            authorizer: event.requestContext.authorizer || null,
         });
         return {
             statusCode: response.status || 200,
             headers: response.headers || { 'Content-Type': 'application/json' },
             body: typeof response.body === 'string' ? response.body : JSON.stringify(response.body),
-            isBase64Encoded: response.isBase64Encoded || false
+            isBase64Encoded: response.isBase64Encoded || false,
         };
     }
     async nodeJSRequest(req, res, { cors, lambdaOptions } = {}) {
@@ -123,13 +129,15 @@ class Router {
             const response = await this.#request({
                 path: requestUrl.pathname,
                 method: req.method,
-                body: _a.MethodsWithBody.includes(req.method) ? await this.#getNodeJSRequestBody(req) : null,
+                body: _a.MethodsWithBody.includes(req.method)
+                    ? await this.#getNodeJSRequestBody(req)
+                    : null,
                 cookies: this.#parseCookies(req.headers?.cookie || ''),
                 params: {},
                 query: Object.fromEntries(requestUrl.searchParams),
                 headers: req.headers,
                 authorizer: this.#createAuthorizerFromHeaders(req.headers),
-                lambdaOptions: lambdaOptions || {}
+                lambdaOptions: lambdaOptions || {},
             });
             if (!response || typeof response !== 'object') {
                 res.statusCode = 500;
@@ -159,17 +167,22 @@ class Router {
                 res.end('');
         }
         catch (error) {
-            logger.error('Router error', { error: error instanceof Error ? error.message : String(error), stack: error instanceof Error ? error.stack : undefined });
+            logger.error('Router error', {
+                error: error instanceof Error ? error.message : String(error),
+                stack: error instanceof Error ? error.stack : undefined,
+            });
             res.statusCode = 500;
             res.setHeader('Content-Type', 'application/json');
             const errorResponse = RouteError.create(500, 'Internal Server Error', error instanceof Error ? error.message : String(error));
-            res.end(typeof errorResponse.body === 'string' ? errorResponse.body : JSON.stringify(errorResponse.body));
+            res.end(typeof errorResponse.body === 'string'
+                ? errorResponse.body
+                : JSON.stringify(errorResponse.body));
         }
     }
     #parseCookies(cookieHeader) {
         if (!cookieHeader)
             return {};
-        return Object.fromEntries(cookieHeader.split(';').map(cookie => {
+        return Object.fromEntries(cookieHeader.split(';').map((cookie) => {
             const [key, ...rest] = cookie.trim().split('=');
             return [key, rest.join('=')];
         }));
@@ -181,7 +194,7 @@ class Router {
     #parseLambdaCookies(cookies) {
         if (!Array.isArray(cookies) || cookies.length === 0)
             return {};
-        return Object.fromEntries(cookies.map(cookie => {
+        return Object.fromEntries(cookies.map((cookie) => {
             const [key, ...rest] = cookie.split('=');
             return [key, rest.join('=')];
         }));
@@ -204,11 +217,13 @@ class Router {
             const claims = JSON.parse(decoded);
             // Return in same structure as Lambda authorizer for consistency
             return {
-                lambda: claims // Mimic HTTP API Lambda authorizer structure
+                lambda: claims, // Mimic HTTP API Lambda authorizer structure
             };
         }
         catch (error) {
-            logger.error('Failed to decode JWT', { error: error instanceof Error ? error.message : String(error) });
+            logger.error('Failed to decode JWT', {
+                error: error instanceof Error ? error.message : String(error),
+            });
             return null;
         }
     }
@@ -293,7 +308,7 @@ class Router {
                 error: error instanceof Error ? error.message : String(error),
                 stack: error instanceof Error ? error.stack : undefined,
                 path: request.path,
-                method: request.method
+                method: request.method,
             });
             return RouteError.create(500, 'Internal Server Error', error instanceof Error ? error.message : String(error));
         }

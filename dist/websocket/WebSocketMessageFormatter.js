@@ -25,18 +25,23 @@ export default class WebSocketMessageFormatter {
         try {
             const parsedObject = JSON.parse(rawMessage);
             if (typeof parsedObject.type !== 'string' || typeof parsedObject.payload === 'undefined') {
-                logger.error('Parsed message lacks required fields', { hasType: !!parsedObject.type, hasPayload: !!parsedObject.payload });
+                logger.error('Parsed message lacks required fields', {
+                    hasType: !!parsedObject.type,
+                    hasPayload: !!parsedObject.payload,
+                });
                 return null;
             }
             // Preserve id if present, otherwise return just type and payload
             return {
                 ...(parsedObject.id && { id: parsedObject.id }),
                 type: parsedObject.type,
-                payload: parsedObject.payload
+                payload: parsedObject.payload,
             };
         }
         catch (error) {
-            logger.error('Failed to parse incoming WebSocket message as JSON', { error: error instanceof Error ? error.message : String(error) });
+            logger.error('Failed to parse incoming WebSocket message as JSON', {
+                error: error instanceof Error ? error.message : String(error),
+            });
             return null;
         }
     }
@@ -60,7 +65,7 @@ export default class WebSocketMessageFormatter {
         const messageObject = {
             id: crypto.randomUUID(),
             type,
-            payload
+            payload,
         };
         try {
             return JSON.stringify(messageObject);
@@ -74,7 +79,7 @@ export default class WebSocketMessageFormatter {
             return JSON.stringify({
                 id: crypto.randomUUID(),
                 type: 'error',
-                payload: { message: errorMsg }
+                payload: { message: errorMsg },
             });
         }
     }

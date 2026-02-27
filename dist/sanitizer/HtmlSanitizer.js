@@ -93,13 +93,15 @@ export default class HtmlSanitizer {
         // ====================================================================
         // Step 2: Validate and Normalize Allowed Tags
         // ====================================================================
-        const validAllowedTags = allowedTags.filter((tag) => {
+        const validAllowedTags = allowedTags
+            .filter((tag) => {
             if (typeof tag !== 'string' || !TAG_NAME_PATTERN.test(tag)) {
                 logger.warn('HtmlSanitizer: Invalid tag name ignored', { tag });
                 return false;
             }
             return true;
-        }).map((tag) => tag.toLowerCase());
+        })
+            .map((tag) => tag.toLowerCase());
         if (validAllowedTags.length === 0) {
             logger.warn('HtmlSanitizer: No valid allowed tags, stripping all HTML');
             return this.stripAllTags(html);
@@ -108,7 +110,10 @@ export default class HtmlSanitizer {
         // Step 3: DoS Protection
         // ====================================================================
         if (html.length > MAX_INPUT_SIZE) {
-            logger.error('HtmlSanitizer: Input exceeds maximum size for clean(), truncating', { size: html.length, max: MAX_INPUT_SIZE });
+            logger.error('HtmlSanitizer: Input exceeds maximum size for clean(), truncating', {
+                size: html.length,
+                max: MAX_INPUT_SIZE,
+            });
             html = html.substring(0, MAX_INPUT_SIZE);
         }
         // ====================================================================
@@ -257,7 +262,10 @@ export default class HtmlSanitizer {
         }
         // DoS protection - reject excessively large inputs
         if (html.length > MAX_INPUT_SIZE) {
-            logger.error('HtmlSanitizer: Input exceeds maximum size for stripAllTags, truncating', { size: html.length, max: MAX_INPUT_SIZE });
+            logger.error('HtmlSanitizer: Input exceeds maximum size for stripAllTags, truncating', {
+                size: html.length,
+                max: MAX_INPUT_SIZE,
+            });
             html = html.substring(0, MAX_INPUT_SIZE);
         }
         // Remove HTML comments
@@ -313,7 +321,10 @@ export default class HtmlSanitizer {
         }
         // DoS protection
         if (text.length > MAX_INPUT_SIZE) {
-            logger.error('HtmlSanitizer: Attribute value exceeds maximum size, truncating', { size: text.length, max: MAX_INPUT_SIZE });
+            logger.error('HtmlSanitizer: Attribute value exceeds maximum size, truncating', {
+                size: text.length,
+                max: MAX_INPUT_SIZE,
+            });
             text = text.substring(0, MAX_INPUT_SIZE);
         }
         // Order matters: & first to avoid double-escaping
@@ -349,7 +360,10 @@ export default class HtmlSanitizer {
         }
         // DoS protection
         if (text.length > MAX_INPUT_SIZE) {
-            logger.error('HtmlSanitizer: HTML content exceeds maximum size, truncating', { size: text.length, max: MAX_INPUT_SIZE });
+            logger.error('HtmlSanitizer: HTML content exceeds maximum size, truncating', {
+                size: text.length,
+                max: MAX_INPUT_SIZE,
+            });
             text = text.substring(0, MAX_INPUT_SIZE);
         }
         // Order matters: & first to avoid double-escaping
@@ -397,7 +411,10 @@ export default class HtmlSanitizer {
         }
         // DoS protection - reject excessively long URLs
         if (url.length > MAX_URL_LENGTH) {
-            logger.warn('HtmlSanitizer: URL exceeds maximum length', { length: url.length, max: MAX_URL_LENGTH });
+            logger.warn('HtmlSanitizer: URL exceeds maximum length', {
+                length: url.length,
+                max: MAX_URL_LENGTH,
+            });
             return false;
         }
         // Normalize to lowercase for protocol checking
@@ -492,7 +509,10 @@ export default class HtmlSanitizer {
         // DoS protection - RFC 5321 maximum is 254 characters
         const MAX_EMAIL_LENGTH = 254;
         if (email.length > MAX_EMAIL_LENGTH) {
-            logger.warn('HtmlSanitizer: Email exceeds maximum length', { length: email.length, max: MAX_EMAIL_LENGTH });
+            logger.warn('HtmlSanitizer: Email exceeds maximum length', {
+                length: email.length,
+                max: MAX_EMAIL_LENGTH,
+            });
             return false;
         }
         // ====================================================================
@@ -536,8 +556,10 @@ export default class HtmlSanitizer {
             return false;
         }
         // Domain cannot start or end with dot or hyphen
-        if (domainPart.startsWith('.') || domainPart.endsWith('.') ||
-            domainPart.startsWith('-') || domainPart.endsWith('-')) {
+        if (domainPart.startsWith('.') ||
+            domainPart.endsWith('.') ||
+            domainPart.startsWith('-') ||
+            domainPart.endsWith('-')) {
             return false;
         }
         // Domain cannot contain consecutive dots
@@ -603,7 +625,10 @@ export default class HtmlSanitizer {
         }
         // DoS protection
         if (text.length > MAX_INPUT_SIZE) {
-            logger.error('HtmlSanitizer: Input exceeds maximum size for entity decoding', { size: text.length, max: MAX_INPUT_SIZE });
+            logger.error('HtmlSanitizer: Input exceeds maximum size for entity decoding', {
+                size: text.length,
+                max: MAX_INPUT_SIZE,
+            });
             text = text.substring(0, MAX_INPUT_SIZE);
         }
         // Common HTML entities to decode
@@ -617,7 +642,7 @@ export default class HtmlSanitizer {
             '&nbsp;': ' ',
             '&copy;': '©',
             '&reg;': '®',
-            '&trade;': '™'
+            '&trade;': '™',
         };
         // Replace known named entities
         for (const [entity, char] of Object.entries(entities)) {
@@ -627,7 +652,9 @@ export default class HtmlSanitizer {
         text = text.replace(/&#(\d+);/g, (match, dec) => {
             const code = parseInt(dec, 10);
             // Limit to valid Unicode range and exclude control characters (except tab, newline, carriage return)
-            if (code > 0 && code <= 0x10FFFF && (code >= 32 || code === 9 || code === 10 || code === 13)) {
+            if (code > 0 &&
+                code <= 0x10ffff &&
+                (code >= 32 || code === 9 || code === 10 || code === 13)) {
                 try {
                     return String.fromCharCode(code);
                 }
@@ -642,7 +669,9 @@ export default class HtmlSanitizer {
         text = text.replace(/&#x([0-9a-f]+);/gi, (match, hex) => {
             const code = parseInt(hex, 16);
             // Limit to valid Unicode range and exclude control characters (except tab, newline, carriage return)
-            if (code > 0 && code <= 0x10FFFF && (code >= 32 || code === 9 || code === 10 || code === 13)) {
+            if (code > 0 &&
+                code <= 0x10ffff &&
+                (code >= 32 || code === 9 || code === 10 || code === 13)) {
                 try {
                     return String.fromCharCode(code);
                 }

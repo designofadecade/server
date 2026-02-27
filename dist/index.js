@@ -20,6 +20,8 @@ export { default as Local } from './local/Local.js';
 export { logger } from './logger/Logger.js';
 export { default as ApiClient } from './client/ApiClient.js';
 export { default as RouteError } from './router/RouteError.js';
+// Documentation
+export { OpenApiGenerator, generateSwaggerUI } from './docs/OpenApiGenerator.js';
 // Utilities (grouped namespace - classes only)
 import HtmlSanitizer from './sanitizer/HtmlSanitizer.js';
 import HtmlRenderer from './utils/HtmlRenderer.js';
@@ -29,7 +31,7 @@ export const Utils = {
     HtmlSanitizer,
     HtmlRenderer,
     Local,
-    ApiClient
+    ApiClient,
 };
 // Integrations
 export { default as Slack } from './notifications/Slack.js';

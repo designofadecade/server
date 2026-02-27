@@ -37,7 +37,7 @@ export default class StaticFileHandler {
         '.webm': 'video/webm',
         '.mp3': 'audio/mpeg',
         '.wav': 'audio/wav',
-        '.zip': 'application/zip'
+        '.zip': 'application/zip',
     };
     #baseDir;
     #cacheControl;
@@ -77,7 +77,7 @@ export default class StaticFileHandler {
                 return {
                     status: 403,
                     headers: { 'Content-Type': 'text/plain' },
-                    body: 'Forbidden'
+                    body: 'Forbidden',
                 };
             let stats = await fs.stat(filePath);
             // Support index.html for directories
@@ -91,7 +91,7 @@ export default class StaticFileHandler {
                     return {
                         status: 404,
                         headers: { 'Content-Type': 'text/plain' },
-                        body: 'Not Found'
+                        body: 'Not Found',
                     };
                 }
             }
@@ -99,13 +99,15 @@ export default class StaticFileHandler {
                 return {
                     status: 404,
                     headers: { 'Content-Type': 'text/plain' },
-                    body: 'Not Found'
+                    body: 'Not Found',
                 };
             const content = await fs.readFile(finalPath);
             const ext = path.extname(finalPath).toLowerCase();
             const contentType = StaticFileHandler.MIME_TYPES[ext] || 'application/octet-stream';
             // Add charset for text-based content
-            const fullContentType = contentType.startsWith('text/') || contentType.includes('javascript') || contentType.includes('json')
+            const fullContentType = contentType.startsWith('text/') ||
+                contentType.includes('javascript') ||
+                contentType.includes('json')
                 ? `${contentType}; charset=utf-8`
                 : contentType;
             return {
@@ -115,9 +117,9 @@ export default class StaticFileHandler {
                     'Cache-Control': this.#cacheControl,
                     'Content-Length': stats.size.toString(),
                     'Last-Modified': stats.mtime.toUTCString(),
-                    'X-Content-Type-Options': 'nosniff'
+                    'X-Content-Type-Options': 'nosniff',
                 },
-                body: content
+                body: content,
             };
         }
         catch (error) {
@@ -125,14 +127,14 @@ export default class StaticFileHandler {
                 return {
                     status: 404,
                     headers: { 'Content-Type': 'text/plain' },
-                    body: 'Not Found'
+                    body: 'Not Found',
                 };
             }
             logger.error('Static file error', { error: error.message, code: error.code });
             return {
                 status: 500,
                 headers: { 'Content-Type': 'text/plain' },
-                body: 'Internal Server Error'
+                body: 'Internal Server Error',
             };
         }
     }

@@ -30,7 +30,7 @@ export default class EventsManager {
     #messageListener = null;
     constructor({ registerWebSocketServer = null, initEvents = [] } = {}) {
         if (Array.isArray(initEvents) && initEvents.length > 0)
-            this.registerEvents(initEvents.map(EventClass => new EventClass(this).managerEvents).flat());
+            this.registerEvents(initEvents.map((EventClass) => new EventClass(this).managerEvents).flat());
         if (registerWebSocketServer)
             this.#registerWebSocketServer(registerWebSocketServer);
     }
@@ -38,7 +38,7 @@ export default class EventsManager {
         if (!Array.isArray(events)) {
             throw new Error('Events must be an array');
         }
-        events.forEach(event => {
+        events.forEach((event) => {
             // Validate event structure
             if (!event || !event.type || typeof event.handler !== 'function') {
                 logger.warn('Invalid event registration', { event });
@@ -74,13 +74,13 @@ export default class EventsManager {
                 if (this.#events.has(parsedMessage.type)) {
                     const handlers = this.#events.get(parsedMessage.type);
                     // Execute handlers with proper error handling
-                    await Promise.allSettled(handlers.map(handler => handler(parsedMessage))).then(results => {
+                    await Promise.allSettled(handlers.map((handler) => handler(parsedMessage))).then((results) => {
                         results.forEach((result, index) => {
                             if (result.status === 'rejected') {
                                 logger.error('Event handler failed', {
                                     handlerIndex: index,
                                     messageType: parsedMessage.type,
-                                    error: result.reason
+                                    error: result.reason,
                                 });
                             }
                         });
