@@ -102,10 +102,10 @@ export default class ApiClient {
      * @returns {Promise<Response>}
      */
     async #executeWithRetry(fetchFn, controller, attempt = 0) {
+        let timeoutId;
         try {
-            const timeoutId = setTimeout(() => controller.abort(), this.#timeout);
+            timeoutId = setTimeout(() => controller.abort(), this.#timeout);
             const response = await fetchFn();
-            clearTimeout(timeoutId);
             return response;
         }
         catch (error) {
@@ -114,6 +114,11 @@ export default class ApiClient {
                 return this.#executeWithRetry(fetchFn, controller, attempt + 1);
             }
             throw error;
+        }
+        finally {
+            if (timeoutId) {
+                clearTimeout(timeoutId);
+            }
         }
     }
     /**

@@ -6,7 +6,7 @@ import path from 'path';
 vi.mock('fs/promises');
 
 describe('StaticFileHandler', () => {
-    let handler;
+    let handler: StaticFileHandler;
     const baseDir = '/test/public';
 
     beforeEach(() => {

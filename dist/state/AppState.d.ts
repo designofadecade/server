@@ -1,16 +1,24 @@
 export default class AppState {
     #private;
-    static instance: AppState | undefined;
+    private static instance?;
     /**
-     * Creates or returns the singleton instance of AppState
+     * Private constructor for singleton pattern
      * @param {Object} config - Configuration object
      * @param {string} [config.env='development'] - Environment mode
      * @param {string} [config.rootPath='/'] - Root path of the application
      */
-    constructor({ env, rootPath }?: {
+    private constructor();
+    /**
+     * Gets or creates the singleton instance of AppState
+     * @param {Object} config - Configuration object
+     * @param {string} [config.env='development'] - Environment mode
+     * @param {string} [config.rootPath='/'] - Root path of the application
+     * @returns {AppState} The singleton instance
+     */
+    static getInstance(config?: {
         env?: string;
         rootPath?: string;
-    });
+    }): AppState;
     /**
      * Get the current environment
      * @returns {string} The environment mode (e.g., 'development', 'production')

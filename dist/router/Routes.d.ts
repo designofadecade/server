@@ -1,9 +1,11 @@
 import type Router from './Router.js';
+import type { RouterRequest, RouterResponse, RouterMiddleware } from './Router.js';
 interface RouteRegistration {
     path: string;
     methods: string[];
     pattern: URLPattern;
-    handler: (event: any) => Promise<any>;
+    handler: (event: RouterRequest) => Promise<RouterResponse>;
+    middleware?: RouterMiddleware[];
 }
 export default class Routes {
     #private;
@@ -16,12 +18,12 @@ export default class Routes {
      * Array of nested route classes to register
      * @type {Array}
      */
-    static register: (new (router: Router, context?: any) => Routes)[];
+    static register: (new (router: Router, context?: unknown) => Routes)[];
     protected router: Router;
-    protected context: any;
-    constructor(router: Router, context?: any);
+    protected context?: unknown;
+    constructor(router: Router, context?: unknown);
     get routerRoutes(): RouteRegistration[];
-    addRoute(path: string, methods: string | string[], handler: (event: any) => Promise<any>): void;
+    addRoute(path: string, methods: string | string[], handler: (event: RouterRequest) => Promise<RouterResponse>, middleware?: RouterMiddleware[]): void;
 }
 export {};
 //# sourceMappingURL=Routes.d.ts.map

@@ -2,8 +2,8 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import Events from './Events.ts';
 
 describe('Events', () => {
-    let mockManager;
-    let events;
+    let mockManager: any;
+    let events: Events;
 
     beforeEach(() => {
         mockManager = {

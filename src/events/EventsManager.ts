@@ -1,4 +1,5 @@
 import WebSocketMessageFormatter from '../websocket/WebSocketMessageFormatter.js';
+import { logger } from '../logger/Logger.js';
 import type Events from './Events.js';
 
 interface ParsedMessage {
@@ -41,7 +42,7 @@ export default class EventsManager {
 
             // Validate event structure
             if (!event || !event.type || typeof event.handler !== 'function') {
-                console.warn('Invalid event registration:', event);
+                logger.warn('Invalid event registration', { event });
                 return;
             }
 
@@ -58,7 +59,7 @@ export default class EventsManager {
     broadcast(type: string, message: any): void {
 
         if (!this.#wss) {
-            console.warn('Cannot broadcast: WebSocket server not registered');
+            logger.warn('Cannot broadcast: WebSocket server not registered');
             return;
         }
 
@@ -70,8 +71,8 @@ export default class EventsManager {
             this.#wss.broadcast(
                 WebSocketMessageFormatter.format(type, message)
             );
-        } catch (error) {
-            console.error('Broadcast error:', error);
+        } catch (error: any) {
+            logger.error('Broadcast error', { error: error.message });
         }
 
     }
@@ -85,7 +86,7 @@ export default class EventsManager {
             try {
 
                 // Message is already parsed from WebSocketServer
-                console.log('Received message:', parsedMessage);
+                logger.debug('Received message', { type: parsedMessage.type, id: parsedMessage.id });
 
                 if (this.#events.has(parsedMessage.type)) {
                     const handlers = this.#events.get(parsedMessage.type)!;
@@ -96,17 +97,21 @@ export default class EventsManager {
                     ).then(results => {
                         results.forEach((result, index) => {
                             if (result.status === 'rejected') {
-                                console.error(`Handler ${index} failed:`, result.reason);
+                                logger.error('Event handler failed', {
+                                    handlerIndex: index,
+                                    messageType: parsedMessage.type,
+                                    error: result.reason
+                                });
                             }
                         });
                     });
                     return;
                 }
 
-                console.warn(`No handlers registered for event type: ${parsedMessage.type}`);
+                logger.warn('No handlers registered for event type', { eventType: parsedMessage.type });
 
-            } catch (error) {
-                console.error('Error processing WebSocket message:', error);
+            } catch (error: any) {
+                logger.error('Error processing WebSocket message', { error: error.message });
             }
 
         };
@@ -120,7 +125,7 @@ export default class EventsManager {
             this.#wss.off('message', this.#messageListener);
         }
         this.#events.clear();
-        console.log('✓ Events manager closed');
+        logger.info('Events manager closed');
     }
 
 }

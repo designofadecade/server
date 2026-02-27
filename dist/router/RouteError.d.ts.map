@@ -1,0 +1,1 @@
+{"version":3,"file":"RouteError.d.ts","sourceRoot":"","sources":["../../src/router/RouteError.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,cAAc,EAAE,MAAM,aAAa,CAAC;AAElD;;;;GAIG;AACH,MAAM,CAAC,OAAO,OAAO,UAAU;IAE3B;;;;;;;;;;OAUG;IACH,MAAM,CAAC,MAAM,CACT,MAAM,EAAE,MAAM,EACd,KAAK,EAAE,MAAM,EACb,OAAO,CAAC,EAAE,MAAM,GACjB,cAAc;CAapB"}

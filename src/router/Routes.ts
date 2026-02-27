@@ -1,10 +1,12 @@
 import type Router from './Router.js';
+import type { RouterRequest, RouterResponse, RouterMiddleware } from './Router.js';
 
 interface RouteRegistration {
     path: string;
     methods: string[];
     pattern: URLPattern;
-    handler: (event: any) => Promise<any>;
+    handler: (event: RouterRequest) => Promise<RouterResponse>;
+    middleware?: RouterMiddleware[];
 }
 
 export default class Routes {
@@ -19,18 +21,18 @@ export default class Routes {
      * Array of nested route classes to register
      * @type {Array}
      */
-    static register: (new (router: Router, context?: any) => Routes)[] = [];
+    static register: (new (router: Router, context?: unknown) => Routes)[] = [];
 
     #routerRoutes: RouteRegistration[] = [];
     protected router: Router;
-    protected context: any;
+    protected context?: unknown;
 
-    constructor(router: Router, context?: any) {
+    constructor(router: Router, context?: unknown) {
 
         this.router = router;
         this.context = context;
 
-        (this.constructor as typeof Routes).register.forEach((RouteClass: new (router: Router, context?: any) => Routes) => {
+        (this.constructor as typeof Routes).register.forEach((RouteClass: new (router: Router, context?: unknown) => Routes) => {
             const route = new RouteClass(router, context);
             this.#routerRoutes.push(...route.routerRoutes);
         });
@@ -41,7 +43,7 @@ export default class Routes {
         return this.#routerRoutes;
     }
 
-    addRoute(path: string, methods: string | string[], handler: (event: any) => Promise<any>): void {
+    addRoute(path: string, methods: string | string[], handler: (event: RouterRequest) => Promise<RouterResponse>, middleware?: RouterMiddleware[]): void {
 
         // Validate inputs
         if (typeof path !== 'string') {
@@ -68,7 +70,8 @@ export default class Routes {
             path: normalizedPath,
             methods: methodsArray,
             pattern: new URLPattern({ pathname: normalizedPath }),
-            handler
+            handler,
+            ...(middleware && { middleware })
         });
     }
 

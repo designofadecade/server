@@ -2,40 +2,42 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import AppState from './AppState.ts';
 
 describe('AppState', () => {
-    let instance;
+    let instance: AppState;
 
     beforeEach(() => {
-        // Clear the singleton instance before each test
+        // Clear the singleton instance before each test by accessing private static property
+        // @ts-expect-error - Accessing private static for testing purposes
         AppState.instance = undefined;
     });
 
     afterEach(() => {
         // Clean up singleton instance after each test
+        // @ts-expect-error - Accessing private static for testing purposes
         AppState.instance = undefined;
     });
 
     describe('Constructor', () => {
         it('should create an instance with default values', () => {
-            instance = new AppState();
+            instance = AppState.getInstance();
 
             expect(instance.env).toBe('development');
             expect(instance.rootPath).toBe('/');
         });
 
         it('should create an instance with custom env', () => {
-            instance = new AppState({ env: 'production' });
+            instance = AppState.getInstance({ env: 'production' });
 
             expect(instance.env).toBe('production');
         });
 
         it('should create an instance with custom rootPath', () => {
-            instance = new AppState({ rootPath: '/api/v1' });
+            instance = AppState.getInstance({ rootPath: '/api/v1' });
 
             expect(instance.rootPath).toBe('/api/v1');
         });
 
         it('should create an instance with custom env and rootPath', () => {
-            instance = new AppState({
+            instance = AppState.getInstance({
                 env: 'staging',
                 rootPath: '/app'
             });
@@ -45,15 +47,15 @@ describe('AppState', () => {
         });
 
         it('should return the same singleton instance', () => {
-            const instance1 = new AppState({ env: 'production' });
-            const instance2 = new AppState({ env: 'development' });
+            const instance1 = AppState.getInstance({ env: 'production' });
+            const instance2 = AppState.getInstance({ env: 'development' });
 
             expect(instance1).toBe(instance2);
             expect(instance2.env).toBe('production'); // First instance config is preserved
         });
 
         it('should handle empty configuration object', () => {
-            instance = new AppState({});
+            instance = AppState.getInstance({});
 
             expect(instance.env).toBe('development');
             expect(instance.rootPath).toBe('/');
@@ -62,7 +64,7 @@ describe('AppState', () => {
 
     describe('get()', () => {
         beforeEach(() => {
-            instance = new AppState();
+            instance = AppState.getInstance();
         });
 
         it('should return undefined for non-existent key', () => {
@@ -85,7 +87,7 @@ describe('AppState', () => {
 
     describe('set()', () => {
         beforeEach(() => {
-            instance = new AppState();
+            instance = AppState.getInstance();
         });
 
         it('should set a string value', () => {
@@ -145,7 +147,7 @@ describe('AppState', () => {
 
     describe('has()', () => {
         beforeEach(() => {
-            instance = new AppState();
+            instance = AppState.getInstance();
         });
 
         it('should return false for non-existent key', () => {
@@ -176,7 +178,7 @@ describe('AppState', () => {
 
     describe('remove()', () => {
         beforeEach(() => {
-            instance = new AppState();
+            instance = AppState.getInstance();
         });
 
         it('should remove an existing key', () => {
@@ -213,7 +215,7 @@ describe('AppState', () => {
 
     describe('clear()', () => {
         beforeEach(() => {
-            instance = new AppState();
+            instance = AppState.getInstance();
         });
 
         it('should clear all state', () => {
@@ -230,8 +232,9 @@ describe('AppState', () => {
 
         it('should not affect env and rootPath', () => {
             // Create a fresh instance with custom config
+            // @ts-expect-error - Accessing private static for testing purposes
             AppState.instance = undefined;
-            instance = new AppState({ env: 'production', rootPath: '/api' });
+            instance = AppState.getInstance({ env: 'production', rootPath: '/api' });
             instance.set('key', 'value');
 
             instance.clear();
@@ -262,18 +265,18 @@ describe('AppState', () => {
 
     describe('Singleton Behavior', () => {
         it('should maintain state across different references', () => {
-            const instance1 = new AppState();
+            const instance1 = AppState.getInstance();
             instance1.set('sharedKey', 'sharedValue');
 
-            const instance2 = new AppState();
+            const instance2 = AppState.getInstance();
             expect(instance2.get('sharedKey')).toBe('sharedValue');
         });
 
         it('should clear state for all references', () => {
-            const instance1 = new AppState();
+            const instance1 = AppState.getInstance();
             instance1.set('key', 'value');
 
-            const instance2 = new AppState();
+            const instance2 = AppState.getInstance();
             instance2.clear();
 
             expect(instance1.has('key')).toBe(false);
@@ -282,7 +285,7 @@ describe('AppState', () => {
 
     describe('Edge Cases', () => {
         beforeEach(() => {
-            instance = new AppState();
+            instance = AppState.getInstance();
         });
 
         it('should handle keys with special characters', () => {

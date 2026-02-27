@@ -1,4 +1,6 @@
 import { IncomingMessage, ServerResponse } from 'http';
+import { logger } from '../logger/Logger.js';
+import RouteError from './RouteError.js';
 
 interface RouteRegistration {
     path: string;
@@ -39,6 +41,8 @@ export type RouterMiddleware = (event: RouterRequest) => Promise<RouterResponse 
 export default class Router {
 
     static MethodsWithBody = ['POST', 'PUT', 'PATCH'];
+    static #MAX_CACHE_SIZE = 1000;
+    static #MAX_BODY_SIZE = 1024 * 1024; // 1MB
 
     #routes = {
         cache: new Map<string, RouteRegistration | null>(),
@@ -125,9 +129,19 @@ export default class Router {
         });
 
         this.#routes.cache.set(`${normalizedPath}::${method}`, route || null);
+        this.#pruneCache();
 
         return route || null;
 
+    }
+
+    #pruneCache(): void {
+        if (this.#routes.cache.size > Router.#MAX_CACHE_SIZE) {
+            const firstKey = this.#routes.cache.keys().next().value;
+            if (firstKey) {
+                this.#routes.cache.delete(firstKey);
+            }
+        }
     }
 
     async lambdaEvent(event: any): Promise<{ statusCode: number; headers?: Record<string, string>; body: string; isBase64Encoded?: boolean }> {
@@ -237,14 +251,11 @@ export default class Router {
 
         catch (error: any) {
 
-            console.error('Router error:', error);
+            logger.error('Router error', { error: error.message, stack: error.stack });
             res.statusCode = 500;
             res.setHeader('Content-Type', 'application/json');
-            res.end(JSON.stringify({
-                error: 'Internal Server Error',
-                message: error.message,
-                statusCode: 500
-            }));
+            const errorResponse = RouteError.create(500, 'Internal Server Error', error.message);
+            res.end(typeof errorResponse.body === 'string' ? errorResponse.body : JSON.stringify(errorResponse.body));
 
         }
 
@@ -281,8 +292,8 @@ export default class Router {
             return {
                 lambda: claims  // Mimic HTTP API Lambda authorizer structure
             };
-        } catch (error) {
-            console.error('Failed to decode JWT:', error);
+        } catch (error: any) {
+            logger.error('Failed to decode JWT', { error: error.message });
             return null;
         }
     }
@@ -290,7 +301,15 @@ export default class Router {
     async #getNodeJSRequestBody(req: IncomingMessage): Promise<any> {
         return new Promise((resolve, reject) => {
             let body = '';
+            let size = 0;
+
             req.on('data', (chunk) => {
+                size += chunk.length;
+                if (size > Router.#MAX_BODY_SIZE) {
+                    req.destroy();
+                    reject(new Error('Request body too large'));
+                    return;
+                }
                 body += chunk.toString();
             });
             req.on('end', () => {
@@ -316,44 +335,20 @@ export default class Router {
             const authHeader = event.headers?.authorization || event.headers?.Authorization;
 
             if (!authHeader)
-                return {
-                    status: 401,
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        error: 'Unauthorized',
-                        message: 'Missing Authorization header',
-                        statusCode: 401
-                    })
-                };
+                return RouteError.create(401, 'Unauthorized', 'Missing Authorization header');
 
             const authValue = Array.isArray(authHeader) ? authHeader[0] : authHeader;
             const token = authValue?.replace(/^Bearer\s+/i, '') || '';
 
             if (token !== this.#bearerToken)
-                return {
-                    status: 403,
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        error: 'Forbidden',
-                        message: 'Invalid authorization token',
-                        statusCode: 403
-                    })
-                };
+                return RouteError.create(403, 'Forbidden', 'Invalid authorization token');
 
         }
 
         const route = this.#findRouteHandler(event.path, event.method);
 
         if (!route)
-            return {
-                status: 404,
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    error: 'Not Found',
-                    message: `Route ${event.method} ${event.path} does not exist`,
-                    statusCode: 404
-                })
-            };
+            return RouteError.create(404, 'Not Found', `Route ${event.method} ${event.path} does not exist`);
 
         // Match dynamic route parameters
         if ('pattern' in route && route.path !== event.path && route.pattern) {
@@ -393,16 +388,13 @@ export default class Router {
             return result;
 
         } catch (error: any) {
-            console.error('Route handler error:', error);
-            return {
-                status: 500,
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    error: 'Internal Server Error',
-                    message: error.message,
-                    statusCode: 500
-                })
-            };
+            logger.error('Route handler error', {
+                error: error.message,
+                stack: error.stack,
+                path: event.path,
+                method: event.method
+            });
+            return RouteError.create(500, 'Internal Server Error', error.message);
         }
 
     }

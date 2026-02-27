@@ -73,7 +73,7 @@ const LOG_LEVEL_MAP = {
  * logger.info('Processing started', { requestId: '12345' });
  * logger.error('Failed to process', { error: 'Connection timeout', retries: 3 });
  */
-class Logger {
+export class Logger {
     level;
     /**
      * Creates a new Logger instance

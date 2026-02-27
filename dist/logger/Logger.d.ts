@@ -71,7 +71,7 @@ export type LogContext = Record<string, unknown>;
  * logger.info('Processing started', { requestId: '12345' });
  * logger.error('Failed to process', { error: 'Connection timeout', retries: 3 });
  */
-declare class Logger {
+export declare class Logger {
     private readonly level;
     /**
      * Creates a new Logger instance

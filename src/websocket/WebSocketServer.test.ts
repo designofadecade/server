@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import WebSocketServer from './WebSocketServer.ts';
+import { logger } from '../logger/Logger.js';
 import { EventEmitter } from 'events';
 
 // Create a shared mock that will be used by all tests
@@ -27,9 +28,9 @@ vi.mock('ws', () => {
 import { WebSocketServer as WebSocketServerLibraryMock, WebSocket as WebSocketMock } from 'ws';
 
 describe('WebSocketServer', () => {
-    let wsServer;
-    let mockWss;
-    let mockClient;
+    let wsServer: any;
+    let mockWss: any;
+    let mockClient: any;
 
     beforeEach(() => {
         mockClient = {
@@ -231,7 +232,7 @@ describe('WebSocketServer', () => {
 
     describe('Client Connection', () => {
         it('should handle new client connections', () => {
-            const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => { });
+            const loggerSpy = vi.spyOn(logger, 'info').mockImplementation(() => { });
 
             wsServer = new WebSocketServer();
 
@@ -243,13 +244,13 @@ describe('WebSocketServer', () => {
 
             connectionHandler(mockWs);
 
-            expect(consoleSpy).toHaveBeenCalledWith('Client connected');
+            expect(loggerSpy).toHaveBeenCalledWith('WebSocket client connected');
             expect(mockWs.send).toHaveBeenCalled();
             expect(mockWs.on).toHaveBeenCalledWith('message', expect.any(Function));
             expect(mockWs.on).toHaveBeenCalledWith('close', expect.any(Function));
             expect(mockWs.on).toHaveBeenCalledWith('error', expect.any(Function));
 
-            consoleSpy.mockRestore();
+            loggerSpy.mockRestore();
         });
 
         it('should send connection confirmation message to new clients', () => {
@@ -380,7 +381,7 @@ describe('WebSocketServer', () => {
 
     describe('Client Disconnect', () => {
         it('should handle client disconnections', () => {
-            const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => { });
+            const loggerSpy = vi.spyOn(logger, 'info').mockImplementation(() => { });
 
             wsServer = new WebSocketServer();
 
@@ -395,15 +396,15 @@ describe('WebSocketServer', () => {
             const closeHandler = mockWs.on.mock.calls.find(call => call[0] === 'close')[1];
             closeHandler();
 
-            expect(consoleSpy).toHaveBeenCalledWith('Client disconnected.');
+            expect(loggerSpy).toHaveBeenCalledWith('WebSocket client disconnected');
 
-            consoleSpy.mockRestore();
+            loggerSpy.mockRestore();
         });
     });
 
     describe('Client Errors', () => {
         it('should handle client errors', () => {
-            const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => { });
+            const loggerSpy = vi.spyOn(logger, 'error').mockImplementation(() => { });
 
             wsServer = new WebSocketServer();
 
@@ -418,9 +419,9 @@ describe('WebSocketServer', () => {
             const errorHandler = mockWs.on.mock.calls.find(call => call[0] === 'error')[1];
             errorHandler(new Error('Client error'));
 
-            expect(consoleSpy).toHaveBeenCalledWith('WebSocket error:', expect.any(Error));
+            expect(loggerSpy).toHaveBeenCalledWith('WebSocket error', { error: 'Client error' });
 
-            consoleSpy.mockRestore();
+            loggerSpy.mockRestore();
         });
     });
 
@@ -462,7 +463,7 @@ describe('WebSocketServer', () => {
         });
 
         it('should handle broadcast errors gracefully', () => {
-            const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => { });
+            const loggerSpy = vi.spyOn(logger, 'error').mockImplementation(() => { });
 
             const client1 = {
                 send: vi.fn(() => {
@@ -476,9 +477,9 @@ describe('WebSocketServer', () => {
 
             wsServer.broadcast('test message');
 
-            expect(consoleSpy).toHaveBeenCalledWith('Broadcast send error:', expect.any(Error));
+            expect(loggerSpy).toHaveBeenCalledWith('Broadcast send error', { error: 'Send failed' });
 
-            consoleSpy.mockRestore();
+            loggerSpy.mockRestore();
         });
 
         it('should handle empty client list', () => {

@@ -2,8 +2,8 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import Routes from './Routes.ts';
 
 describe('Routes', () => {
-    let mockRouter;
-    let routes;
+    let mockRouter: any;
+    let routes: Routes;
 
     beforeEach(() => {
         mockRouter = {};

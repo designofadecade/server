@@ -1,10 +1,11 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import EventsManager from './EventsManager.ts';
 import Events from './Events.ts';
+import { logger } from '../logger/Logger.js';
 
 describe('EventsManager', () => {
-    let eventsManager;
-    let mockWss;
+    let eventsManager: EventsManager;
+    let mockWss: any;
 
     beforeEach(() => {
         mockWss = {
@@ -102,37 +103,37 @@ describe('EventsManager', () => {
         });
 
         it('should warn and skip invalid event (missing type)', () => {
-            const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => { });
+            const loggerSpy = vi.spyOn(logger, 'warn').mockImplementation(() => { });
             const handler = vi.fn();
 
             eventsManager.registerEvents([
                 { handler }  // missing type
             ]);
 
-            expect(consoleSpy).toHaveBeenCalledWith('Invalid event registration:', { handler });
-            consoleSpy.mockRestore();
+            expect(loggerSpy).toHaveBeenCalledWith('Invalid event registration', { event: { handler } });
+            loggerSpy.mockRestore();
         });
 
         it('should warn and skip invalid event (missing handler)', () => {
-            const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => { });
+            const loggerSpy = vi.spyOn(logger, 'warn').mockImplementation(() => { });
 
             eventsManager.registerEvents([
                 { type: 'test:event' }  // missing handler
             ]);
 
-            expect(consoleSpy).toHaveBeenCalledWith('Invalid event registration:', { type: 'test:event' });
-            consoleSpy.mockRestore();
+            expect(loggerSpy).toHaveBeenCalledWith('Invalid event registration', { event: { type: 'test:event' } });
+            loggerSpy.mockRestore();
         });
 
         it('should warn and skip invalid event (handler not a function)', () => {
-            const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => { });
+            const loggerSpy = vi.spyOn(logger, 'warn').mockImplementation(() => { });
 
             eventsManager.registerEvents([
                 { type: 'test:event', handler: 'not a function' }
             ]);
 
-            expect(consoleSpy).toHaveBeenCalledWith('Invalid event registration:', { type: 'test:event', handler: 'not a function' });
-            consoleSpy.mockRestore();
+            expect(loggerSpy).toHaveBeenCalledWith('Invalid event registration', { event: { type: 'test:event', handler: 'not a function' } });
+            loggerSpy.mockRestore();
         });
 
         it('should register multiple handlers for the same event type', () => {
@@ -160,13 +161,13 @@ describe('EventsManager', () => {
         });
 
         it('should warn if WebSocket server is not registered', () => {
-            const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => { });
+            const loggerSpy = vi.spyOn(logger, 'warn').mockImplementation(() => { });
             eventsManager = new EventsManager();
 
             eventsManager.broadcast('test:event', { data: 'test' });
 
-            expect(consoleSpy).toHaveBeenCalledWith('Cannot broadcast: WebSocket server not registered');
-            consoleSpy.mockRestore();
+            expect(loggerSpy).toHaveBeenCalledWith('Cannot broadcast: WebSocket server not registered');
+            loggerSpy.mockRestore();
         });
 
         it('should throw error if type is not a string', () => {
@@ -180,7 +181,7 @@ describe('EventsManager', () => {
         });
 
         it('should handle broadcast errors gracefully', () => {
-            const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => { });
+            const loggerSpy = vi.spyOn(logger, 'error').mockImplementation(() => { });
             mockWss.broadcast = vi.fn(() => {
                 throw new Error('Broadcast failed');
             });
@@ -191,8 +192,8 @@ describe('EventsManager', () => {
 
             eventsManager.broadcast('test:event', { data: 'test' });
 
-            expect(consoleSpy).toHaveBeenCalledWith('Broadcast error:', expect.any(Error));
-            consoleSpy.mockRestore();
+            expect(loggerSpy).toHaveBeenCalledWith('Broadcast error', { error: 'Broadcast failed' });
+            loggerSpy.mockRestore();
         });
     });
 
@@ -217,7 +218,7 @@ describe('EventsManager', () => {
         });
 
         it('should warn if no handlers registered for event type', async () => {
-            const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => { });
+            const loggerSpy = vi.spyOn(logger, 'warn').mockImplementation(() => { });
             eventsManager = new EventsManager({
                 registerWebSocketServer: mockWss
             });
@@ -225,12 +226,12 @@ describe('EventsManager', () => {
             const messageListener = mockWss.on.mock.calls.find(call => call[0] === 'message')[1];
             await messageListener({ type: 'unknown:event', payload: {} });
 
-            expect(consoleSpy).toHaveBeenCalledWith('No handlers registered for event type: unknown:event');
-            consoleSpy.mockRestore();
+            expect(loggerSpy).toHaveBeenCalledWith('No handlers registered for event type', { eventType: 'unknown:event' });
+            loggerSpy.mockRestore();
         });
 
         it('should handle handler errors gracefully', async () => {
-            const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => { });
+            const loggerSpy = vi.spyOn(logger, 'error').mockImplementation(() => { });
             const handler = vi.fn(() => {
                 throw new Error('Handler error');
             });
@@ -247,8 +248,8 @@ describe('EventsManager', () => {
             await messageListener({ type: 'test:event', payload: {} });
 
             expect(handler).toHaveBeenCalled();
-            expect(consoleSpy).toHaveBeenCalled();
-            consoleSpy.mockRestore();
+            expect(loggerSpy).toHaveBeenCalled();
+            loggerSpy.mockRestore();
         });
 
         it('should execute all handlers for an event type', async () => {
@@ -289,13 +290,13 @@ describe('EventsManager', () => {
         });
 
         it('should handle close without WebSocket server', () => {
-            const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => { });
+            const loggerSpy = vi.spyOn(logger, 'info').mockImplementation(() => { });
             eventsManager = new EventsManager();
 
             eventsManager.close();
 
-            expect(consoleSpy).toHaveBeenCalledWith('✓ Events manager closed');
-            consoleSpy.mockRestore();
+            expect(loggerSpy).toHaveBeenCalledWith('Events manager closed');
+            loggerSpy.mockRestore();
         });
     });
 });

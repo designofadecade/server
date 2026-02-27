@@ -1,5 +1,6 @@
 import { EventEmitter } from 'events';
 import { WebSocketServer as WebSocketServerLibrary, WebSocket } from 'ws';
+import { logger } from '../logger/Logger.js';
 import WebSocketMessageFormatter from './WebSocketMessageFormatter.js';
 
 interface WebSocketServerOptions {
@@ -45,7 +46,7 @@ export default class WebSocketServer extends EventEmitter {
         });
 
         this.#wss.on('connection', (ws: WebSocket) => {
-            console.log('Client connected');
+            logger.info('WebSocket client connected');
 
             ws.send(WebSocketMessageFormatter.format('ws:connected', {
                 message: 'WebSocket connection established'
@@ -53,14 +54,15 @@ export default class WebSocketServer extends EventEmitter {
 
             ws.on('message', async (message: Buffer) => {
 
-                if (message.indexOf("ws:ping") !== -1) {
+                const messageString = message.toString();
+
+                if (messageString.includes('ws:ping')) {
                     ws.send(WebSocketMessageFormatter.format('ws:pong', {}));
                     return;
                 }
 
                 try {
 
-                    const messageString = message.toString();
                     const parsed = WebSocketMessageFormatter.parse(messageString);
 
                     if (!parsed) {
@@ -74,7 +76,7 @@ export default class WebSocketServer extends EventEmitter {
 
                 } catch (error: any) {
 
-                    console.error('Message handling error:', error);
+                    logger.error('Message handling error', { error: error.message });
                     ws.send(WebSocketMessageFormatter.format('ws:error', {
                         error: error.message
                     }));
@@ -84,11 +86,11 @@ export default class WebSocketServer extends EventEmitter {
             });
 
             ws.on('close', () => {
-                console.log('Client disconnected.');
+                logger.info('WebSocket client disconnected');
             });
 
             ws.on('error', (error: Error) => {
-                console.error('WebSocket error:', error);
+                logger.error('WebSocket error', { error: error.message });
             });
 
         });
@@ -100,8 +102,8 @@ export default class WebSocketServer extends EventEmitter {
             if (client.readyState === WebSocket.OPEN) {
                 try {
                     client.send(message);
-                } catch (error) {
-                    console.error('Broadcast send error:', error);
+                } catch (error: any) {
+                    logger.error('Broadcast send error', { error: error.message });
                 }
             }
         });

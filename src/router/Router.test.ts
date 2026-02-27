@@ -3,7 +3,7 @@ import Router from './Router.ts';
 import Routes from './Routes.ts';
 
 describe('Router', () => {
-    let router;
+    let router: Router;
 
     beforeEach(() => {
         vi.clearAllMocks();
@@ -17,7 +17,7 @@ describe('Router', () => {
 
         it('should initialize with route classes', () => {
             class TestRoutes extends Routes {
-                constructor(router) {
+                constructor(router: Router) {
                     super(router);
                     this.addRoute('/test', 'GET', async () => ({ status: 200, body: 'test' }));
                 }
@@ -40,7 +40,7 @@ describe('Router', () => {
 
         it('should throw error for duplicate routes', () => {
             class TestRoutes extends Routes {
-                constructor(router) {
+                constructor(router: Router) {
                     super(router);
                     this.addRoute('/test', 'GET', async () => ({ status: 200, body: 'test' }));
                     this.addRoute('/test', 'GET', async () => ({ status: 200, body: 'duplicate' }));
@@ -60,11 +60,12 @@ describe('Router', () => {
             ];
 
             class TestRoutes extends Routes {
-                constructor(router) {
+                constructor(router: Router) {
                     super(router);
                 }
                 get routerRoutes() {
-                    return invalidRoutes;
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    return invalidRoutes as unknown;
                 }
             }
 
@@ -82,7 +83,7 @@ describe('Router', () => {
     describe('Route Matching', () => {
         beforeEach(() => {
             class TestRoutes extends Routes {
-                constructor(router) {
+                constructor(router: Router) {
                     super(router);
                     this.addRoute('/static', 'GET', async () => ({ status: 200, body: 'static' }));
                     this.addRoute('/users/:id', 'GET', async (event) => ({ status: 200, body: event.params }));
@@ -156,7 +157,7 @@ describe('Router', () => {
 
         it('should preserve root path without trailing slash', async () => {
             class RootRoutes extends Routes {
-                constructor(router) {
+                constructor(router: Router) {
                     super(router);
                     this.addRoute('/', 'GET', async () => ({ status: 200, body: 'root' }));
                 }
@@ -182,7 +183,7 @@ describe('Router', () => {
     describe('lambdaEvent', () => {
         beforeEach(() => {
             class TestRoutes extends Routes {
-                constructor(router) {
+                constructor(router: Router) {
                     super(router);
                     this.addRoute('/test', 'GET', async () => ({ status: 200, body: { success: true } }));
                     this.addRoute('/post', 'POST', async (event) => ({ status: 201, body: event.body }));
@@ -279,12 +280,12 @@ describe('Router', () => {
     });
 
     describe('nodeJSRequest', () => {
-        let mockReq;
-        let mockRes;
+        let mockReq: any; // eslint-disable-line @typescript-eslint/no-explicit-any
+        let mockRes: any; // eslint-disable-line @typescript-eslint/no-explicit-any
 
         beforeEach(() => {
             class TestRoutes extends Routes {
-                constructor(router) {
+                constructor(router: Router) {
                     super(router);
                     this.addRoute('/test', 'GET', async () => ({ status: 200, body: { success: true } }));
                 }
@@ -309,7 +310,7 @@ describe('Router', () => {
         });
 
         it('should handle Node.js GET requests', async () => {
-            mockReq.on.mockImplementation((event, callback) => {
+            mockReq.on.mockImplementation((event: string, callback: () => void) => {
                 if (event === 'end') callback();
                 return mockReq;
             });
@@ -322,7 +323,7 @@ describe('Router', () => {
 
         it('should handle CORS when enabled', async () => {
             mockReq.headers.origin = 'http://example.com';
-            mockReq.on.mockImplementation((event, callback) => {
+            mockReq.on.mockImplementation((event: string, callback: () => void) => {
                 if (event === 'end') callback();
                 return mockReq;
             });
@@ -344,7 +345,7 @@ describe('Router', () => {
 
         it('should handle POST requests with body', async () => {
             class PostRoutes extends Routes {
-                constructor(router) {
+                constructor(router: Router) {
                     super(router);
                     this.addRoute('/test', 'POST', async (event) => ({ status: 201, body: event.body }));
                 }
@@ -355,7 +356,7 @@ describe('Router', () => {
             mockReq.method = 'POST';
             mockReq.headers['content-type'] = 'application/json';
 
-            mockReq.on.mockImplementation((event, callback) => {
+            mockReq.on.mockImplementation((event: string, callback: (data?: string) => void) => {
                 if (event === 'data') callback('{"name":"test"}');
                 if (event === 'end') callback();
                 if (event === 'error') return;
@@ -369,7 +370,7 @@ describe('Router', () => {
 
         it('should handle errors gracefully', async () => {
             class PostRoutes extends Routes {
-                constructor(router) {
+                constructor(router: Router) {
                     super(router);
                     this.addRoute('/test', 'POST', async (event) => ({ status: 200, body: event.body }));
                 }
@@ -380,7 +381,7 @@ describe('Router', () => {
             mockReq.method = 'POST';
             mockReq.headers['content-type'] = 'application/json';
 
-            mockReq.on.mockImplementation((event, callback) => {
+            mockReq.on.mockImplementation((event: string, callback: (error?: Error) => void) => {
                 if (event === 'error') callback(new Error('Request error'));
                 if (event === 'data') return;
                 if (event === 'end') return;
@@ -394,7 +395,7 @@ describe('Router', () => {
 
         it('should handle Buffer responses', async () => {
             class BufferRoutes extends Routes {
-                constructor(router) {
+                constructor(router: Router) {
                     super(router);
                     this.addRoute('/buffer', 'GET', async () => ({
                         status: 200,
@@ -406,7 +407,7 @@ describe('Router', () => {
             router = new Router({ initRoutes: [BufferRoutes] });
             mockReq.url = 'http://localhost:3000/buffer';
 
-            mockReq.on.mockImplementation((event, callback) => {
+            mockReq.on.mockImplementation((event: string, callback: () => void) => {
                 if (event === 'end') callback();
                 return mockReq;
             });
@@ -418,7 +419,7 @@ describe('Router', () => {
 
         it('should handle base64 encoded responses', async () => {
             class Base64Routes extends Routes {
-                constructor(router) {
+                constructor(router: Router) {
                     super(router);
                     this.addRoute('/base64', 'GET', async () => ({
                         status: 200,
@@ -431,7 +432,7 @@ describe('Router', () => {
             router = new Router({ initRoutes: [Base64Routes] });
             mockReq.url = 'http://localhost:3000/base64';
 
-            mockReq.on.mockImplementation((event, callback) => {
+            mockReq.on.mockImplementation((event: string, callback: () => void) => {
                 if (event === 'end') callback();
                 return mockReq;
             });
@@ -445,7 +446,7 @@ describe('Router', () => {
     describe('Bearer Token Authentication', () => {
         beforeEach(() => {
             class TestRoutes extends Routes {
-                constructor(router) {
+                constructor(router: Router) {
                     super(router);
                     this.addRoute('/protected', 'GET', async () => ({ status: 200, body: { success: true } }));
                 }
@@ -526,14 +527,14 @@ describe('Router', () => {
 
     describe('Middleware', () => {
         it('should execute global middleware', async () => {
-            const globalMiddleware = vi.fn(async (event) => {
+            const globalMiddleware = vi.fn(async (event: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any
                 event.middlewareRan = true;
             });
 
             class TestRoutes extends Routes {
-                constructor(router) {
+                constructor(router: Router) {
                     super(router);
-                    this.addRoute('/test', 'GET', async (event) => ({
+                    this.addRoute('/test', 'GET', async (event: any) => ({ // eslint-disable-line @typescript-eslint/no-explicit-any
                         status: 200,
                         body: { middlewareRan: event.middlewareRan }
                     }));
@@ -572,7 +573,7 @@ describe('Router', () => {
             }));
 
             class TestRoutes extends Routes {
-                constructor(router) {
+                constructor(router: Router) {
                     super(router);
                     this.addRoute('/test', 'GET', handler);
                 }
@@ -603,7 +604,7 @@ describe('Router', () => {
     describe('Error Handling', () => {
         it('should handle route handler errors', async () => {
             class ErrorRoutes extends Routes {
-                constructor(router) {
+                constructor(router: Router) {
                     super(router);
                     this.addRoute('/error', 'GET', async () => {
                         throw new Error('Handler error');
@@ -630,9 +631,10 @@ describe('Router', () => {
 
         it('should handle handler returning non-object', async () => {
             class InvalidRoutes extends Routes {
-                constructor(router) {
+                constructor(router: Router) {
                     super(router);
-                    this.addRoute('/invalid', 'GET', async () => 'not an object');
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    this.addRoute('/invalid', 'GET', async () => 'not an object' as unknown);
                 }
             }
 

@@ -1,5 +1,6 @@
 import { EventEmitter } from 'events';
 import { WebSocketServer as WebSocketServerLibrary, WebSocket } from 'ws';
+import { logger } from '../logger/Logger.js';
 import WebSocketMessageFormatter from './WebSocketMessageFormatter.js';
 export default class WebSocketServer extends EventEmitter {
     #wss;
@@ -29,17 +30,17 @@ export default class WebSocketServer extends EventEmitter {
             console.log(`✓ WebSocket Server listening on ${host}:${port}`);
         });
         this.#wss.on('connection', (ws) => {
-            console.log('Client connected');
+            logger.info('WebSocket client connected');
             ws.send(WebSocketMessageFormatter.format('ws:connected', {
                 message: 'WebSocket connection established'
             }));
             ws.on('message', async (message) => {
-                if (message.indexOf("ws:ping") !== -1) {
+                const messageString = message.toString();
+                if (messageString.includes('ws:ping')) {
                     ws.send(WebSocketMessageFormatter.format('ws:pong', {}));
                     return;
                 }
                 try {
-                    const messageString = message.toString();
                     const parsed = WebSocketMessageFormatter.parse(messageString);
                     if (!parsed) {
                         ws.send(WebSocketMessageFormatter.format('ws:error', {
@@ -50,17 +51,17 @@ export default class WebSocketServer extends EventEmitter {
                     this.emit('message', parsed);
                 }
                 catch (error) {
-                    console.error('Message handling error:', error);
+                    logger.error('Message handling error', { error: error.message });
                     ws.send(WebSocketMessageFormatter.format('ws:error', {
                         error: error.message
                     }));
                 }
             });
             ws.on('close', () => {
-                console.log('Client disconnected.');
+                logger.info('WebSocket client disconnected');
             });
             ws.on('error', (error) => {
-                console.error('WebSocket error:', error);
+                logger.error('WebSocket error', { error: error.message });
             });
         });
     }
@@ -71,7 +72,7 @@ export default class WebSocketServer extends EventEmitter {
                     client.send(message);
                 }
                 catch (error) {
-                    console.error('Broadcast send error:', error);
+                    logger.error('Broadcast send error', { error: error.message });
                 }
             }
         });

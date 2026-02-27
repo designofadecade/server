@@ -4,24 +4,32 @@ export default class AppState {
     #rootPath!: string;
     #state!: Map<string, any>;
 
-    static instance: AppState | undefined;
+    private static instance?: AppState;
 
     /**
-     * Creates or returns the singleton instance of AppState
+     * Private constructor for singleton pattern
      * @param {Object} config - Configuration object
      * @param {string} [config.env='development'] - Environment mode
      * @param {string} [config.rootPath='/'] - Root path of the application
      */
-    constructor({ env = 'development', rootPath = '/' }: { env?: string; rootPath?: string } = {}) {
-
-        if (AppState.instance)
-            return AppState.instance;
-
+    private constructor({ env = 'development', rootPath = '/' }: { env?: string; rootPath?: string } = {}) {
         this.#env = env;
         this.#rootPath = rootPath;
         this.#state = new Map();
+    }
 
-        AppState.instance = this;
+    /**
+     * Gets or creates the singleton instance of AppState
+     * @param {Object} config - Configuration object
+     * @param {string} [config.env='development'] - Environment mode
+     * @param {string} [config.rootPath='/'] - Root path of the application
+     * @returns {AppState} The singleton instance
+     */
+    static getInstance(config?: { env?: string; rootPath?: string }): AppState {
+        if (!AppState.instance) {
+            AppState.instance = new AppState(config || {});
+        }
+        return AppState.instance;
     }
 
     /**

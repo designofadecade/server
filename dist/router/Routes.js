@@ -23,7 +23,7 @@ export default class Routes {
     get routerRoutes() {
         return this.#routerRoutes;
     }
-    addRoute(path, methods, handler) {
+    addRoute(path, methods, handler, middleware) {
         // Validate inputs
         if (typeof path !== 'string') {
             throw new Error('Path must be a string');
@@ -44,7 +44,8 @@ export default class Routes {
             path: normalizedPath,
             methods: methodsArray,
             pattern: new URLPattern({ pathname: normalizedPath }),
-            handler
+            handler,
+            ...(middleware && { middleware })
         });
     }
 }

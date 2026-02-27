@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import Slack from './Slack.ts';
 
 describe('Slack', () => {
-    let originalFetch;
+    let originalFetch: typeof global.fetch;
 
     beforeEach(() => {
         originalFetch = global.fetch;

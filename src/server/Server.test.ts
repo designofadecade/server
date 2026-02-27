@@ -5,9 +5,9 @@ import Http from 'http';
 vi.mock('http');
 
 describe('Server', () => {
-    let server;
-    let mockHttpServer;
-    let mockRequestHandler;
+    let server: Server;
+    let mockHttpServer: any;
+    let mockRequestHandler: any;
 
     beforeEach(() => {
         mockHttpServer = {

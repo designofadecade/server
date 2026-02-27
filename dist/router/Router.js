@@ -1,5 +1,10 @@
-export default class Router {
+var _a;
+import { logger } from '../logger/Logger.js';
+import RouteError from './RouteError.js';
+class Router {
     static MethodsWithBody = ['POST', 'PUT', 'PATCH'];
+    static #MAX_CACHE_SIZE = 1000;
+    static #MAX_BODY_SIZE = 1024 * 1024; // 1MB
     #routes = {
         cache: new Map(),
         static: new Map(),
@@ -58,10 +63,19 @@ export default class Router {
             return route.pattern?.test(normalizedPath);
         });
         this.#routes.cache.set(`${normalizedPath}::${method}`, route || null);
+        this.#pruneCache();
         return route || null;
     }
+    #pruneCache() {
+        if (this.#routes.cache.size > _a.#MAX_CACHE_SIZE) {
+            const firstKey = this.#routes.cache.keys().next().value;
+            if (firstKey) {
+                this.#routes.cache.delete(firstKey);
+            }
+        }
+    }
     async lambdaEvent(event) {
-        let body = Router.MethodsWithBody.includes(event.requestContext.http.method) ? event.body : null;
+        let body = _a.MethodsWithBody.includes(event.requestContext.http.method) ? event.body : null;
         if (event.headers['content-type']?.includes('application/json')) {
             try {
                 body = JSON.parse(body);
@@ -109,7 +123,7 @@ export default class Router {
             const response = await this.#request({
                 path: requestUrl.pathname,
                 method: req.method,
-                body: Router.MethodsWithBody.includes(req.method) ? await this.#getNodeJSRequestBody(req) : null,
+                body: _a.MethodsWithBody.includes(req.method) ? await this.#getNodeJSRequestBody(req) : null,
                 cookies: this.#parseCookies(req.headers?.cookie || ''),
                 params: {},
                 query: Object.fromEntries(requestUrl.searchParams),
@@ -145,14 +159,11 @@ export default class Router {
                 res.end('');
         }
         catch (error) {
-            console.error('Router error:', error);
+            logger.error('Router error', { error: error.message, stack: error.stack });
             res.statusCode = 500;
             res.setHeader('Content-Type', 'application/json');
-            res.end(JSON.stringify({
-                error: 'Internal Server Error',
-                message: error.message,
-                statusCode: 500
-            }));
+            const errorResponse = RouteError.create(500, 'Internal Server Error', error.message);
+            res.end(typeof errorResponse.body === 'string' ? errorResponse.body : JSON.stringify(errorResponse.body));
         }
     }
     #parseCookies(cookieHeader) {
@@ -185,14 +196,21 @@ export default class Router {
             };
         }
         catch (error) {
-            console.error('Failed to decode JWT:', error);
+            logger.error('Failed to decode JWT', { error: error.message });
             return null;
         }
     }
     async #getNodeJSRequestBody(req) {
         return new Promise((resolve, reject) => {
             let body = '';
+            let size = 0;
             req.on('data', (chunk) => {
+                size += chunk.length;
+                if (size > _a.#MAX_BODY_SIZE) {
+                    req.destroy();
+                    reject(new Error('Request body too large'));
+                    return;
+                }
                 body += chunk.toString();
             });
             req.on('end', () => {
@@ -217,39 +235,15 @@ export default class Router {
         if (this.#bearerToken) {
             const authHeader = event.headers?.authorization || event.headers?.Authorization;
             if (!authHeader)
-                return {
-                    status: 401,
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        error: 'Unauthorized',
-                        message: 'Missing Authorization header',
-                        statusCode: 401
-                    })
-                };
+                return RouteError.create(401, 'Unauthorized', 'Missing Authorization header');
             const authValue = Array.isArray(authHeader) ? authHeader[0] : authHeader;
             const token = authValue?.replace(/^Bearer\s+/i, '') || '';
             if (token !== this.#bearerToken)
-                return {
-                    status: 403,
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        error: 'Forbidden',
-                        message: 'Invalid authorization token',
-                        statusCode: 403
-                    })
-                };
+                return RouteError.create(403, 'Forbidden', 'Invalid authorization token');
         }
         const route = this.#findRouteHandler(event.path, event.method);
         if (!route)
-            return {
-                status: 404,
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    error: 'Not Found',
-                    message: `Route ${event.method} ${event.path} does not exist`,
-                    statusCode: 404
-                })
-            };
+            return RouteError.create(404, 'Not Found', `Route ${event.method} ${event.path} does not exist`);
         // Match dynamic route parameters
         if ('pattern' in route && route.path !== event.path && route.pattern) {
             const match = route.pattern.exec(event.path);
@@ -283,17 +277,16 @@ export default class Router {
             return result;
         }
         catch (error) {
-            console.error('Route handler error:', error);
-            return {
-                status: 500,
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    error: 'Internal Server Error',
-                    message: error.message,
-                    statusCode: 500
-                })
-            };
+            logger.error('Route handler error', {
+                error: error.message,
+                stack: error.stack,
+                path: event.path,
+                method: event.method
+            });
+            return RouteError.create(500, 'Internal Server Error', error.message);
         }
     }
 }
+_a = Router;
+export default Router;
 //# sourceMappingURL=Router.js.map

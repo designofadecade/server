@@ -137,10 +137,11 @@ export default class ApiClient {
      * @returns {Promise<Response>}
      */
     async #executeWithRetry(fetchFn: () => Promise<Response>, controller: AbortController, attempt: number = 0): Promise<Response> {
+        let timeoutId: NodeJS.Timeout | undefined;
+
         try {
-            const timeoutId = setTimeout(() => controller.abort(), this.#timeout);
+            timeoutId = setTimeout(() => controller.abort(), this.#timeout);
             const response = await fetchFn();
-            clearTimeout(timeoutId);
             return response;
         } catch (error: any) {
             if (attempt < this.#retryAttempts && error.name !== 'AbortError') {
@@ -148,6 +149,10 @@ export default class ApiClient {
                 return this.#executeWithRetry(fetchFn, controller, attempt + 1);
             }
             throw error;
+        } finally {
+            if (timeoutId) {
+                clearTimeout(timeoutId);
+            }
         }
     }
 
