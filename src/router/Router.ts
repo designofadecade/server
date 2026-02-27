@@ -1,6 +1,7 @@
 import { IncomingMessage, ServerResponse } from 'http';
 import { logger } from '../logger/Logger.js';
 import RouteError from './RouteError.js';
+import { Context } from '../context/Context.js';
 
 interface LambdaHttpEvent {
   requestContext: {
@@ -45,8 +46,8 @@ export interface RouterResponse {
 }
 
 export interface RouterOptions {
-  context?: unknown;
-  initRoutes?: (new (router: Router, context?: unknown) => { routerRoutes: RouteRegistration[] })[];
+  context?: Context;
+  initRoutes?: (new (router: Router, context?: Context) => { routerRoutes: RouteRegistration[] })[];
   bearerToken?: string | null;
   middleware?: RouterMiddleware[];
 }
@@ -156,9 +157,7 @@ export default class Router {
     }
   }
 
-  async lambdaEvent(
-    event: LambdaHttpEvent
-  ): Promise<{
+  async lambdaEvent(event: LambdaHttpEvent): Promise<{
     statusCode: number;
     headers?: Record<string, string>;
     body: string;

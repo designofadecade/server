@@ -1,5 +1,6 @@
 import type Router from './Router.js';
 import type { RouterRequest, RouterResponse, RouterMiddleware } from './Router.js';
+import type { Context } from '../context/Context.js';
 
 interface RouteRegistration {
   path: string;
@@ -20,18 +21,18 @@ export default class Routes {
    * Array of nested route classes to register
    * @type {Array}
    */
-  static register: (new (router: Router, context?: unknown) => Routes)[] = [];
+  static register: (new (router: Router, context?: Context) => Routes)[] = [];
 
   #routerRoutes: RouteRegistration[] = [];
   protected router: Router;
-  protected context?: unknown;
+  protected context?: Context;
 
-  constructor(router: Router, context?: unknown) {
+  constructor(router: Router, context?: Context) {
     this.router = router;
     this.context = context;
 
     (this.constructor as typeof Routes).register.forEach(
-      (RouteClass: new (router: Router, context?: unknown) => Routes) => {
+      (RouteClass: new (router: Router, context?: Context) => Routes) => {
         const route = new RouteClass(router, context);
         this.#routerRoutes.push(...route.routerRoutes);
       }
