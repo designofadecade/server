@@ -1,23 +1,24 @@
 import { bench, describe } from 'vitest';
 import Router from './Router.js';
 import Routes from './Routes.js';
+import Context from '../context/Context.js';
 
 class TestRoutes extends Routes {
-  constructor(router: Router, context?: unknown) {
+  constructor(router: Router, context?: Context) {
     super(router, context);
     this.addRoute('/api/users', 'GET', async () => ({ status: 200, body: 'OK' }));
   }
 }
 
 class ParamRoutes extends Routes {
-  constructor(router: Router, context?: unknown) {
+  constructor(router: Router, context?: Context) {
     super(router, context);
     this.addRoute('/api/users/:id', 'GET', async () => ({ status: 200, body: 'OK' }));
   }
 }
 
 class ComplexRoutes extends Routes {
-  constructor(router: Router, context?: unknown) {
+  constructor(router: Router, context?: Context) {
     super(router, context);
     this.addRoute('/api/:resource/:id/comments/:commentId', 'GET', async () => ({
       status: 200,
@@ -71,7 +72,7 @@ describe('Router Performance', () => {
 
   bench('route registration - 100 routes', () => {
     class ManyRoutes extends Routes {
-      constructor(router: Router, context?: unknown) {
+      constructor(router: Router, context?: Context) {
         super(router, context);
         for (let i = 0; i < 100; i++) {
           this.addRoute(`/api/route${i}`, 'GET', async () => ({ status: 200, body: 'OK' }));

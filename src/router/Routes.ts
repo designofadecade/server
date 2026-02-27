@@ -1,6 +1,6 @@
 import type Router from './Router.js';
 import type { RouterRequest, RouterResponse, RouterMiddleware } from './Router.js';
-import type { Context } from '../context/Context.js';
+import type Context from '../context/Context.js';
 
 interface RouteRegistration {
   path: string;

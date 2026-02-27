@@ -1,7 +1,7 @@
 import { IncomingMessage, ServerResponse } from 'http';
 import { logger } from '../logger/Logger.js';
 import RouteError from './RouteError.js';
-import { Context } from '../context/Context.js';
+import Context from '../context/Context.js';
 
 interface LambdaHttpEvent {
   requestContext: {

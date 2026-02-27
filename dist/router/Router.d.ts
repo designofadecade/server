@@ -1,4 +1,5 @@
 import { IncomingMessage, ServerResponse } from 'http';
+import Context from '../context/Context.js';
 interface LambdaHttpEvent {
   requestContext: {
     http: {
@@ -38,10 +39,10 @@ export interface RouterResponse {
   isBase64Encoded?: boolean;
 }
 export interface RouterOptions {
-  context?: unknown;
+  context?: Context;
   initRoutes?: (new (
     router: Router,
-    context?: unknown
+    context?: Context
   ) => {
     routerRoutes: RouteRegistration[];
   })[];
