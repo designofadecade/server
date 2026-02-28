@@ -46,7 +46,7 @@ export default class Server {
                     code: 'SERVER_PORT_IN_USE',
                     source: 'Server.start',
                     port: this.#initPort,
-                    error
+                    error,
                 });
                 process.exit(1);
             }
@@ -54,7 +54,7 @@ export default class Server {
                 code: 'SERVER_ERROR',
                 source: 'Server.start',
                 error,
-                errorCode: error.code
+                errorCode: error.code,
             });
             process.exit(1);
         });
@@ -62,7 +62,7 @@ export default class Server {
             logger.info('HTTP Server listening', {
                 source: 'Server.start',
                 host: this.#initHost,
-                port: this.#initPort
+                port: this.#initPort,
             });
         });
     }
@@ -74,13 +74,13 @@ export default class Server {
                         logger.error('Error closing HTTP Server', {
                             code: 'SERVER_CLOSE_ERROR',
                             source: 'Server.close',
-                            error
+                            error,
                         });
                         reject(error);
                     }
                     else {
                         logger.info('HTTP Server closed', {
-                            source: 'Server.close'
+                            source: 'Server.close',
                         });
                         resolve();
                     }

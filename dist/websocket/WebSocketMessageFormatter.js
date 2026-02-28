@@ -22,7 +22,7 @@ export default class WebSocketMessageFormatter {
             logger.warn('Received invalid message data', {
                 code: 'WEBSOCKET_INVALID_MESSAGE',
                 source: 'WebSocketMessageFormatter.parse',
-                messageType: typeof rawMessage
+                messageType: typeof rawMessage,
             });
             return null;
         }
@@ -48,7 +48,7 @@ export default class WebSocketMessageFormatter {
             logger.error('Failed to parse incoming WebSocket message as JSON', {
                 code: 'WEBSOCKET_PARSE_ERROR',
                 source: 'WebSocketMessageFormatter.parse',
-                error: error instanceof Error ? error : String(error)
+                error: error instanceof Error ? error : String(error),
             });
             return null;
         }
@@ -82,7 +82,7 @@ export default class WebSocketMessageFormatter {
             logger.error('Failed to serialize WebSocket message', {
                 code: 'WEBSOCKET_SERIALIZE_ERROR',
                 source: 'WebSocketMessageFormatter.format',
-                error
+                error,
             });
             // Provide more specific error message for circular references
             const errorMsg = error.message.includes('circular')

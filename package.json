@@ -35,10 +35,28 @@
     "websocket",
     "typescript",
     "node",
-    "api"
+    "api",
+    "http-server",
+    "router",
+    "middleware",
+    "framework",
+    "esm",
+    "websocket-server",
+    "routing",
+    "static-files",
+    "html-sanitizer",
+    "event-emitter",
+    "state-management",
+    "openapi",
+    "swagger",
+    "rest-api"
   ],
   "author": "Design of a Decade <info@designofadecade.com>",
   "license": "MIT",
+  "homepage": "https://github.com/designofadecade/server#readme",
+  "bugs": {
+    "url": "https://github.com/designofadecade/server/issues"
+  },
   "dependencies": {
     "ws": "^8.16.0"
   },
@@ -61,10 +79,13 @@
     "url": "git+https://github.com/designofadecade/server.git"
   },
   "publishConfig": {
-    "registry": "https://npm.pkg.github.com"
+    "access": "public"
   },
   "files": [
-    "dist"
+    "dist",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
   ],
   "lint-staged": {
     "*.ts": [

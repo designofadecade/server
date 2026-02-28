@@ -1,7 +1,7 @@
 import Http, { IncomingMessage, ServerResponse } from 'http';
 interface ServerOptions {
-  port?: number;
-  host?: string;
+    port?: number;
+    host?: string;
 }
 /**
  * HTTP Server wrapper with Node.js http module
@@ -19,13 +19,10 @@ interface ServerOptions {
  * await server.close();
  */
 export default class Server {
-  #private;
-  constructor(
-    { port, host }: ServerOptions | undefined,
-    requestHandler: (req: IncomingMessage, res: ServerResponse) => void
-  );
-  get server(): Http.Server | null;
-  close(): Promise<void>;
+    #private;
+    constructor({ port, host }: ServerOptions | undefined, requestHandler: (req: IncomingMessage, res: ServerResponse) => void);
+    get server(): Http.Server | null;
+    close(): Promise<void>;
 }
 export {};
 //# sourceMappingURL=Server.d.ts.map

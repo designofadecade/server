@@ -135,7 +135,7 @@ export default class StaticFileHandler {
                 source: 'StaticFileHandler.serve',
                 path: requestPath,
                 error,
-                errorCode: error.code
+                errorCode: error.code,
             });
             return {
                 status: 500,

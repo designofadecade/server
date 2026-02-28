@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Updated package to publish to npm.js registry instead of GitHub Packages
+- Improved package.json with enhanced keywords and metadata
+- Enhanced README.md with comprehensive badges, installation instructions, and documentation links
+- Optimized build configuration to exclude test and benchmark files from distribution
+- Updated GitHub Actions workflow for npm publishing with provenance
+- Improved .gitignore with additional patterns
+
+### Added
+- .npmignore file to ensure only necessary files are published
+- Security section in README
+- API Reference section in README with links to all documentation
+- Support and Links sections in README
+- Additional badges for npm version, TypeScript, and build status
+
+### Removed
+- .npmrc file (no longer needed for public npm registry)
+- Test and benchmark files from compiled output
+
 ## [3.0.0] - 2026-02-27
 
 ### Added

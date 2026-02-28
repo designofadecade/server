@@ -1,0 +1,53 @@
+# Source files
+src/
+
+# Test files
+**/*.test.ts
+**/*.test.js
+**/*.bench.ts
+**/*.bench.js
+*.test.ts
+*.test.js
+*.bench.ts
+*.bench.js
+
+# Test and coverage
+coverage/
+.vitest/
+vitest.config.js
+
+# Development files
+.github/
+.husky/
+.vscode/
+.eslintrc.json
+.prettierrc.json
+.gitignore
+*.log
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Documentation (keep only essential docs)
+CONTRIBUTING.md
+FEATURES.md
+docs/
+
+# Config files
+tsconfig.json
+
+# Build artifacts
+*.tsbuildinfo
+*.map
+
+# Lock files
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+
+# Keep these
+!dist/**
+!README.md
+!LICENSE
+!CHANGELOG.md

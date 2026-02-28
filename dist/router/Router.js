@@ -228,7 +228,7 @@ class Router {
             logger.error('Failed to decode JWT', {
                 code: 'ROUTER_JWT_DECODE_ERROR',
                 source: 'Router.decodeJwt',
-                error: error instanceof Error ? error : String(error)
+                error: error instanceof Error ? error : String(error),
             });
             return null;
         }
@@ -316,7 +316,7 @@ class Router {
                 path: request.path,
                 method: request.method,
                 error: error instanceof Error ? error : String(error),
-                stack: error instanceof Error ? error.stack : undefined
+                stack: error instanceof Error ? error.stack : undefined,
             });
             return RouteError.create(500, 'Internal Server Error', error instanceof Error ? error.message : String(error));
         }

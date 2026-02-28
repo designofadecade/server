@@ -24,7 +24,7 @@ export default class WebSocketServer extends EventEmitter {
                     code: 'WEBSOCKET_PORT_IN_USE',
                     source: 'WebSocketServer.init',
                     port,
-                    error
+                    error,
                 });
                 process.exit(1);
             }
@@ -32,7 +32,7 @@ export default class WebSocketServer extends EventEmitter {
                 code: 'WEBSOCKET_SERVER_ERROR',
                 source: 'WebSocketServer.init',
                 error,
-                errorCode: error.code
+                errorCode: error.code,
             });
             process.exit(1);
         });
@@ -40,13 +40,13 @@ export default class WebSocketServer extends EventEmitter {
             logger.info('WebSocket Server listening', {
                 source: 'WebSocketServer.init',
                 host,
-                port
+                port,
             });
         });
         this.#wss.on('connection', (ws) => {
             logger.info('WebSocket client connected', {
                 source: 'WebSocketServer.connection',
-                clientCount: this.clientCount
+                clientCount: this.clientCount,
             });
             ws.send(WebSocketMessageFormatter.format('ws:connected', {
                 message: 'WebSocket connection established',
@@ -71,7 +71,7 @@ export default class WebSocketServer extends EventEmitter {
                     logger.error('Message handling error', {
                         code: 'WEBSOCKET_MESSAGE_ERROR',
                         source: 'WebSocketServer.onMessage',
-                        error
+                        error,
                     });
                     ws.send(WebSocketMessageFormatter.format('ws:error', {
                         error: error.message,
@@ -81,14 +81,14 @@ export default class WebSocketServer extends EventEmitter {
             ws.on('close', () => {
                 logger.info('WebSocket client disconnected', {
                     source: 'WebSocketServer.onClose',
-                    clientCount: this.clientCount
+                    clientCount: this.clientCount,
                 });
             });
             ws.on('error', (error) => {
                 logger.error('WebSocket error', {
                     code: 'WEBSOCKET_CLIENT_ERROR',
                     source: 'WebSocketServer.onError',
-                    error
+                    error,
                 });
             });
         });
@@ -103,7 +103,7 @@ export default class WebSocketServer extends EventEmitter {
                     logger.error('Broadcast send error', {
                         code: 'WEBSOCKET_BROADCAST_ERROR',
                         source: 'WebSocketServer.broadcast',
-                        error
+                        error,
                     });
                 }
             }
@@ -117,13 +117,13 @@ export default class WebSocketServer extends EventEmitter {
                         logger.error('Error closing WebSocket Server', {
                             code: 'WEBSOCKET_CLOSE_ERROR',
                             source: 'WebSocketServer.close',
-                            error
+                            error,
                         });
                         reject(error);
                     }
                     else {
                         logger.info('WebSocket Server closed', {
-                            source: 'WebSocketServer.close'
+                            source: 'WebSocketServer.close',
                         });
                         resolve();
                     }

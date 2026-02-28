@@ -33,100 +33,100 @@
  * ```
  */
 export interface OpenApiInfo {
-  title: string;
-  version: string;
-  description?: string;
-  contact?: {
-    name?: string;
-    email?: string;
-    url?: string;
-  };
-  license?: {
-    name: string;
-    url?: string;
-  };
+    title: string;
+    version: string;
+    description?: string;
+    contact?: {
+        name?: string;
+        email?: string;
+        url?: string;
+    };
+    license?: {
+        name: string;
+        url?: string;
+    };
 }
 export interface OpenApiServer {
-  url: string;
-  description?: string;
+    url: string;
+    description?: string;
 }
 export interface OpenApiParameter {
-  name: string;
-  in: 'path' | 'query' | 'header' | 'cookie';
-  description?: string;
-  required?: boolean;
-  schema: {
-    type: string;
-    [key: string]: unknown;
-  };
-}
-export interface OpenApiResponse {
-  description: string;
-  content?: {
-    [mediaType: string]: {
-      schema: unknown;
-    };
-  };
-}
-export interface OpenApiRouteConfig {
-  path: string;
-  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'OPTIONS' | 'HEAD';
-  summary?: string;
-  description?: string;
-  operationId?: string;
-  tags?: string[];
-  parameters?: OpenApiParameter[];
-  requestBody?: {
+    name: string;
+    in: 'path' | 'query' | 'header' | 'cookie';
     description?: string;
     required?: boolean;
-    content: {
-      [mediaType: string]: {
-        schema: unknown;
-      };
+    schema: {
+        type: string;
+        [key: string]: unknown;
     };
-  };
-  responses: {
-    [statusCode: string]: OpenApiResponse;
-  };
-  security?: Array<Record<string, string[]>>;
+}
+export interface OpenApiResponse {
+    description: string;
+    content?: {
+        [mediaType: string]: {
+            schema: unknown;
+        };
+    };
+}
+export interface OpenApiRouteConfig {
+    path: string;
+    method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'OPTIONS' | 'HEAD';
+    summary?: string;
+    description?: string;
+    operationId?: string;
+    tags?: string[];
+    parameters?: OpenApiParameter[];
+    requestBody?: {
+        description?: string;
+        required?: boolean;
+        content: {
+            [mediaType: string]: {
+                schema: unknown;
+            };
+        };
+    };
+    responses: {
+        [statusCode: string]: OpenApiResponse;
+    };
+    security?: Array<Record<string, string[]>>;
 }
 export interface OpenApiConfig {
-  info: OpenApiInfo;
-  servers?: OpenApiServer[];
-  tags?: Array<{
-    name: string;
-    description?: string;
-  }>;
-  components?: {
-    schemas?: Record<string, unknown>;
-    securitySchemes?: Record<string, unknown>;
-  };
+    info: OpenApiInfo;
+    servers?: OpenApiServer[];
+    tags?: Array<{
+        name: string;
+        description?: string;
+    }>;
+    components?: {
+        schemas?: Record<string, unknown>;
+        securitySchemes?: Record<string, unknown>;
+    };
 }
 export declare class OpenApiGenerator {
-  private config;
-  private routes;
-  constructor(config: OpenApiConfig);
-  /**
-   * Add a route to the OpenAPI documentation
-   */
-  addRoute(route: OpenApiRouteConfig): void;
-  /**
-   * Add multiple routes at once
-   */
-  addRoutes(routes: OpenApiRouteConfig[]): void;
-  /**
-   * Generate the complete OpenAPI specification
-   */
-  generate(): object;
-  /**
-   * Generate OpenAPI spec as JSON string
-   */
-  toJSON(): string;
-  /**
-   * Generate OpenAPI spec as YAML string (basic implementation)
-   */
-  toYAML(): string;
-  private objectToYaml;
+    private config;
+    private routes;
+    constructor(config: OpenApiConfig);
+    /**
+     * Add a route to the OpenAPI documentation
+     */
+    addRoute(route: OpenApiRouteConfig): void;
+    /**
+     * Add multiple routes at once
+     */
+    addRoutes(routes: OpenApiRouteConfig[]): void;
+    /**
+     * Generate the complete OpenAPI specification
+     */
+    generate(): object;
+    /**
+     * Generate OpenAPI spec as JSON string
+     */
+    toJSON(): string;
+    /**
+     * Generate OpenAPI spec as YAML string (basic implementation)
+     */
+    toYAML(): string;
+    private objectToYaml;
 }
 /**
  * Helper function to create Swagger UI HTML page

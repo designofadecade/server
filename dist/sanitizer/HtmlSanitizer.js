@@ -89,7 +89,7 @@ export default class HtmlSanitizer {
         if (!Array.isArray(allowedTags) || allowedTags.length === 0) {
             logger.warn('No allowed tags provided, stripping all HTML', {
                 code: 'SANITIZER_NO_ALLOWED_TAGS',
-                source: 'HtmlSanitizer.clean'
+                source: 'HtmlSanitizer.clean',
             });
             return this.stripAllTags(html);
         }
@@ -102,7 +102,7 @@ export default class HtmlSanitizer {
                 logger.warn('Invalid tag name ignored', {
                     code: 'SANITIZER_INVALID_TAG',
                     source: 'HtmlSanitizer.clean',
-                    tag
+                    tag,
                 });
                 return false;
             }
@@ -112,7 +112,7 @@ export default class HtmlSanitizer {
         if (validAllowedTags.length === 0) {
             logger.warn('No valid allowed tags, stripping all HTML', {
                 code: 'SANITIZER_NO_VALID_TAGS',
-                source: 'HtmlSanitizer.clean'
+                source: 'HtmlSanitizer.clean',
             });
             return this.stripAllTags(html);
         }
@@ -166,7 +166,7 @@ export default class HtmlSanitizer {
                         logger.warn('Unsafe URL removed from anchor tag', {
                             code: 'SANITIZER_UNSAFE_URL',
                             source: 'HtmlSanitizer.clean',
-                            url
+                            url,
                         });
                         return '<a>';
                     }
@@ -448,7 +448,7 @@ export default class HtmlSanitizer {
             logger.warn('Dangerous protocol detected in URL', {
                 code: 'SANITIZER_DANGEROUS_PROTOCOL',
                 source: 'HtmlSanitizer.isValidUrl',
-                url
+                url,
             });
             return false;
         }
@@ -460,7 +460,7 @@ export default class HtmlSanitizer {
                 logger.warn('Unknown/unsafe protocol in URL', {
                     code: 'SANITIZER_UNSAFE_PROTOCOL',
                     source: 'HtmlSanitizer.isValidUrl',
-                    url
+                    url,
                 });
             }
             return isValid;
@@ -474,7 +474,7 @@ export default class HtmlSanitizer {
                     logger.warn('Encoded dangerous protocol detected', {
                         code: 'SANITIZER_ENCODED_DANGEROUS_PROTOCOL',
                         source: 'HtmlSanitizer.isValidUrl',
-                        url
+                        url,
                     });
                     return false;
                 }
@@ -485,7 +485,7 @@ export default class HtmlSanitizer {
                     code: 'SANITIZER_URL_DECODE_ERROR',
                     source: 'HtmlSanitizer.isValidUrl',
                     url,
-                    error: e
+                    error: e,
                 });
                 return false;
             }
@@ -708,7 +708,7 @@ export default class HtmlSanitizer {
                         code: 'SANITIZER_INVALID_CHAR_CODE',
                         source: 'HtmlSanitizer.decodeHtmlEntities',
                         charCode: code,
-                        error: e
+                        error: e,
                     });
                     return match;
                 }
@@ -730,7 +730,7 @@ export default class HtmlSanitizer {
                         code: 'SANITIZER_INVALID_HEX_CODE',
                         source: 'HtmlSanitizer.decodeHtmlEntities',
                         hex,
-                        error: e
+                        error: e,
                     });
                     return match;
                 }

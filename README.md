@@ -1,7 +1,10 @@
 # Design of a Decade Server
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![npm version](https://img.shields.io/npm/v/@designofadecade/server.svg)](https://www.npmjs.com/package/@designofadecade/server)
 [![Node.js Version](https://img.shields.io/badge/node->=24.0.0-brightgreen.svg)](https://nodejs.org)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.3+-blue.svg)](https://www.typescriptlang.org/)
+[![Build Status](https://github.com/designofadecade/server/workflows/Test/badge.svg)](https://github.com/designofadecade/server/actions)
 
 A modern, type-safe Node.js server framework with built-in WebSocket support, routing, static file handling, and middleware capabilities. Built with TypeScript for Node.js 24+.
 
@@ -21,31 +24,28 @@ A modern, type-safe Node.js server framework with built-in WebSocket support, ro
 
 ## 📦 Installation
 
-This package is published to GitHub Packages. To install:
+```bash
+npm install @designofadecade/server
+```
 
-1. **Create or update `.npmrc` in your project root:**
-   ```
-   @designofadecade:registry=https://npm.pkg.github.com
-   ```
+Or using other package managers:
 
-2. **Authenticate with GitHub Packages:**
-   ```bash
-   npm login --registry=https://npm.pkg.github.com
-   # Username: your-github-username
-   # Password: your-github-personal-access-token (with read:packages permission)
-   ```
+```bash
+# Yarn
+yarn add @designofadecade/server
 
-3. **Install the package:**
-   ```bash
-   npm install @designofadecade/server
-   ```
+# pnpm
+pnpm add @designofadecade/server
+
+# Bun
+bun add @designofadecade/server
+```
 
 ### Requirements
 
 - **Node.js** >= 24.0.0
 - **ES Modules** support (package uses `"type": "module"`)
 - TypeScript >= 5.0 (if using TypeScript)
-- GitHub account with read:packages permission
 
 ## Quick Start
 
@@ -207,23 +207,66 @@ npm run typecheck       # Type-check without emitting
 ```
 src/
 ├── client/             # API client utilities
-├── events/             # Event system
+├── context/            # Request context handling
+├── docs/               # OpenAPI/Swagger documentation generators
+├── events/             # Event system with pub/sub pattern
 ├── local/              # Local storage utilities
-├── logger/             # Logging utilities
-├── middleware/         # Request middleware
+├── logger/             # Logging utilities with CloudWatch support
+├── middleware/         # Request middleware (logging, etc.)
 ├── notifications/      # Notification integrations (Slack, etc.)
-├── router/             # Routing system
-├── sanitizer/          # HTML sanitization
-├── server/             # Core server implementation
+├── router/             # Routing system with URL pattern matching
+├── sanitizer/          # HTML sanitization for XSS protection
+├── server/             # Core HTTP/HTTPS server implementation
 ├── state/              # Application state management
 ├── types/              # TypeScript type definitions
 ├── utils/              # Utilities and helpers
 └── websocket/          # WebSocket server implementation
 ```
 
+## API Reference
+
+Full API documentation is available in the [docs](docs/) directory:
+
+- **[Server](docs/server.md)** - Core server setup and configuration
+- **[Router](docs/router.md)** - Routing and request handling
+- **[WebSocket](docs/websocket.md)** - WebSocket server and messaging
+- **[Logger](docs/logger.md)** - CloudWatch logging and performance tracking
+- **[Events Manager](docs/events-manager.md)** - Event system usage
+- **[API Documentation](docs/api-documentation.md)** - OpenAPI/Swagger setup
+- **[State & Context](docs/context-state.md)** - State management
+- **[Utilities](docs/utilities.md)** - Helper functions and utilities
+
+## Security
+
+This package includes built-in security features:
+
+- **HTML Sanitization** - XSS protection for user-generated content
+- **Type Safety** - Full TypeScript support for compile-time safety
+- **Input Validation** - URL pattern matching and parameter validation
+
+If you discover a security vulnerability, please send an email to info@designofadecade.com instead of using the issue tracker.
+
+## Versioning
+
+This project follows [Semantic Versioning](https://semver.org/). For available versions, see the [tags on this repository](https://github.com/designofadecade/server/tags) or the [npm registry](https://www.npmjs.com/package/@designofadecade/server).
+
+See [CHANGELOG.md](CHANGELOG.md) for a history of changes.
+
+## Support
+
+- **Documentation**: [GitHub Repository](https://github.com/designofadecade/server)
+- **Issues**: [GitHub Issues](https://github.com/designofadecade/server/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/designofadecade/server/discussions)
+
 ## Contributing
 
-Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for details.
+Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for details on:
+
+- Code of Conduct
+- Development workflow
+- Pull request process
+- Coding standards
+- Testing requirements
 
 ## License
 
@@ -231,8 +274,24 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Author
 
-Design of a Decade <info@designofadecade.com>
+**Design of a Decade**  
+Email: info@designofadecade.com  
+Website: [designofadecade.com](https://designofadecade.com)
 
-## Repository
+## Links
 
-[https://github.com/designofadecade/server](https://github.com/designofadecade/server)
+- [GitHub Repository](https://github.com/designofadecade/server)
+- [npm Package](https://www.npmjs.com/package/@designofadecade/server)
+- [Issue Tracker](https://github.com/designofadecade/server/issues)
+- [Changelog](CHANGELOG.md)
+
+## Acknowledgments
+
+Built with:
+- [TypeScript](https://www.typescriptlang.org/) - Type-safe JavaScript
+- [Vitest](https://vitest.dev/) - Unit testing framework
+- [ws](https://github.com/websockets/ws) - WebSocket implementation
+
+---
+
+Made with ❤️ by Design of a Decade

@@ -44,7 +44,7 @@ export default class EventsManager {
                 logger.warn('Invalid event registration', {
                     code: 'EVENT_INVALID_REGISTRATION',
                     source: 'EventsManager.registerEvents',
-                    event
+                    event,
                 });
                 return;
             }
@@ -59,7 +59,7 @@ export default class EventsManager {
             logger.warn('Cannot broadcast: WebSocket server not registered', {
                 code: 'EVENT_NO_WEBSOCKET',
                 source: 'EventsManager.broadcast',
-                messageType: type
+                messageType: type,
             });
             return;
         }
@@ -74,7 +74,7 @@ export default class EventsManager {
                 code: 'EVENT_BROADCAST_ERROR',
                 source: 'EventsManager.broadcast',
                 messageType: type,
-                error
+                error,
             });
         }
     }
@@ -86,7 +86,7 @@ export default class EventsManager {
                 logger.debug('Received message', {
                     source: 'EventsManager.onMessage',
                     type: parsedMessage.type,
-                    id: parsedMessage.id
+                    id: parsedMessage.id,
                 });
                 if (this.#events.has(parsedMessage.type)) {
                     const handlers = this.#events.get(parsedMessage.type);
@@ -109,7 +109,7 @@ export default class EventsManager {
                 logger.warn('No handlers registered for event type', {
                     code: 'EVENT_NO_HANDLERS',
                     source: 'EventsManager.onMessage',
-                    eventType: parsedMessage.type
+                    eventType: parsedMessage.type,
                 });
             }
             catch (error) {
@@ -117,7 +117,7 @@ export default class EventsManager {
                     code: 'EVENT_PROCESSING_ERROR',
                     source: 'EventsManager.onMessage',
                     messageType: parsedMessage.type,
-                    error
+                    error,
                 });
             }
         };
@@ -130,7 +130,7 @@ export default class EventsManager {
         }
         this.#events.clear();
         logger.info('Events manager closed', {
-            source: 'EventsManager.close'
+            source: 'EventsManager.close',
         });
     }
 }
