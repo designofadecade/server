@@ -238,7 +238,22 @@ export class Logger {
 
     if (obj === null || obj === undefined) return obj;
 
-    if (typeof obj !== 'object') return obj;
+    // Handle primitives and special types before object check
+    if (typeof obj !== 'object') {
+      // Handle Symbol (convert to string for JSON compatibility)
+      if (typeof obj === 'symbol') {
+        return obj.toString();
+      }
+      // Handle BigInt (convert to string for JSON compatibility)
+      if (typeof obj === 'bigint') {
+        return obj.toString() + 'n';
+      }
+      // Handle functions
+      if (typeof obj === 'function') {
+        return '[Function]';
+      }
+      return obj;
+    }
 
     // Handle circular references
     if (seen.has(obj as object)) {
@@ -262,10 +277,9 @@ export class Logger {
 
       if (isSensitive) {
         redacted[key] = '[REDACTED]';
-      } else if (typeof value === 'object' && value !== null) {
-        redacted[key] = this.redactSensitiveData(value, seen, depth + 1);
       } else {
-        redacted[key] = value;
+        // Always recursively process values to handle BigInt, Symbol, Function, etc.
+        redacted[key] = this.redactSensitiveData(value, seen, depth + 1);
       }
     }
 
@@ -305,12 +319,12 @@ export class Logger {
    * @private
    */
   private safeStringify(obj: unknown): string {
-    return JSON.stringify(obj, (key, value) => {
-      // Handle BigInt
+    return JSON.stringify(obj, (_key, value) => {
+      // Handle BigInt (convert to string with 'n' suffix)
       if (typeof value === 'bigint') {
         return value.toString() + 'n';
       }
-      // Handle Symbol (skip it)
+      // Handle Symbol (convert to string)
       if (typeof value === 'symbol') {
         return value.toString();
       }
