@@ -69,6 +69,10 @@ npm run format          # Format code with Prettier
 5. **Update CHANGELOG.md**: Add your changes under the "Unreleased" section
 6. **Create a pull request**: Provide a clear description of your changes
 
+## Publishing & Deployment
+
+For package maintainers, see [docs/deployment.md](docs/deployment.md) for publishing instructions and deployment checklist.
+
 ### Pull Request Guidelines
 
 - Keep PRs focused on a single feature or bug fix
