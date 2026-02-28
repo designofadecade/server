@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.0.0] - 2026-02-28
+
 ### Changed
 - Updated package to publish to npm.js registry instead of GitHub Packages
 - Improved package.json with enhanced keywords and metadata
