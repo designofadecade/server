@@ -65,13 +65,13 @@ OpenAPI 3.0 documentation generation has been added, allowing you to create inte
 - **generateSwaggerUI function** - Generate Swagger UI HTML pages
 - **Type definitions** for OpenAPI components
 - **Comprehensive tests** (10 test cases)
-- **Documentation** in [src/docs/README.md](src/docs/README.md)
+- **Documentation** in [docs/api-documentation.md](docs/api-documentation.md)
 
 ### Files Created
 
 - [src/docs/OpenApiGenerator.ts](src/docs/OpenApiGenerator.ts) - Main generator class
 - [src/docs/OpenApiGenerator.test.ts](src/docs/OpenApiGenerator.test.ts) - Test suite
-- [src/docs/README.md](src/docs/README.md) - Usage documentation
+- [docs/api-documentation.md](docs/api-documentation.md) - Usage documentation
 
 ### How to Use
 
@@ -245,7 +245,7 @@ npm run bench:watch    # Watch mode
 import { OpenApiGenerator, generateSwaggerUI } from '@designofadecade/server';
 ```
 
-See [src/docs/README.md](src/docs/README.md) for full documentation.
+See [docs/api-documentation.md](docs/api-documentation.md) for full documentation.
 
 ### Git Hooks
 ```bash

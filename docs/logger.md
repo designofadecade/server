@@ -17,7 +17,7 @@ Complete guide for using the production-ready CloudWatch Logger in AWS Lambda en
 ## Quick Start
 
 ```typescript
-import { logger } from './Logger';
+import { logger } from '@designofadecade/server';
 
 // Basic logging
 logger.info('Application started');
@@ -55,7 +55,7 @@ DEBUG (3) - Detailed diagnostic information
 ### 1. Basic Logging
 
 ```typescript
-import { logger } from './Logger';
+import { logger } from '@designofadecade/server';
 
 // Informational logging
 logger.info('User registration completed', {
@@ -628,5 +628,5 @@ For issues or questions:
 
 ---
 
-**Version**: 3.0.0  
+**Version**: 3.0.1  
 **Last Updated**: 2026-02-28

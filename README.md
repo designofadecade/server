@@ -164,6 +164,16 @@ manager.on('user:login', (data) => {
 events.emit('user:login', { userId: 123, timestamp: Date.now() });
 ```
 
+## Documentation
+
+Comprehensive documentation is available in the `/docs` directory:
+
+- **[Logger Documentation](docs/logger.md)** - CloudWatch Logger with AWS Lambda integration, sensitive data redaction, and performance tracking
+- **[API Documentation](docs/api-documentation.md)** - OpenAPI/Swagger documentation generation guide
+- **[New Features](FEATURES.md)** - Performance benchmarks, pre-commit hooks, and recent additions
+- **[Changelog](CHANGELOG.md)** - Version history and release notes
+- **[Contributing Guide](CONTRIBUTING.md)** - How to contribute to the project
+
 ## Development
 
 ### Install Dependencies

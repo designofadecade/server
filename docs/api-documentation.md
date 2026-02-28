@@ -1,6 +1,6 @@
 # OpenAPI/Swagger Documentation
 
-This directory contains utilities for generating OpenAPI 3.0 documentation for your API.
+Generate OpenAPI 3.0 documentation for your API.
 
 ## Quick Start
 

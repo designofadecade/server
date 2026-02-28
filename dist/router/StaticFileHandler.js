@@ -130,7 +130,13 @@ export default class StaticFileHandler {
                     body: 'Not Found',
                 };
             }
-            logger.error('Static file error', { error: error.message, code: error.code });
+            logger.error('Static file error', {
+                code: 'STATIC_FILE_ERROR',
+                source: 'StaticFileHandler.serve',
+                path: requestPath,
+                error,
+                errorCode: error.code
+            });
             return {
                 status: 500,
                 headers: { 'Content-Type': 'text/plain' },

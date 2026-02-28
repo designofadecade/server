@@ -168,7 +168,11 @@ class Router {
         }
         catch (error) {
             logger.error('Router error', {
-                error: error instanceof Error ? error.message : String(error),
+                code: 'ROUTER_ERROR',
+                source: 'Router.nodeJSRequest',
+                path: req.url,
+                method: req.method,
+                error: error instanceof Error ? error : String(error),
                 stack: error instanceof Error ? error.stack : undefined,
             });
             res.statusCode = 500;
@@ -222,7 +226,9 @@ class Router {
         }
         catch (error) {
             logger.error('Failed to decode JWT', {
-                error: error instanceof Error ? error.message : String(error),
+                code: 'ROUTER_JWT_DECODE_ERROR',
+                source: 'Router.decodeJwt',
+                error: error instanceof Error ? error : String(error)
             });
             return null;
         }
@@ -305,10 +311,12 @@ class Router {
         }
         catch (error) {
             logger.error('Route handler error', {
-                error: error instanceof Error ? error.message : String(error),
-                stack: error instanceof Error ? error.stack : undefined,
+                code: 'ROUTER_HANDLER_ERROR',
+                source: 'Router.request',
                 path: request.path,
                 method: request.method,
+                error: error instanceof Error ? error : String(error),
+                stack: error instanceof Error ? error.stack : undefined
             });
             return RouteError.create(500, 'Internal Server Error', error instanceof Error ? error.message : String(error));
         }

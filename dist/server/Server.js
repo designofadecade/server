@@ -42,14 +42,28 @@ export default class Server {
         // Attach error handler before listen to avoid race conditions
         this.#server.on('error', (error) => {
             if (error.code === 'EADDRINUSE') {
-                logger.error('Port is already in use', { port: this.#initPort });
+                logger.error('Port is already in use', {
+                    code: 'SERVER_PORT_IN_USE',
+                    source: 'Server.start',
+                    port: this.#initPort,
+                    error
+                });
                 process.exit(1);
             }
-            logger.error('HTTP Server error', { error: error.message, code: error.code });
+            logger.error('HTTP Server error', {
+                code: 'SERVER_ERROR',
+                source: 'Server.start',
+                error,
+                errorCode: error.code
+            });
             process.exit(1);
         });
         this.#server.listen(this.#initPort, this.#initHost, () => {
-            logger.info('HTTP Server listening', { host: this.#initHost, port: this.#initPort });
+            logger.info('HTTP Server listening', {
+                source: 'Server.start',
+                host: this.#initHost,
+                port: this.#initPort
+            });
         });
     }
     close() {
@@ -57,11 +71,17 @@ export default class Server {
             if (this.#server) {
                 this.#server.close((error) => {
                     if (error) {
-                        logger.error('Error closing HTTP Server', { error: error.message });
+                        logger.error('Error closing HTTP Server', {
+                            code: 'SERVER_CLOSE_ERROR',
+                            source: 'Server.close',
+                            error
+                        });
                         reject(error);
                     }
                     else {
-                        logger.info('HTTP Server closed');
+                        logger.info('HTTP Server closed', {
+                            source: 'Server.close'
+                        });
                         resolve();
                     }
                 });

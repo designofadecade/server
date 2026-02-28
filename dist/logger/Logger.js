@@ -198,8 +198,22 @@ export class Logger {
             return '[MAX_DEPTH]';
         if (obj === null || obj === undefined)
             return obj;
-        if (typeof obj !== 'object')
+        // Handle primitives and special types before object check
+        if (typeof obj !== 'object') {
+            // Handle Symbol (convert to string for JSON compatibility)
+            if (typeof obj === 'symbol') {
+                return obj.toString();
+            }
+            // Handle BigInt (convert to string for JSON compatibility)
+            if (typeof obj === 'bigint') {
+                return obj.toString() + 'n';
+            }
+            // Handle functions
+            if (typeof obj === 'function') {
+                return '[Function]';
+            }
             return obj;
+        }
         // Handle circular references
         if (seen.has(obj)) {
             return '[CIRCULAR]';
@@ -216,11 +230,9 @@ export class Logger {
             if (isSensitive) {
                 redacted[key] = '[REDACTED]';
             }
-            else if (typeof value === 'object' && value !== null) {
-                redacted[key] = this.redactSensitiveData(value, seen, depth + 1);
-            }
             else {
-                redacted[key] = value;
+                // Always recursively process values to handle BigInt, Symbol, Function, etc.
+                redacted[key] = this.redactSensitiveData(value, seen, depth + 1);
             }
         }
         return redacted;
@@ -256,12 +268,12 @@ export class Logger {
      * @private
      */
     safeStringify(obj) {
-        return JSON.stringify(obj, (key, value) => {
-            // Handle BigInt
+        return JSON.stringify(obj, (_key, value) => {
+            // Handle BigInt (convert to string with 'n' suffix)
             if (typeof value === 'bigint') {
                 return value.toString() + 'n';
             }
-            // Handle Symbol (skip it)
+            // Handle Symbol (convert to string)
             if (typeof value === 'symbol') {
                 return value.toString();
             }
@@ -318,7 +330,10 @@ export class Logger {
                     message: logEntry.message.substring(0, 1000),
                 };
                 // Remove large fields if still too big
-                delete truncated.error?.stack;
+                const truncatedRecord = truncated;
+                if (truncatedRecord.error && typeof truncatedRecord.error === 'object') {
+                    delete truncatedRecord.error.stack;
+                }
                 logString = this.safeStringify(truncated);
                 // If still too large, just log basic info
                 if (logString.length > this.maxLogSize) {

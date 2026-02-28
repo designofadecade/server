@@ -386,7 +386,10 @@ export class Logger {
           message: logEntry.message.substring(0, 1000),
         };
         // Remove large fields if still too big
-        delete (truncated as any).error?.stack;
+        const truncatedRecord = truncated as Record<string, unknown>;
+        if (truncatedRecord.error && typeof truncatedRecord.error === 'object') {
+          delete (truncatedRecord.error as Record<string, unknown>).stack;
+        }
         logString = this.safeStringify(truncated);
 
         // If still too large, just log basic info

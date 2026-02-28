@@ -274,7 +274,10 @@ describe('WebSocketServer', () => {
 
       connectionHandler(mockWs);
 
-      expect(loggerSpy).toHaveBeenCalledWith('WebSocket client connected');
+      expect(loggerSpy).toHaveBeenCalledWith('WebSocket client connected', {
+        source: 'WebSocketServer.connection',
+        clientCount: 1,
+      });
       expect(mockWs.send).toHaveBeenCalled();
       expect(mockWs.on).toHaveBeenCalledWith('message', expect.any(Function));
       expect(mockWs.on).toHaveBeenCalledWith('close', expect.any(Function));
@@ -429,7 +432,10 @@ describe('WebSocketServer', () => {
       const closeHandler = mockWs.on.mock.calls.find((call) => call[0] === 'close')[1];
       closeHandler();
 
-      expect(loggerSpy).toHaveBeenCalledWith('WebSocket client disconnected');
+      expect(loggerSpy).toHaveBeenCalledWith('WebSocket client disconnected', {
+        source: 'WebSocketServer.onClose',
+        clientCount: expect.any(Number),
+      });
 
       loggerSpy.mockRestore();
     });
@@ -452,7 +458,11 @@ describe('WebSocketServer', () => {
       const errorHandler = mockWs.on.mock.calls.find((call) => call[0] === 'error')[1];
       errorHandler(new Error('Client error'));
 
-      expect(loggerSpy).toHaveBeenCalledWith('WebSocket error', { error: 'Client error' });
+      expect(loggerSpy).toHaveBeenCalledWith('WebSocket error', {
+        code: 'WEBSOCKET_CLIENT_ERROR',
+        source: 'WebSocketServer.onError',
+        error: expect.any(Error),
+      });
 
       loggerSpy.mockRestore();
     });
@@ -510,7 +520,11 @@ describe('WebSocketServer', () => {
 
       wsServer.broadcast('test message');
 
-      expect(loggerSpy).toHaveBeenCalledWith('Broadcast send error', { error: 'Send failed' });
+      expect(loggerSpy).toHaveBeenCalledWith('Broadcast send error', {
+        code: 'WEBSOCKET_BROADCAST_ERROR',
+        source: 'WebSocketServer.broadcast',
+        error: expect.any(Error),
+      });
 
       loggerSpy.mockRestore();
     });

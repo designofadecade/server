@@ -118,7 +118,10 @@ export default class HtmlSanitizer {
     }
 
     if (!Array.isArray(allowedTags) || allowedTags.length === 0) {
-      logger.warn('HtmlSanitizer: No allowed tags provided, stripping all HTML');
+      logger.warn('No allowed tags provided, stripping all HTML', {
+        code: 'SANITIZER_NO_ALLOWED_TAGS',
+        source: 'HtmlSanitizer.clean',
+      });
       return this.stripAllTags(html);
     }
 
@@ -129,7 +132,11 @@ export default class HtmlSanitizer {
     const validAllowedTags: string[] = allowedTags
       .filter((tag: string) => {
         if (typeof tag !== 'string' || !TAG_NAME_PATTERN.test(tag)) {
-          logger.warn('HtmlSanitizer: Invalid tag name ignored', { tag });
+          logger.warn('Invalid tag name ignored', {
+            code: 'SANITIZER_INVALID_TAG',
+            source: 'HtmlSanitizer.clean',
+            tag,
+          });
           return false;
         }
         return true;
@@ -137,7 +144,10 @@ export default class HtmlSanitizer {
       .map((tag: string) => tag.toLowerCase());
 
     if (validAllowedTags.length === 0) {
-      logger.warn('HtmlSanitizer: No valid allowed tags, stripping all HTML');
+      logger.warn('No valid allowed tags, stripping all HTML', {
+        code: 'SANITIZER_NO_VALID_TAGS',
+        source: 'HtmlSanitizer.clean',
+      });
       return this.stripAllTags(html);
     }
 
@@ -146,7 +156,9 @@ export default class HtmlSanitizer {
     // ====================================================================
 
     if (html.length > MAX_INPUT_SIZE) {
-      logger.error('HtmlSanitizer: Input exceeds maximum size for clean(), truncating', {
+      logger.error('Input exceeds maximum size for clean(), truncating', {
+        code: 'SANITIZER_INPUT_TOO_LARGE',
+        source: 'HtmlSanitizer.clean',
         size: html.length,
         max: MAX_INPUT_SIZE,
       });
@@ -198,7 +210,11 @@ export default class HtmlSanitizer {
               return `<a href="${escapedUrl}">`;
             } else {
               // Invalid URL - remove href but keep anchor tag
-              logger.warn('HtmlSanitizer: Unsafe URL removed from anchor tag', { url });
+              logger.warn('Unsafe URL removed from anchor tag', {
+                code: 'SANITIZER_UNSAFE_URL',
+                source: 'HtmlSanitizer.clean',
+                url,
+              });
               return '<a>';
             }
           } else {
@@ -332,7 +348,9 @@ export default class HtmlSanitizer {
 
     // DoS protection - reject excessively large inputs
     if (html.length > MAX_INPUT_SIZE) {
-      logger.error('HtmlSanitizer: Input exceeds maximum size for stripAllTags, truncating', {
+      logger.error('Input exceeds maximum size for stripAllTags, truncating', {
+        code: 'SANITIZER_STRIP_INPUT_TOO_LARGE',
+        source: 'HtmlSanitizer.stripAllTags',
         size: html.length,
         max: MAX_INPUT_SIZE,
       });
@@ -401,7 +419,9 @@ export default class HtmlSanitizer {
 
     // DoS protection
     if (text.length > MAX_INPUT_SIZE) {
-      logger.error('HtmlSanitizer: Attribute value exceeds maximum size, truncating', {
+      logger.error('Attribute value exceeds maximum size, truncating', {
+        code: 'SANITIZER_ATTRIBUTE_TOO_LARGE',
+        source: 'HtmlSanitizer.sanitizeForAttribute',
         size: text.length,
         max: MAX_INPUT_SIZE,
       });
@@ -443,7 +463,9 @@ export default class HtmlSanitizer {
 
     // DoS protection
     if (text.length > MAX_INPUT_SIZE) {
-      logger.error('HtmlSanitizer: HTML content exceeds maximum size, truncating', {
+      logger.error('HTML content exceeds maximum size, truncating', {
+        code: 'SANITIZER_HTML_TOO_LARGE',
+        source: 'HtmlSanitizer.sanitizeForHtml',
         size: text.length,
         max: MAX_INPUT_SIZE,
       });
@@ -500,7 +522,9 @@ export default class HtmlSanitizer {
 
     // DoS protection - reject excessively long URLs
     if (url.length > MAX_URL_LENGTH) {
-      logger.warn('HtmlSanitizer: URL exceeds maximum length', {
+      logger.warn('URL exceeds maximum length', {
+        code: 'SANITIZER_URL_TOO_LONG',
+        source: 'HtmlSanitizer.isValidUrl',
         length: url.length,
         max: MAX_URL_LENGTH,
       });
@@ -512,7 +536,11 @@ export default class HtmlSanitizer {
 
     // Check for dangerous protocols first (XSS vectors)
     if (DANGEROUS_PROTOCOLS.test(urlLower)) {
-      logger.warn('HtmlSanitizer: Dangerous protocol detected in URL', { url });
+      logger.warn('Dangerous protocol detected in URL', {
+        code: 'SANITIZER_DANGEROUS_PROTOCOL',
+        source: 'HtmlSanitizer.isValidUrl',
+        url,
+      });
       return false;
     }
 
@@ -521,7 +549,11 @@ export default class HtmlSanitizer {
     if (url.includes(':')) {
       const isValid: boolean = SAFE_PROTOCOLS.test(url);
       if (!isValid) {
-        logger.warn('HtmlSanitizer: Unknown/unsafe protocol in URL', { url });
+        logger.warn('Unknown/unsafe protocol in URL', {
+          code: 'SANITIZER_UNSAFE_PROTOCOL',
+          source: 'HtmlSanitizer.isValidUrl',
+          url,
+        });
       }
       return isValid;
     }
@@ -532,12 +564,21 @@ export default class HtmlSanitizer {
       try {
         const decoded: string = decodeURIComponent(url);
         if (DANGEROUS_PROTOCOLS.test(decoded)) {
-          logger.warn('HtmlSanitizer: Encoded dangerous protocol detected', { url });
+          logger.warn('Encoded dangerous protocol detected', {
+            code: 'SANITIZER_ENCODED_DANGEROUS_PROTOCOL',
+            source: 'HtmlSanitizer.isValidUrl',
+            url,
+          });
           return false;
         }
       } catch (e) {
         // If decoding fails, reject to be safe
-        logger.warn('HtmlSanitizer: Failed to decode URL - rejecting', { url });
+        logger.warn('Failed to decode URL - rejecting', {
+          code: 'SANITIZER_URL_DECODE_ERROR',
+          source: 'HtmlSanitizer.isValidUrl',
+          url,
+          error: e,
+        });
         return false;
       }
     }
@@ -607,7 +648,9 @@ export default class HtmlSanitizer {
     // DoS protection - RFC 5321 maximum is 254 characters
     const MAX_EMAIL_LENGTH: number = 254;
     if (email.length > MAX_EMAIL_LENGTH) {
-      logger.warn('HtmlSanitizer: Email exceeds maximum length', {
+      logger.warn('Email exceeds maximum length', {
+        code: 'SANITIZER_EMAIL_TOO_LONG',
+        source: 'HtmlSanitizer.isValidEmail',
         length: email.length,
         max: MAX_EMAIL_LENGTH,
       });
@@ -749,7 +792,9 @@ export default class HtmlSanitizer {
 
     // DoS protection
     if (text.length > MAX_INPUT_SIZE) {
-      logger.error('HtmlSanitizer: Input exceeds maximum size for entity decoding', {
+      logger.error('Input exceeds maximum size for entity decoding', {
+        code: 'SANITIZER_ENTITY_INPUT_TOO_LARGE',
+        source: 'HtmlSanitizer.decodeHtmlEntities',
         size: text.length,
         max: MAX_INPUT_SIZE,
       });
@@ -787,7 +832,12 @@ export default class HtmlSanitizer {
         try {
           return String.fromCharCode(code);
         } catch (e) {
-          logger.warn('HtmlSanitizer: Invalid character code', { code });
+          logger.warn('Invalid character code', {
+            code: 'SANITIZER_INVALID_CHAR_CODE',
+            source: 'HtmlSanitizer.decodeHtmlEntities',
+            charCode: code,
+            error: e,
+          });
           return match;
         }
       }
@@ -806,7 +856,12 @@ export default class HtmlSanitizer {
         try {
           return String.fromCharCode(code);
         } catch (e) {
-          logger.warn('HtmlSanitizer: Invalid hex character code', { hex });
+          logger.warn('Invalid hex character code', {
+            code: 'SANITIZER_INVALID_HEX_CODE',
+            source: 'HtmlSanitizer.decodeHtmlEntities',
+            hex,
+            error: e,
+          });
           return match;
         }
       }

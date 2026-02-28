@@ -26,7 +26,11 @@ export default class WebSocketMessageFormatter {
    */
   static parse(rawMessage: string): ParsedMessage | null {
     if (!rawMessage || typeof rawMessage !== 'string') {
-      logger.warn('Received invalid message data', { messageType: typeof rawMessage });
+      logger.warn('Received invalid message data', {
+        code: 'WEBSOCKET_INVALID_MESSAGE',
+        source: 'WebSocketMessageFormatter.parse',
+        messageType: typeof rawMessage,
+      });
       return null;
     }
 
@@ -35,6 +39,8 @@ export default class WebSocketMessageFormatter {
 
       if (typeof parsedObject.type !== 'string' || typeof parsedObject.payload === 'undefined') {
         logger.error('Parsed message lacks required fields', {
+          code: 'WEBSOCKET_INVALID_FIELDS',
+          source: 'WebSocketMessageFormatter.parse',
           hasType: !!parsedObject.type,
           hasPayload: !!parsedObject.payload,
         });
@@ -49,7 +55,9 @@ export default class WebSocketMessageFormatter {
       };
     } catch (error) {
       logger.error('Failed to parse incoming WebSocket message as JSON', {
-        error: error instanceof Error ? error.message : String(error),
+        code: 'WEBSOCKET_PARSE_ERROR',
+        source: 'WebSocketMessageFormatter.parse',
+        error: error instanceof Error ? error : String(error),
       });
       return null;
     }
@@ -82,7 +90,11 @@ export default class WebSocketMessageFormatter {
     try {
       return JSON.stringify(messageObject);
     } catch (error: any) {
-      logger.error('Failed to serialize WebSocket message', { error: error.message });
+      logger.error('Failed to serialize WebSocket message', {
+        code: 'WEBSOCKET_SERIALIZE_ERROR',
+        source: 'WebSocketMessageFormatter.format',
+        error,
+      });
       // Provide more specific error message for circular references
       const errorMsg = error.message.includes('circular')
         ? 'Circular reference in payload'
