@@ -7,12 +7,14 @@
  *
  * @class Events
  * @example
+ * import { logger } from './logger/Logger.js';
+ *
  * class ChatEvents extends Events {
  *     constructor(manager: EventsManager) {
  *         super(manager);
  *
  *         this.addListener('chat:message', async (msg) => {
- *             console.log('Received message:', msg.payload);
+ *             logger.info('Received message:', { payload: msg.payload });
  *             manager.broadcast('chat:new', msg.payload);
  *         });
  *     }

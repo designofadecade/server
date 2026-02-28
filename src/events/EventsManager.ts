@@ -17,8 +17,10 @@
  *
  * @example
  * // Register individual events
+ * import { logger } from './logger/Logger.js';
+ *
  * eventsManager.registerEvents([
- *     { type: 'ping', handler: async (msg) => console.log('Ping!') },
+ *     { type: 'ping', handler: async (msg) => logger.info('Ping!') },
  *     { type: 'update', handler: async (msg) => handleUpdate(msg) }
  * ]);
  */
