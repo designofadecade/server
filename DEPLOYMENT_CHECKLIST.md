@@ -85,7 +85,12 @@ Before publishing to npm, ensure:
    - [ ] Enable 2FA for added security
 
 2. **GitHub Secrets**
-   - [ ] Generate npm access token: https://www.npmjs.com/settings/YOUR-USERNAME/tokens
+   - [ ] Enable 2FA on npm account (required for granular tokens)
+   - [ ] Generate npm Granular Access Token: https://www.npmjs.com/settings/YOUR-USERNAME/tokens
+     - Select "Granular Access Token" (Classic tokens are deprecated)
+     - Set expiration to 90 days (maximum allowed)
+     - Grant "Read and write" access to @designofadecade/server
+     - Set calendar reminder to renew token before expiration
    - [ ] Add `NPM_TOKEN` to GitHub repository secrets
 
 3. **Final Verification**
