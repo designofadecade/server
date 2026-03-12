@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- HtmlSanitizer now supports preserving specific attributes on allowed tags via optional `allowedAttributes` parameter
+  - Enables granular control over which attributes are preserved on each tag
+  - Maintains all existing security features (event handler blocking, URL validation, etc.)
+  - Includes CSS style attribute validation with safe color property support
+  - Useful for preserving class names, data attributes, and inline styles for email rendering and compliance tracking
+  - Fully backward compatible - existing code continues to work without changes
+
 ## [4.1.0] - 2026-03-12
 
 ### Changed

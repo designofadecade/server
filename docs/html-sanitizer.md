@@ -33,15 +33,20 @@ const cleaned = HtmlSanitizer.clean(html, [
 
 ### clean()
 
-Sanitizes HTML by allowing only specified tags.
+Sanitizes HTML by allowing only specified tags and optionally preserving specific attributes.
 
 ```typescript
-static clean(html: string, allowedTags: string[]): string
+static clean(
+  html: string, 
+  allowedTags: string[],
+  allowedAttributes?: Record<string, string[]>
+): string
 ```
 
 **Parameters:**
 - `html` (string) - HTML string to sanitize
 - `allowedTags` (string[]) - Array of allowed tag names (case-insensitive)
+- `allowedAttributes` (optional) - Object mapping tag names to arrays of allowed attribute names
 
 **Returns:** Sanitized HTML string
 
@@ -52,6 +57,9 @@ static clean(html: string, allowedTags: string[]): string
 - Strips script and style tags completely
 - DoS protection (max 1MB input)
 - Decodes HTML entities safely
+- Optionally preserves specific attributes on allowed tags
+- Blocks event handlers even if specified in allowedAttributes
+- Validates CSS style attributes for safe color properties only
 
 **Example:**
 ```typescript
@@ -66,6 +74,22 @@ const safe = HtmlSanitizer.clean(
 const html = '<a href="https://example.com">Safe</a><a href="javascript:alert(1)">Unsafe</a>';
 const clean = HtmlSanitizer.clean(html, ['a']);
 // Result: '<a href="https://example.com">Safe</a><a>Unsafe</a>'
+
+// Preserve specific attributes
+const htmlWithAttrs = '<span class="legal-tag" data-uuid="123" onclick="alert()">Text</span>';
+const result = HtmlSanitizer.clean(htmlWithAttrs, ['span'], {
+  span: ['class', 'data-uuid']
+});
+// Result: '<span class="legal-tag" data-uuid="123">Text</span>'
+// (onclick removed, safe attributes preserved)
+
+// Preserve style attributes (safe CSS only)
+const styledHtml = '<span style="color: #ff0000; behavior: url(xss.htc);">Red</span>';
+const styled = HtmlSanitizer.clean(styledHtml, ['span'], {
+  span: ['style']
+});
+// Result: '<span style="color: #ff0000">Red</span>'
+// (dangerous 'behavior' property removed)
 ```
 
 ### stripAllTags()
@@ -257,6 +281,155 @@ const allowedTags = [
   'p', 'br', 'a', 'strong', 'em',
   'ul', 'ol', 'li', 'blockquote'
 ];
+```
+
+## Attribute Preservation
+
+The `allowedAttributes` parameter enables fine-grained control over which attributes are preserved on specific tags. This is useful for preserving styling, tracking metadata, or other safe attributes while maintaining XSS protection.
+
+### Basic Attribute Preservation
+
+```typescript
+// Preserve class and data attributes
+const html = '<span class="highlight" data-id="123">Text</span>';
+const result = HtmlSanitizer.clean(html, ['span'], {
+  span: ['class', 'data-id']
+});
+// Result: '<span class="highlight" data-id="123">Text</span>'
+```
+
+### Multiple Tags with Different Attributes
+
+```typescript
+const html = `
+  <span class="legal-tag" data-uuid="abc-123">Legal term</span>
+  <a href="/page" target="_blank" rel="noopener">Link</a>
+  <div class="hidden" onclick="bad()">Content</div>
+`;
+
+const result = HtmlSanitizer.clean(html, ['span', 'a'], {
+  span: ['class', 'data-uuid'],
+  a: ['href', 'target', 'rel']
+});
+// span: class and data-uuid preserved
+// a: href, target, rel preserved (plus auto-added security attrs for external links)
+// div: removed (not in allowedTags)
+// onclick: removed (event handlers always blocked)
+```
+
+### Style Attribute Preservation
+
+Style attributes are validated to allow only safe CSS color properties:
+
+```typescript
+// Safe color styles
+const html = '<span style="color: #ff0000; background-color: rgb(255, 255, 255);">Text</span>';
+const result = HtmlSanitizer.clean(html, ['span'], {
+  span: ['style']
+});
+// Result: '<span style="color: #ff0000; background-color: rgb(255, 255, 255)">Text</span>'
+
+// Dangerous CSS filtered out
+const dangerous = '<span style="color: red; behavior: url(xss.htc); -moz-binding: url(xss.xml);">Text</span>';
+const safe = HtmlSanitizer.clean(dangerous, ['span'], {
+  span: ['style']
+});
+// Result: '<span style="color: red">Text</span>'
+// (dangerous properties removed)
+```
+
+### Allowed CSS Properties
+
+When preserving style attributes, only these CSS properties are allowed:
+- `color` - Text color
+- `background-color` - Background color
+
+Valid color formats:
+- Hex: `#fff`, `#ffffff`, `#FF0000`
+- RGB: `rgb(255, 0, 0)`
+- RGBA: `rgba(255, 0, 0, 0.5)`
+- Named: `red`, `blue`, `green`, `transparent`, etc.
+
+Blocked CSS patterns:
+- `javascript:` - XSS vector
+- `expression()` - IE expression XSS
+- `behavior:` - IE behavior binding
+- `-moz-binding` - Firefox binding
+- `@import` - External content loading
+- `url()` - External content loading
+- `data:` - Data URI XSS
+
+### Security Guarantees with Attributes
+
+Even when using `allowedAttributes`, these security features remain active:
+
+```typescript
+// Event handlers always blocked
+const html = '<span class="safe" onclick="alert(1)" onload="bad()">Text</span>';
+const result = HtmlSanitizer.clean(html, ['span'], {
+  span: ['class', 'onclick', 'onload'] // onclick/onload requested but will be blocked
+});
+// Result: '<span class="safe">Text</span>'
+
+// URLs still validated
+const link = '<a href="javascript:alert(1)" class="link">Click</a>';
+const safe = HtmlSanitizer.clean(link, ['a'], {
+  a: ['href', 'class']
+});
+// Result: '<a class="link">Click</a>' (dangerous href removed)
+
+// External links get security attributes
+const external = '<a href="https://external.com" class="link">External</a>';
+const secured = HtmlSanitizer.clean(external, ['a'], {
+  a: ['href', 'class']
+});
+// Result: '<a href="https://external.com" class="link" target="_blank" rel="noopener noreferrer">External</a>'
+```
+
+### Use Cases
+
+**Email Rendering:**
+```typescript
+// Preserve inline styles for email clients
+const emailHtml = '<span style="color: #007bff;">Important</span>';
+HtmlSanitizer.clean(emailHtml, ['span'], {
+  span: ['style']
+});
+```
+
+**Legal Compliance Tracking:**
+```typescript
+// Preserve metadata for legal terms
+const legalContent = '<span class="legal-tag" data-uuid="term-123" data-version="1.0">Terms apply</span>';
+HtmlSanitizer.clean(legalContent, ['span'], {
+  span: ['class', 'data-uuid', 'data-version']
+});
+```
+
+**Content Management:**
+```typescript
+// Preserve IDs and classes for CMS
+const cmsContent = '<div class="article-body" id="content-456">Article text</div>';
+HtmlSanitizer.clean(cmsContent, ['div'], {
+  div: ['class', 'id']
+});
+```
+
+### Backward Compatibility
+
+When `allowedAttributes` is not provided, the sanitizer maintains its original behavior:
+
+```typescript
+// Without allowedAttributes - strips all attributes (except hardcoded href on <a>)
+const html = '<span class="test" data-id="123">Text</span>';
+const result = HtmlSanitizer.clean(html, ['span']);
+// Result: '<span>Text</span>'
+
+// With allowedAttributes - preserves specified attributes
+const result2 = HtmlSanitizer.clean(html, ['span'], {
+  span: ['class', 'data-id']
+});
+// Result: '<span class="test" data-id="123">Text</span>'
 ```
 
 ## Security Features

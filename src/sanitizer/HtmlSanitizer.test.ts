@@ -354,6 +354,295 @@ describe('HtmlSanitizer', () => {
         expect(result).not.toContain('<div>');
       });
     });
+
+    describe('Attribute preservation (allowedAttributes parameter)', () => {
+      it('should preserve allowed attributes on tags', () => {
+        const html = '<span class="legal-tag" data-uuid="123">Text</span>';
+        const result = HtmlSanitizer.clean(html, ['span'], {
+          span: ['class', 'data-uuid'],
+        });
+
+        expect(result).toContain('class="legal-tag"');
+        expect(result).toContain('data-uuid="123"');
+        expect(result).toContain('>Text</span>');
+      });
+
+      it('should remove attributes not in allowedAttributes', () => {
+        const html = '<span class="legal-tag" data-uuid="123" title="info">Text</span>';
+        const result = HtmlSanitizer.clean(html, ['span'], {
+          span: ['class', 'data-uuid'],
+        });
+
+        expect(result).toContain('class="legal-tag"');
+        expect(result).toContain('data-uuid="123"');
+        expect(result).not.toContain('title=');
+      });
+
+      it('should remove event handlers even if in allowedAttributes', () => {
+        const html = '<span class="legal-tag" onclick="alert(1)">Text</span>';
+        const result = HtmlSanitizer.clean(html, ['span'], {
+          span: ['class', 'onclick'],
+        });
+
+        expect(result).toContain('class="legal-tag"');
+        expect(result).not.toContain('onclick');
+        expect(result).not.toContain('alert');
+      });
+
+      it('should sanitize attribute values to prevent injection', () => {
+        const html = '<span data-value="test&quot; onload=&quot;bad()">Text</span>';
+        const result = HtmlSanitizer.clean(html, ['span'], {
+          span: ['data-value'],
+        });
+
+        expect(result).toContain('data-value=');
+        expect(result).not.toContain('onload');
+        expect(result).not.toContain('bad()');
+      });
+
+      it('should maintain backward compatibility when allowedAttributes is not provided', () => {
+        const html = '<span class="test" data-uuid="123">Text</span>';
+        const result = HtmlSanitizer.clean(html, ['span']);
+
+        expect(result).not.toContain('class=');
+        expect(result).not.toContain('data-uuid=');
+        expect(result).toBe('<span>Text</span>');
+      });
+
+      it('should handle multiple tags with different allowed attributes', () => {
+        const html =
+          '<span class="legal" data-uuid="123">Legal</span><a href="/link" target="_blank">Link</a>';
+        const result = HtmlSanitizer.clean(html, ['span', 'a'], {
+          span: ['class', 'data-uuid'],
+          a: ['href', 'target'],
+        });
+
+        expect(result).toContain('class="legal"');
+        expect(result).toContain('data-uuid="123"');
+        expect(result).toContain('href="/link"');
+        expect(result).toContain('target="_blank"');
+      });
+
+      it('should validate href attributes even when in allowedAttributes', () => {
+        const html = '<a href="javascript:alert(1)">Bad</a><a href="https://safe.com">Good</a>';
+        const result = HtmlSanitizer.clean(html, ['a'], {
+          a: ['href'],
+        });
+
+        expect(result).not.toContain('javascript:');
+        expect(result).toContain('href="https://safe.com"');
+      });
+
+      it('should add security attributes to external anchor links with allowedAttributes', () => {
+        const html = '<a href="https://external.com">Link</a>';
+        const result = HtmlSanitizer.clean(html, ['a'], {
+          a: ['href'],
+        });
+
+        expect(result).toContain('href="https://external.com"');
+        expect(result).toContain('target="_blank"');
+        expect(result).toContain('rel="noopener noreferrer"');
+      });
+
+      it('should preserve custom target and rel if specified in allowedAttributes', () => {
+        const html = '<a href="https://external.com" target="_self" rel="alternate">Link</a>';
+        const result = HtmlSanitizer.clean(html, ['a'], {
+          a: ['href', 'target', 'rel'],
+        });
+
+        expect(result).toContain('href="https://external.com"');
+        expect(result).toContain('target="_self"');
+        expect(result).toContain('rel="alternate"');
+      });
+
+      it('should handle self-closing tags with attributes', () => {
+        const html = '<br class="clearfix"/><hr class="divider"/>';
+        const result = HtmlSanitizer.clean(html, ['br', 'hr'], {
+          br: ['class'],
+          hr: ['class'],
+        });
+
+        expect(result).toContain('<br class="clearfix" />');
+        expect(result).toContain('<hr class="divider" />');
+      });
+
+      it('should ignore allowedAttributes for tags not in allowedTags', () => {
+        const html = '<span class="test">Visible</span><div class="hidden">Hidden</div>';
+        const result = HtmlSanitizer.clean(html, ['span'], {
+          span: ['class'],
+          div: ['class'],
+        });
+
+        expect(result).toContain('class="test"');
+        expect(result).not.toContain('<div');
+        expect(result).toContain('Hidden');
+      });
+
+      it('should handle empty allowedAttributes object', () => {
+        const html = '<span class="test">Text</span>';
+        const result = HtmlSanitizer.clean(html, ['span'], {});
+
+        expect(result).not.toContain('class=');
+        expect(result).toBe('<span>Text</span>');
+      });
+
+      it('should handle invalid allowedAttributes parameter', () => {
+        const html = '<span class="test">Text</span>';
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const result = HtmlSanitizer.clean(html, ['span'], 'invalid' as any);
+
+        expect(result).not.toContain('class=');
+        expect(result).toBe('<span>Text</span>');
+      });
+    });
+
+    describe('Style attribute sanitization', () => {
+      it('should preserve safe color styles', () => {
+        const html = '<span style="color: red;">Text</span>';
+        const result = HtmlSanitizer.clean(html, ['span'], {
+          span: ['style'],
+        });
+
+        expect(result).toContain('style="color: red"');
+      });
+
+      it('should preserve hex color styles', () => {
+        const html = '<span style="color: #ff0000;">Text</span>';
+        const result = HtmlSanitizer.clean(html, ['span'], {
+          span: ['style'],
+        });
+
+        expect(result).toContain('style="color: #ff0000"');
+      });
+
+      it('should preserve rgb color styles', () => {
+        const html = '<span style="color: rgb(255, 0, 0);">Text</span>';
+        const result = HtmlSanitizer.clean(html, ['span'], {
+          span: ['style'],
+        });
+
+        expect(result).toContain('style="color: rgb(255, 0, 0)"');
+      });
+
+      it('should remove dangerous CSS properties', () => {
+        const html = '<span style="color: red; behavior: url(xss.htc);">Text</span>';
+        const result = HtmlSanitizer.clean(html, ['span'], {
+          span: ['style'],
+        });
+
+        expect(result).toContain('color: red');
+        expect(result).not.toContain('behavior');
+        expect(result).not.toContain('url(');
+      });
+
+      it('should block javascript in style', () => {
+        const html = '<span style="color: javascript:alert(1);">Text</span>';
+        const result = HtmlSanitizer.clean(html, ['span'], {
+          span: ['style'],
+        });
+
+        expect(result).not.toContain('javascript:');
+        expect(result).toBe('<span>Text</span>');
+      });
+
+      it('should block expressions in style', () => {
+        const html = '<span style="width: expression(alert(1));">Text</span>';
+        const result = HtmlSanitizer.clean(html, ['span'], {
+          span: ['style'],
+        });
+
+        expect(result).not.toContain('expression');
+        expect(result).toBe('<span>Text</span>');
+      });
+
+      it('should block -moz-binding', () => {
+        const html = '<span style="-moz-binding: url(xss.xml);">Text</span>';
+        const result = HtmlSanitizer.clean(html, ['span'], {
+          span: ['style'],
+        });
+
+        expect(result).not.toContain('moz-binding');
+        expect(result).toBe('<span>Text</span>');
+      });
+
+      it('should only allow color-related properties', () => {
+        const html = '<span style="color: red; width: 100px; position: absolute;">Text</span>';
+        const result = HtmlSanitizer.clean(html, ['span'], {
+          span: ['style'],
+        });
+
+        expect(result).toContain('color: red');
+        expect(result).not.toContain('width');
+        expect(result).not.toContain('position');
+      });
+
+      it('should allow background-color', () => {
+        const html = '<span style="background-color: blue;">Text</span>';
+        const result = HtmlSanitizer.clean(html, ['span'], {
+          span: ['style'],
+        });
+
+        expect(result).toContain('background-color: blue');
+      });
+
+      it('should handle multiple color properties', () => {
+        const html = '<span style="color: red; background-color: #ffffff;">Text</span>';
+        const result = HtmlSanitizer.clean(html, ['span'], {
+          span: ['style'],
+        });
+
+        expect(result).toContain('color: red');
+        expect(result).toContain('background-color: #ffffff');
+      });
+
+      it('should reject invalid color values', () => {
+        const html = '<span style="color: notacolor;">Text</span>';
+        const result = HtmlSanitizer.clean(html, ['span'], {
+          span: ['style'],
+        });
+
+        expect(result).toBe('<span>Text</span>');
+      });
+
+      it('should handle empty style attribute', () => {
+        const html = '<span style="">Text</span>';
+        const result = HtmlSanitizer.clean(html, ['span'], {
+          span: ['style'],
+        });
+
+        expect(result).toBe('<span>Text</span>');
+      });
+    });
+
+    describe('isValidColorValue()', () => {
+      it('should validate hex colors', () => {
+        expect(HtmlSanitizer.isValidColorValue('#fff')).toBe(true);
+        expect(HtmlSanitizer.isValidColorValue('#ffffff')).toBe(true);
+        expect(HtmlSanitizer.isValidColorValue('#FF0000')).toBe(true);
+      });
+
+      it('should validate rgb colors', () => {
+        expect(HtmlSanitizer.isValidColorValue('rgb(255, 0, 0)')).toBe(true);
+        expect(HtmlSanitizer.isValidColorValue('RGB(255, 0, 0)')).toBe(true);
+      });
+
+      it('should validate rgba colors', () => {
+        expect(HtmlSanitizer.isValidColorValue('rgba(255, 0, 0, 0.5)')).toBe(true);
+        expect(HtmlSanitizer.isValidColorValue('rgba(255, 0, 0, 1)')).toBe(true);
+      });
+
+      it('should validate named colors', () => {
+        expect(HtmlSanitizer.isValidColorValue('red')).toBe(true);
+        expect(HtmlSanitizer.isValidColorValue('blue')).toBe(true);
+        expect(HtmlSanitizer.isValidColorValue('transparent')).toBe(true);
+      });
+
+      it('should reject invalid colors', () => {
+        expect(HtmlSanitizer.isValidColorValue('notacolor')).toBe(false);
+        expect(HtmlSanitizer.isValidColorValue('javascript:alert(1)')).toBe(false);
+        expect(HtmlSanitizer.isValidColorValue('')).toBe(false);
+      });
+    });
   });
 
   describe('sanitizeBasicHtml()', () => {

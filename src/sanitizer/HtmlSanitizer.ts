@@ -120,9 +120,11 @@ export default class HtmlSanitizer {
    * - Removes HTML comments, script, and style tags
    * - Enforces DoS protection with size limits
    * - Validates allowed tags is a valid array
+   * - Supports preserving specific attributes on allowed tags
    *
    * @param html - The HTML string to clean
    * @param allowedTags - Array of allowed tag names (case-insensitive)
+   * @param allowedAttributes - Optional object mapping tag names to arrays of allowed attribute names
    * @returns Sanitized HTML string with only allowed tags
    *
    * @example
@@ -138,8 +140,21 @@ export default class HtmlSanitizer {
    * @example
    * // Allow common formatting tags
    * HtmlSanitizer.clean(userInput, ['p', 'br', 'strong', 'em', 'a', 'ul', 'ol', 'li']);
+   *
+   * @example
+   * // Allow specific attributes on tags
+   * HtmlSanitizer.clean(html, ['span', 'a'], {
+   *   span: ['style', 'class', 'data-uuid'],
+   *   a: ['href', 'target', 'rel']
+   * });
+   * // Input: '<span class="legal-tag" data-uuid="123" onclick="alert()">Text</span>'
+   * // Output: '<span class="legal-tag" data-uuid="123">Text</span>'
    */
-  static clean(html: string, allowedTags: string[]): string {
+  static clean(
+    html: string,
+    allowedTags: string[],
+    allowedAttributes?: Record<string, string[]>
+  ): string {
     // ====================================================================
     // Step 1: Input Validation
     // ====================================================================
@@ -190,6 +205,45 @@ export default class HtmlSanitizer {
         source: 'HtmlSanitizer.clean',
       });
       return this.stripAllTags(html);
+    }
+
+    // ====================================================================
+    // Step 2.5: Validate and Normalize Allowed Attributes
+    // ====================================================================
+
+    let normalizedAllowedAttributes: Record<string, Set<string>> | null = null;
+
+    if (allowedAttributes && typeof allowedAttributes === 'object') {
+      normalizedAllowedAttributes = {};
+
+      for (const [tagName, attrs] of Object.entries(allowedAttributes)) {
+        const lowerTag = tagName.toLowerCase();
+
+        // Skip if not in validAllowedTags
+        if (!validAllowedTags.includes(lowerTag)) {
+          logger.warn('Skipping attributes for tag not in allowed list', {
+            code: 'SANITIZER_ATTRIBUTES_FOR_DISALLOWED_TAG',
+            source: 'HtmlSanitizer.clean',
+            tag: lowerTag,
+          });
+          continue;
+        }
+
+        if (Array.isArray(attrs)) {
+          const validAttrs = attrs
+            .filter((attr) => typeof attr === 'string' && attr.length > 0)
+            .map((attr) => attr.toLowerCase());
+
+          if (validAttrs.length > 0) {
+            normalizedAllowedAttributes[lowerTag] = new Set(validAttrs);
+          }
+        }
+      }
+
+      // If no valid attributes were found, set to null
+      if (Object.keys(normalizedAllowedAttributes).length === 0) {
+        normalizedAllowedAttributes = null;
+      }
     }
 
     // ====================================================================
@@ -288,41 +342,127 @@ export default class HtmlSanitizer {
         // Detect self-closing tags
         const isSelfClosing: boolean = match.endsWith('/>');
 
+        // Extract and process attributes if allowedAttributes is specified
+        const preservedAttributes: string[] = [];
+        const allowedAttrsForTag = normalizedAllowedAttributes?.[lowerTagName];
+
+        if (allowedAttrsForTag) {
+          // Extract all attributes from the tag
+          const attrRegex = /([a-z][a-z0-9-]*)\s*=\s*["']([^"']*)["']/gi;
+          let attrMatch: RegExpExecArray | null;
+
+          while ((attrMatch = attrRegex.exec(match)) !== null) {
+            const attrName = attrMatch[1].toLowerCase();
+            const attrValue = attrMatch[2];
+
+            // Skip event handlers (onclick, onerror, etc.)
+            if (attrName.startsWith('on')) {
+              logger.warn('Event handler attribute removed', {
+                code: 'SANITIZER_EVENT_HANDLER_REMOVED',
+                source: 'HtmlSanitizer.clean',
+                attribute: attrName,
+              });
+              continue;
+            }
+
+            // Check if this attribute is allowed for this tag
+            if (allowedAttrsForTag.has(attrName)) {
+              // Special handling for href attribute - must validate URL
+              if (attrName === 'href') {
+                const url = attrValue.trim();
+                if (this.isValidUrl(url)) {
+                  const escapedUrl = this.sanitizeForAttribute(url);
+                  preservedAttributes.push(`href="${escapedUrl}"`);
+                } else {
+                  logger.warn('Unsafe URL removed from href attribute', {
+                    code: 'SANITIZER_UNSAFE_HREF',
+                    source: 'HtmlSanitizer.clean',
+                    url,
+                  });
+                }
+              }
+              // Special handling for style attribute - validate CSS
+              else if (attrName === 'style') {
+                const sanitizedStyle = this.sanitizeStyleAttribute(attrValue);
+                if (sanitizedStyle) {
+                  preservedAttributes.push(`style="${sanitizedStyle}"`);
+                }
+              }
+              // For other allowed attributes, sanitize the value
+              else {
+                const escapedValue = this.sanitizeForAttribute(attrValue);
+                preservedAttributes.push(`${attrName}="${escapedValue}"`);
+              }
+            }
+          }
+        }
+
         // Special handling for anchor tags - validate URLs and add security attributes
         if (lowerTagName === 'a') {
-          const hrefMatch: RegExpMatchArray | null = match.match(/href\s*=\s*["']([^"']*)["']/i);
-          if (hrefMatch && hrefMatch[1]) {
-            const url: string = hrefMatch[1].trim();
+          // If we haven't already handled href through allowedAttributes, handle it the old way
+          if (!allowedAttrsForTag?.has('href')) {
+            const hrefMatch: RegExpMatchArray | null = match.match(/href\s*=\s*["']([^"']*)["']/i);
+            if (hrefMatch && hrefMatch[1]) {
+              const url: string = hrefMatch[1].trim();
 
-            // Validate URL for security
-            if (this.isValidUrl(url)) {
-              // Escape the URL to prevent attribute injection
-              const escapedUrl: string = this.sanitizeForAttribute(url);
+              // Validate URL for security
+              if (this.isValidUrl(url)) {
+                // Escape the URL to prevent attribute injection
+                const escapedUrl: string = this.sanitizeForAttribute(url);
+                preservedAttributes.push(`href="${escapedUrl}"`);
 
-              // SECURITY: Add target="_blank" and rel="noopener noreferrer" for external links
-              // This prevents tab nabbing attacks and ensures the new page can't access window.opener
-              const isExternal = /^https?:\/\//i.test(url);
-              const securityAttrs = isExternal ? ' target="_blank" rel="noopener noreferrer"' : '';
-
-              return `<a href="${escapedUrl}"${securityAttrs}>`;
-            } else {
-              // Invalid URL - remove href but keep anchor tag
-              logger.warn('Unsafe URL removed from anchor tag', {
-                code: 'SANITIZER_UNSAFE_URL',
-                source: 'HtmlSanitizer.clean',
-                url,
-              });
-              return '<a>';
+                // SECURITY: Add target="_blank" and rel="noopener noreferrer" for external links
+                // This prevents tab nabbing attacks and ensures the new page can't access window.opener
+                const isExternal = /^https?:\/\//i.test(url);
+                if (isExternal) {
+                  // Only add these if not already in preservedAttributes
+                  if (!preservedAttributes.some((attr) => attr.startsWith('target='))) {
+                    preservedAttributes.push('target="_blank"');
+                  }
+                  if (!preservedAttributes.some((attr) => attr.startsWith('rel='))) {
+                    preservedAttributes.push('rel="noopener noreferrer"');
+                  }
+                }
+              } else {
+                // Invalid URL - remove href but keep anchor tag
+                logger.warn('Unsafe URL removed from anchor tag', {
+                  code: 'SANITIZER_UNSAFE_URL',
+                  source: 'HtmlSanitizer.clean',
+                  url,
+                });
+              }
             }
           } else {
-            // No href attribute found
-            return '<a>';
+            // If href was handled through allowedAttributes, still add security attributes for external links
+            const hrefAttr = preservedAttributes.find((attr) => attr.startsWith('href='));
+            if (hrefAttr) {
+              const urlMatch = hrefAttr.match(/href="([^"]*)"/);
+              if (urlMatch) {
+                const url = urlMatch[1];
+                const isExternal = /^https?:\/\//i.test(url);
+                if (isExternal) {
+                  if (!preservedAttributes.some((attr) => attr.startsWith('target='))) {
+                    preservedAttributes.push('target="_blank"');
+                  }
+                  if (!preservedAttributes.some((attr) => attr.startsWith('rel='))) {
+                    preservedAttributes.push('rel="noopener noreferrer"');
+                  }
+                }
+              }
+            }
           }
         }
 
         // Handle self-closing tags (br, hr, img)
         if (isSelfClosing && ['br', 'hr', 'img'].includes(lowerTagName)) {
-          return `<${lowerTagName} />`;
+          const attrString =
+            preservedAttributes.length > 0 ? ' ' + preservedAttributes.join(' ') : '';
+          return `<${lowerTagName}${attrString} />`;
+        }
+
+        // Build the tag with preserved attributes
+        if (preservedAttributes.length > 0) {
+          return `<${lowerTagName} ${preservedAttributes.join(' ')}>`;
         }
 
         // For all other allowed tags, return simple opening tag
@@ -696,6 +836,186 @@ export default class HtmlSanitizer {
     }
 
     return true;
+  }
+
+  /**
+   * Sanitizes CSS style attribute values to prevent XSS attacks.
+   * Only allows safe inline color styles for the current use case.
+   *
+   * Security Features:
+   * - Strips potentially dangerous CSS properties (behavior, -moz-binding, etc.)
+   * - Validates color values (hex, rgb, rgba, named colors)
+   * - Removes expressions and url() functions that could load external content
+   * - Blocks @import and other directives
+   * - Limits to safe CSS properties for inline styling
+   *
+   * @param style - The style attribute value to sanitize
+   * @returns Sanitized style string or empty string if invalid
+   *
+   * @example
+   * HtmlSanitizer.sanitizeStyleAttribute('color: red; background: blue;');
+   * // Returns: 'color: red'
+   *
+   * @example
+   * HtmlSanitizer.sanitizeStyleAttribute('color: #ff0000; behavior: url(xss.htc);');
+   * // Returns: 'color: #ff0000' (dangerous property removed)
+   */
+  static sanitizeStyleAttribute(style: string): string {
+    if (!style || typeof style !== 'string') {
+      return '';
+    }
+
+    // Trim whitespace
+    style = style.trim();
+
+    if (style.length === 0) {
+      return '';
+    }
+
+    // DoS protection
+    if (style.length > 1024) {
+      logger.warn('Style attribute exceeds maximum length', {
+        code: 'SANITIZER_STYLE_TOO_LONG',
+        source: 'HtmlSanitizer.sanitizeStyleAttribute',
+        length: style.length,
+      });
+      return '';
+    }
+
+    // For our use case, only allow color-related properties
+    const allowedProperties = ['color', 'background-color'];
+
+    // Split style into individual declarations
+    const declarations = style
+      .split(';')
+      .map((decl) => decl.trim())
+      .filter(Boolean);
+
+    const sanitizedDeclarations: string[] = [];
+
+    for (const declaration of declarations) {
+      const colonIndex = declaration.indexOf(':');
+      if (colonIndex === -1) continue;
+
+      const property = declaration.substring(0, colonIndex).trim().toLowerCase();
+      const value = declaration.substring(colonIndex + 1).trim();
+
+      // Only allow whitelisted properties
+      if (!allowedProperties.includes(property)) {
+        logger.warn('Disallowed CSS property filtered out', {
+          code: 'SANITIZER_DISALLOWED_CSS_PROPERTY',
+          source: 'HtmlSanitizer.sanitizeStyleAttribute',
+          property,
+        });
+        continue;
+      }
+
+      // Check for dangerous patterns in the value
+      const dangerousPatterns = [
+        /javascript:/i,
+        /expression\s*\(/i,
+        /-moz-binding/i,
+        /behavior\s*:/i,
+        /@import/i,
+        /url\s*\(/i,
+        /data:/i,
+      ];
+
+      let hasDangerousPattern = false;
+      for (const pattern of dangerousPatterns) {
+        if (pattern.test(value)) {
+          logger.warn('Dangerous pattern detected in CSS value', {
+            code: 'SANITIZER_DANGEROUS_CSS_VALUE',
+            source: 'HtmlSanitizer.sanitizeStyleAttribute',
+            property,
+          });
+          hasDangerousPattern = true;
+          break;
+        }
+      }
+
+      if (hasDangerousPattern) {
+        continue;
+      }
+
+      // Validate color value
+      if (this.isValidColorValue(value)) {
+        const escapedValue = this.sanitizeForAttribute(value);
+        sanitizedDeclarations.push(`${property}: ${escapedValue}`);
+      } else {
+        logger.warn('Invalid color value in style attribute', {
+          code: 'SANITIZER_INVALID_COLOR_VALUE',
+          source: 'HtmlSanitizer.sanitizeStyleAttribute',
+          value,
+        });
+      }
+    }
+
+    return sanitizedDeclarations.join('; ');
+  }
+
+  /**
+   * Validates if a CSS color value is safe.
+   * Allows hex colors, rgb/rgba, and named colors.
+   *
+   * @param value - The color value to validate
+   * @returns True if the color value is safe, false otherwise
+   *
+   * @example
+   * HtmlSanitizer.isValidColorValue('#ff0000'); // true
+   * HtmlSanitizer.isValidColorValue('rgb(255, 0, 0)'); // true
+   * HtmlSanitizer.isValidColorValue('red'); // true
+   * HtmlSanitizer.isValidColorValue('javascript:alert(1)'); // false
+   */
+  static isValidColorValue(value: string): boolean {
+    if (!value || typeof value !== 'string') {
+      return false;
+    }
+
+    value = value.trim();
+
+    // Hex color (#fff or #ffffff)
+    if (/^#[0-9a-f]{3}([0-9a-f]{3})?$/i.test(value)) {
+      return true;
+    }
+
+    // RGB/RGBA color
+    if (/^rgba?\s*\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}(\s*,\s*[0-9.]+)?\s*\)$/i.test(value)) {
+      return true;
+    }
+
+    // Named colors (common safe colors)
+    const namedColors = [
+      'black',
+      'white',
+      'red',
+      'green',
+      'blue',
+      'yellow',
+      'orange',
+      'purple',
+      'pink',
+      'brown',
+      'gray',
+      'grey',
+      'cyan',
+      'magenta',
+      'lime',
+      'navy',
+      'teal',
+      'aqua',
+      'maroon',
+      'olive',
+      'silver',
+      'fuchsia',
+      'transparent',
+    ];
+
+    if (namedColors.includes(value.toLowerCase())) {
+      return true;
+    }
+
+    return false;
   }
 
   /**
