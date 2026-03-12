@@ -380,21 +380,38 @@ class UserRoutes extends Routes {
 }
 ```
 
-### Custom Error Responses
+### Error Handling with RouteError
 
 ```typescript
 import RouteError from '@designofadecade/server/router/RouteError';
 
 async getUser(req: RouterRequest): Promise<RouterResponse> {
-  const user = await database.getUser(req.params.id);
-  
-  if (!user) {
-    throw new RouteError('User not found', 404);
+  try {
+    const user = await database.getUser(req.params.id);
+    
+    if (!user) {
+      throw new NotFoundError('User not found');
+    }
+    
+    return { status: 200, body: user };
+  } catch (error) {
+    // Recommended: Use fromError() for automatic security and logging
+    return RouteError.fromError(error, {
+      defaultMessage: 'Error retrieving user',
+      status: 404,
+      context: { userId: req.params.id }
+    });
   }
-  
-  return { status: 200, body: user };
 }
 ```
+
+**Key Features of `fromError()`:**
+- ✅ Automatically distinguishes safe vs unsafe errors
+- ✅ Prevents leaking credentials, paths, and sensitive data
+- ✅ Logs full error details internally
+- ✅ Returns user-friendly messages when appropriate
+
+See [RouteError documentation](./route-error.md) for comprehensive security features and usage examples.
 
 ### Error Codes
 
@@ -433,10 +450,16 @@ The router implements intelligent caching:
    middleware: [loggingMiddleware, authMiddleware, rateLimitMiddleware]
    ```
 
-3. **Error Handling:** Use RouteError for expected errors
+3. **Error Handling:** Use RouteError.fromError() for secure error handling
    ```typescript
-   if (!resource) {
-     throw new RouteError('Not found', 404);
+   try {
+     const resource = await getResource(id);
+     return { status: 200, body: resource };
+   } catch (error) {
+     return RouteError.fromError(error, {
+       defaultMessage: 'Error retrieving resource',
+       context: { resourceId: id }
+     });
    }
    ```
 

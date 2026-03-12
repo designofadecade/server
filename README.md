@@ -12,6 +12,7 @@ A modern, type-safe Node.js server framework with built-in WebSocket support, ro
 
 - ✅ Full TypeScript support with comprehensive type definitions
 - ✅ ESM (ES Modules) compatible
+- ✅ **Secure error handling** with automatic sensitive data protection
 - ✅ WebSocket server with message formatting and event handling
 - ✅ Flexible routing system with URL pattern matching
 - ✅ Static file serving with MIME type detection

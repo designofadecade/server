@@ -9,6 +9,7 @@ Comprehensive documentation for @designofadecade/server - A modern TypeScript se
 - **[Server](./server.md)** - HTTP server wrapper with error handling and graceful shutdown
 - **[Router](./router.md)** - High-performance request router with URLPattern support, middleware, and Lambda compatibility
 - **[Routes](./router.md#routes-class)** - Base class for organizing route definitions
+- **[RouteError](./route-error.md)** - Secure error handling with automatic sensitive data protection
 - **[Local Development](./local.md)** - Run AWS Lambda handlers locally with Node.js
 
 ### WebSocket & Real-time

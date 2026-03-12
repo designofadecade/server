@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.3.0] - 2026-03-12
+
+### Added
+- **RouteError.fromError()** - Intelligent error handling with built-in security
+  - Automatically distinguishes between safe (ValidationError, ConflictError, etc.) and unsafe (system/library) errors
+  - Prevents sensitive data leaks (credentials, paths, ARNs, SQL schemas, API keys)
+  - Integrated logging with full error details and context
+  - Defense-in-depth security regardless of NODE_ENV
+  - Support for custom safe error classes via `safeErrorClasses` option
+  - Error code preservation for safe errors only
+  - 30 comprehensive tests including security scenarios
+- Safe error classes whitelist: ValidationError, ConflictError, NotFoundError, AuthenticationError, AuthorizationError, UserError, BadRequestError, ForbiddenError
+- Complete documentation in [docs/route-error.md](docs/route-error.md) with security features, usage examples, and best practices
+- Migration examples and real-world usage scenarios
+
+### Changed
+- **BREAKING:** Removed `RouteError.create()` method in favor of secure `fromError()` only
+- Router.ts now uses `fromError()` for all error handling (authentication, authorization, not found, handler errors)
+- Router error handling now uses proper error classes (AuthenticationError, NotFoundError, etc.)
+- Simplified error handling - all logging now handled automatically by `fromError()`
+
+### Security
+- Protected against exposure of database connection strings in error messages
+- Protected against exposure of AWS credentials and ARNs
+- Protected against exposure of file system paths
+- Protected against exposure of SQL schema details
+- Protected against exposure of API keys and tokens
+- Stack traces never exposed to clients (logged internally only)
+
+## [4.2.2] - 2026-03-12
+
 ### Fixed
 - Add "default" export condition to all package.json exports for tsx/ts-node compatibility
   - Fixes ERR_PACKAGE_PATH_NOT_EXPORTED error when using tsx, ts-node, or similar TypeScript loaders

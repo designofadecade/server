@@ -167,17 +167,17 @@ class Router {
                 res.end('');
         }
         catch (error) {
-            logger.error('Router error', {
-                code: 'ROUTER_ERROR',
-                source: 'Router.nodeJSRequest',
-                path: req.url,
-                method: req.method,
-                error: error instanceof Error ? error : String(error),
-                stack: error instanceof Error ? error.stack : undefined,
-            });
             res.statusCode = 500;
             res.setHeader('Content-Type', 'application/json');
-            const errorResponse = RouteError.create(500, 'Internal Server Error', error instanceof Error ? error.message : String(error));
+            const errorResponse = RouteError.fromError(error, {
+                defaultMessage: 'Request processing failed',
+                status: 500,
+                context: {
+                    source: 'Router.nodeJSRequest',
+                    path: req.url,
+                    method: req.method,
+                },
+            });
             res.end(typeof errorResponse.body === 'string'
                 ? errorResponse.body
                 : JSON.stringify(errorResponse.body));
@@ -267,16 +267,35 @@ class Router {
     async #request(request) {
         if (this.#bearerToken) {
             const authHeader = request.headers?.authorization || request.headers?.Authorization;
-            if (!authHeader)
-                return RouteError.create(401, 'Unauthorized', 'Missing Authorization header');
+            if (!authHeader) {
+                const authError = new Error('Missing Authorization header');
+                authError.name = 'AuthenticationError';
+                return RouteError.fromError(authError, {
+                    defaultMessage: 'Authentication required',
+                    status: 401,
+                });
+            }
             const authValue = Array.isArray(authHeader) ? authHeader[0] : authHeader;
             const token = authValue?.replace(/^Bearer\s+/i, '') || '';
-            if (token !== this.#bearerToken)
-                return RouteError.create(403, 'Forbidden', 'Invalid authorization token');
+            if (token !== this.#bearerToken) {
+                const authError = new Error('Invalid authorization token');
+                authError.name = 'AuthorizationError';
+                return RouteError.fromError(authError, {
+                    defaultMessage: 'Access forbidden',
+                    status: 403,
+                });
+            }
         }
         const route = this.#findRouteHandler(request.path, request.method);
-        if (!route)
-            return RouteError.create(404, 'Not Found', `Route ${request.method} ${request.path} does not exist`);
+        if (!route) {
+            const notFoundError = new Error(`Route ${request.method} ${request.path} does not exist`);
+            notFoundError.name = 'NotFoundError';
+            return RouteError.fromError(notFoundError, {
+                defaultMessage: 'Route not found',
+                status: 404,
+                context: { path: request.path, method: request.method },
+            });
+        }
         // Match dynamic route parameters
         if ('pattern' in route && route.path !== request.path && route.pattern) {
             const match = route.pattern.exec(request.path);
@@ -310,15 +329,16 @@ class Router {
             return result;
         }
         catch (error) {
-            logger.error('Route handler error', {
-                code: 'ROUTER_HANDLER_ERROR',
-                source: 'Router.request',
-                path: request.path,
-                method: request.method,
-                error: error instanceof Error ? error : String(error),
-                stack: error instanceof Error ? error.stack : undefined,
+            return RouteError.fromError(error, {
+                defaultMessage: 'Route handler failed',
+                status: 500,
+                context: {
+                    source: 'Router.request',
+                    code: 'ROUTER_HANDLER_ERROR',
+                    path: request.path,
+                    method: request.method,
+                },
             });
-            return RouteError.create(500, 'Internal Server Error', error instanceof Error ? error.message : String(error));
         }
     }
 }
