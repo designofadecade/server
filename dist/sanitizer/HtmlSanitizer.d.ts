@@ -43,9 +43,11 @@ export default class HtmlSanitizer {
      * - Removes HTML comments, script, and style tags
      * - Enforces DoS protection with size limits
      * - Validates allowed tags is a valid array
+     * - Supports preserving specific attributes on allowed tags
      *
      * @param html - The HTML string to clean
      * @param allowedTags - Array of allowed tag names (case-insensitive)
+     * @param allowedAttributes - Optional object mapping tag names to arrays of allowed attribute names
      * @returns Sanitized HTML string with only allowed tags
      *
      * @example
@@ -61,8 +63,17 @@ export default class HtmlSanitizer {
      * @example
      * // Allow common formatting tags
      * HtmlSanitizer.clean(userInput, ['p', 'br', 'strong', 'em', 'a', 'ul', 'ol', 'li']);
+     *
+     * @example
+     * // Allow specific attributes on tags
+     * HtmlSanitizer.clean(html, ['span', 'a'], {
+     *   span: ['style', 'class', 'data-uuid'],
+     *   a: ['href', 'target', 'rel']
+     * });
+     * // Input: '<span class="legal-tag" data-uuid="123" onclick="alert()">Text</span>'
+     * // Output: '<span class="legal-tag" data-uuid="123">Text</span>'
      */
-    static clean(html: string, allowedTags: string[]): string;
+    static clean(html: string, allowedTags: string[], allowedAttributes?: Record<string, string[]>): string;
     /**
      * Sanitizes basic HTML content by allowing only b, i, u, and a tags.
      * Common use case for simple user-generated content.
@@ -180,6 +191,43 @@ export default class HtmlSanitizer {
      * // Returns: true
      */
     static isValidUrl(url: string): boolean;
+    /**
+     * Sanitizes CSS style attribute values to prevent XSS attacks.
+     * Only allows safe inline color styles for the current use case.
+     *
+     * Security Features:
+     * - Strips potentially dangerous CSS properties (behavior, -moz-binding, etc.)
+     * - Validates color values (hex, rgb, rgba, named colors)
+     * - Removes expressions and url() functions that could load external content
+     * - Blocks @import and other directives
+     * - Limits to safe CSS properties for inline styling
+     *
+     * @param style - The style attribute value to sanitize
+     * @returns Sanitized style string or empty string if invalid
+     *
+     * @example
+     * HtmlSanitizer.sanitizeStyleAttribute('color: red; background: blue;');
+     * // Returns: 'color: red'
+     *
+     * @example
+     * HtmlSanitizer.sanitizeStyleAttribute('color: #ff0000; behavior: url(xss.htc);');
+     * // Returns: 'color: #ff0000' (dangerous property removed)
+     */
+    static sanitizeStyleAttribute(style: string): string;
+    /**
+     * Validates if a CSS color value is safe.
+     * Allows hex colors, rgb/rgba, and named colors.
+     *
+     * @param value - The color value to validate
+     * @returns True if the color value is safe, false otherwise
+     *
+     * @example
+     * HtmlSanitizer.isValidColorValue('#ff0000'); // true
+     * HtmlSanitizer.isValidColorValue('rgb(255, 0, 0)'); // true
+     * HtmlSanitizer.isValidColorValue('red'); // true
+     * HtmlSanitizer.isValidColorValue('javascript:alert(1)'); // false
+     */
+    static isValidColorValue(value: string): boolean;
     /**
      * Validates if an email address is properly formatted.
      * Performs comprehensive email validation following RFC 5321/5322 standards.
