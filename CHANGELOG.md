@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.0] - 2026-03-12
+
+### Changed
+- Improved CI/CD pipeline to use npm Trusted Publishing instead of tokens for enhanced security
+- Moved deployment checklist to docs folder for better organization
+
+### Added
+- Documentation for granular npm token setup (for reference)
+- Enhanced HtmlSanitizer with additional security features:
+  - Never-Allow List for inherently dangerous tags (script, iframe, form, etc.)
+  - Multi-pass entity decoding to prevent nested encoding attacks
+  - Null byte protection to prevent string termination attacks
+  - Event handler removal to strip all event attributes
+  - External link security with auto-added target="_blank" rel="noopener noreferrer"
+  - Final security check to verify output before returning
+
 ## [4.0.0] - 2026-02-28
 
 ### Changed

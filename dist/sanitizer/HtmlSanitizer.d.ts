@@ -6,14 +6,20 @@
  * Security Features:
  * - XSS Prevention: Blocks dangerous protocols (javascript:, data:, vbscript:, etc.)
  * - DoS Protection: Enforces maximum input size limits
+ * - Never-Allow List: Blocks inherently dangerous tags (script, iframe, form, etc.)
+ * - Multi-Pass Entity Decoding: Prevents nested encoding attacks
+ * - Null Byte Protection: Removes string termination attack vectors
+ * - Event Handler Removal: Strips all event attributes (onclick, onerror, etc.)
  * - Script/Style Removal: Completely removes script and style tags with content
  * - HTML Comment Stripping: Removes comments that could hide malicious content
  * - URL Validation: Validates and sanitizes URLs in anchor tags
+ * - External Link Security: Auto-adds target="_blank" rel="noopener noreferrer"
  * - Entity Decoding: Safely decodes HTML entities with range validation
  * - Attribute Escaping: Prevents attribute injection attacks
+ * - Final Security Check: Verifies output before returning
  *
  * @module HtmlSanitizer
- * @version 2.0.0
+ * @version 3.0.0
  */
 /**
  * Result type for sanitization methods

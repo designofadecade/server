@@ -6,14 +6,20 @@
  * Security Features:
  * - XSS Prevention: Blocks dangerous protocols (javascript:, data:, vbscript:, etc.)
  * - DoS Protection: Enforces maximum input size limits
+ * - Never-Allow List: Blocks inherently dangerous tags (script, iframe, form, etc.)
+ * - Multi-Pass Entity Decoding: Prevents nested encoding attacks
+ * - Null Byte Protection: Removes string termination attack vectors
+ * - Event Handler Removal: Strips all event attributes (onclick, onerror, etc.)
  * - Script/Style Removal: Completely removes script and style tags with content
  * - HTML Comment Stripping: Removes comments that could hide malicious content
  * - URL Validation: Validates and sanitizes URLs in anchor tags
+ * - External Link Security: Auto-adds target="_blank" rel="noopener noreferrer"
  * - Entity Decoding: Safely decodes HTML entities with range validation
  * - Attribute Escaping: Prevents attribute injection attacks
+ * - Final Security Check: Verifies output before returning
  *
  * @module HtmlSanitizer
- * @version 2.0.0
+ * @version 3.0.0
  */
 import { logger } from '../logger/Logger.js';
 // ============================================================================
@@ -39,6 +45,31 @@ const DANGEROUS_PROTOCOLS = /^(javascript:|vbscript:|data:|file:|about:|blob:)/i
  * Safe protocols allowed in URLs
  */
 const SAFE_PROTOCOLS = /^(https?:\/\/|mailto:|tel:|sms:|\/|\.\/|\.\.\/|#)/i;
+/**
+ * Tags that should NEVER be allowed, even if explicitly requested
+ * These tags can execute scripts, load external content, or modify page behavior
+ */
+const NEVER_ALLOWED_TAGS = new Set([
+    'script', // JavaScript execution
+    'style', // Can load external content via @import
+    'iframe', // Can load external content
+    'object', // Can load external content/plugins
+    'embed', // Can load external content/plugins
+    'applet', // Java applets (deprecated but dangerous)
+    'link', // Can load external stylesheets
+    'base', // Can change all relative URLs
+    'meta', // Can do redirects, set encoding
+    'form', // Can submit data to external sites
+    'input', // Form inputs
+    'button', // Can trigger actions
+    'textarea', // Form inputs
+    'select', // Form inputs
+]);
+/**
+ * Maximum number of entity decoding passes to prevent infinite loops
+ * while still catching multiple levels of encoding
+ */
+const MAX_DECODE_PASSES = 3;
 // ============================================================================
 // HtmlSanitizer Class
 // ============================================================================
@@ -106,6 +137,16 @@ export default class HtmlSanitizer {
                 });
                 return false;
             }
+            const lowerTag = tag.toLowerCase();
+            // SECURITY: Block inherently dangerous tags even if requested
+            if (NEVER_ALLOWED_TAGS.has(lowerTag)) {
+                logger.warn('Dangerous tag blocked from allowed list', {
+                    code: 'SANITIZER_DANGEROUS_TAG_BLOCKED',
+                    source: 'HtmlSanitizer.clean',
+                    tag: lowerTag,
+                });
+                return false;
+            }
             return true;
         })
             .map((tag) => tag.toLowerCase());
@@ -129,17 +170,56 @@ export default class HtmlSanitizer {
             html = html.substring(0, MAX_INPUT_SIZE);
         }
         // ====================================================================
-        // Step 4: Remove Dangerous Content
+        // Step 4: Remove Null Bytes (String Termination Attacks)
+        // ====================================================================
+        // SECURITY: Remove null bytes that could be used to terminate strings
+        // in some contexts and bypass filters
+        html = html.replace(/\0/g, '');
+        // ====================================================================
+        // Step 5: Decode HTML Entities Multiple Times (XSS Prevention)
+        // ====================================================================
+        // SECURITY: Decode entities multiple times to catch nested encoding attacks
+        // For example: &amp;lt;script&amp;gt; -> &lt;script&gt; -> <script>
+        // We do multiple passes (up to MAX_DECODE_PASSES) until no more changes occur
+        let previousHtml = '';
+        let decodePass = 0;
+        while (html !== previousHtml && decodePass < MAX_DECODE_PASSES) {
+            previousHtml = html;
+            html = this.decodeHtmlEntities(html);
+            decodePass++;
+        }
+        if (decodePass >= MAX_DECODE_PASSES && html !== previousHtml) {
+            logger.warn('Max entity decode passes reached, possible encoding attack', {
+                code: 'SANITIZER_MAX_DECODE_PASSES',
+                source: 'HtmlSanitizer.clean',
+                passes: decodePass,
+            });
+        }
+        // ====================================================================
+        // Step 6: Remove Dangerous Content
         // ====================================================================
         // Remove HTML comments (could hide malicious content)
         let cleaned = html.replace(/<!--[\s\S]*?-->/g, '');
-        // Remove script and style tags entirely (including their content)
-        cleaned = cleaned.replace(/<(script|style)[^>]*>[\s\S]*?<\/\1>/gi, '');
+        // Remove dangerous tags entirely (including their content)
+        // This is a safety net - these should already be blocked, but we remove them
+        // in case they appear in the content
+        cleaned = cleaned.replace(/<(script|style|iframe|object|embed|applet|link|base|meta|form|input|button|textarea|select)[^>]*>[\s\S]*?<\/\1>/gi, '');
+        // Also remove self-closing dangerous tags
+        cleaned = cleaned.replace(/<(script|style|iframe|object|embed|applet|link|base|meta|form|input|button|textarea|select)[^>]*\/?>/gi, '');
         // ====================================================================
-        // Step 5: Process HTML Tags
+        // Step 7: Process HTML Tags
         // ====================================================================
         cleaned = cleaned.replace(/<\/?([a-z][a-z0-9]*)\b[^>]*>/gi, (match, tagName) => {
             const lowerTagName = tagName.toLowerCase();
+            // Extra safety: block dangerous tags even if they somehow got through
+            if (NEVER_ALLOWED_TAGS.has(lowerTagName)) {
+                logger.warn('Dangerous tag removed from content', {
+                    code: 'SANITIZER_DANGEROUS_TAG_REMOVED',
+                    source: 'HtmlSanitizer.clean',
+                    tag: lowerTagName,
+                });
+                return '';
+            }
             // Remove tags not in the allowed list (preserve text content)
             if (!validAllowedTags.includes(lowerTagName)) {
                 return '';
@@ -150,7 +230,7 @@ export default class HtmlSanitizer {
             }
             // Detect self-closing tags
             const isSelfClosing = match.endsWith('/>');
-            // Special handling for anchor tags - validate URLs
+            // Special handling for anchor tags - validate URLs and add security attributes
             if (lowerTagName === 'a') {
                 const hrefMatch = match.match(/href\s*=\s*["']([^"']*)["']/i);
                 if (hrefMatch && hrefMatch[1]) {
@@ -159,7 +239,13 @@ export default class HtmlSanitizer {
                     if (this.isValidUrl(url)) {
                         // Escape the URL to prevent attribute injection
                         const escapedUrl = this.sanitizeForAttribute(url);
-                        return `<a href="${escapedUrl}">`;
+                        // SECURITY: Add target="_blank" and rel="noopener noreferrer" for external links
+                        // This prevents tab nabbing attacks and ensures the new page can't access window.opener
+                        const isExternal = /^https?:\/\//i.test(url);
+                        const securityAttrs = isExternal
+                            ? ' target="_blank" rel="noopener noreferrer"'
+                            : '';
+                        return `<a href="${escapedUrl}"${securityAttrs}>`;
                     }
                     else {
                         // Invalid URL - remove href but keep anchor tag
@@ -184,7 +270,20 @@ export default class HtmlSanitizer {
             return `<${lowerTagName}>`;
         });
         // ====================================================================
-        // Step 6: Final Cleanup
+        // Step 8: Final Security Check
+        // ====================================================================
+        // Final pass: ensure no dangerous patterns remain
+        // Check for any remaining script/style tags (case insensitive)
+        if (/<(script|style|iframe|object|embed)/i.test(cleaned)) {
+            logger.error('Dangerous tags still present after sanitization', {
+                code: 'SANITIZER_DANGEROUS_CONTENT_REMAINING',
+                source: 'HtmlSanitizer.clean',
+            });
+            // Strip all tags as a safety measure
+            return this.stripAllTags(cleaned);
+        }
+        // ====================================================================
+        // Step 9: Final Cleanup
         // ====================================================================
         // Normalize whitespace
         cleaned = cleaned.replace(/\s+/g, ' ').trim();

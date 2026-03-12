@@ -62,6 +62,65 @@ describe('HtmlSanitizer', () => {
       });
     });
 
+    describe('Never-allowed dangerous tags (best practice)', () => {
+      it('should block script tags even if in allowed list', () => {
+        const html = '<p>Safe</p><script>alert(1)</script>';
+        // User mistakenly tries to allow script tags
+        const result = HtmlSanitizer.clean(html, ['p', 'script']);
+
+        expect(result).not.toContain('<script>');
+        expect(result).not.toContain('alert');
+        expect(result).toContain('<p>');
+        expect(result).toContain('Safe');
+      });
+
+      it('should block iframe tags even if in allowed list', () => {
+        const html = '<p>Text</p><iframe src="evil.com"></iframe>';
+        const result = HtmlSanitizer.clean(html, ['p', 'iframe']);
+
+        expect(result).not.toContain('iframe');
+        expect(result).toContain('Text');
+      });
+
+      it('should block object and embed tags', () => {
+        const html = '<p>Safe</p><object data="file.swf"></object><embed src="file.swf">';
+        const result = HtmlSanitizer.clean(html, ['p', 'object', 'embed']);
+
+        expect(result).not.toContain('object');
+        expect(result).not.toContain('embed');
+        expect(result).toContain('Safe');
+      });
+
+      it('should block form-related tags', () => {
+        const html =
+          '<p>Text</p><form action="/evil"><input type="text"><button>Click</button></form>';
+        const result = HtmlSanitizer.clean(html, ['p', 'form', 'input', 'button']);
+
+        expect(result).not.toContain('form');
+        expect(result).not.toContain('input');
+        expect(result).not.toContain('button');
+        expect(result).toContain('Text');
+      });
+
+      it('should block base and link tags', () => {
+        const html =
+          '<base href="http://evil.com"><link rel="stylesheet" href="evil.css"><p>Text</p>';
+        const result = HtmlSanitizer.clean(html, ['p', 'base', 'link']);
+
+        expect(result).not.toContain('base');
+        expect(result).not.toContain('link');
+        expect(result).toContain('Text');
+      });
+
+      it('should block meta tags', () => {
+        const html = '<meta http-equiv="refresh" content="0;url=http://evil.com"><p>Text</p>';
+        const result = HtmlSanitizer.clean(html, ['p', 'meta']);
+
+        expect(result).not.toContain('meta');
+        expect(result).toContain('Text');
+      });
+    });
+
     describe('Dangerous content removal', () => {
       it('should remove script tags and their content', () => {
         const html = '<p>Safe</p><script>alert("xss")</script><p>Also safe</p>';
@@ -73,12 +132,45 @@ describe('HtmlSanitizer', () => {
         expect(result).toContain('Also safe');
       });
 
+      it('should remove HTML-encoded script tags (XSS prevention)', () => {
+        const html =
+          '&lt;script&gt;alert(2)&lt;/script&gt;<strong>Test</strong> all tag should pass properly';
+        const result = HtmlSanitizer.clean(html, ['strong', 'em', 'u', 's', 'a']);
+
+        // The encoded script tag should be completely removed after decoding
+        expect(result).not.toContain('script');
+        expect(result).not.toContain('alert');
+        expect(result).not.toContain('&lt;script&gt;');
+        expect(result).not.toContain('<script>');
+        expect(result).toContain('<strong>');
+        expect(result).toContain('Test');
+        expect(result).toContain('properly');
+      });
+
+      it('should handle mixed encoded and unencoded dangerous content', () => {
+        const html = '&lt;script&gt;alert(1)&lt;/script&gt;<p>Safe</p><script>alert(2)</script>';
+        const result = HtmlSanitizer.clean(html, ['p']);
+
+        expect(result).not.toContain('script');
+        expect(result).not.toContain('alert');
+        expect(result).toContain('Safe');
+      });
+
       it('should remove style tags and their content', () => {
         const html = '<p>Text</p><style>.red{color:red}</style>';
         const result = HtmlSanitizer.clean(html, ['p']);
 
         expect(result).not.toContain('style');
         expect(result).not.toContain('color:red');
+      });
+
+      it('should remove HTML-encoded style tags', () => {
+        const html = '&lt;style&gt;.red{color:red}&lt;/style&gt;<p>Text</p>';
+        const result = HtmlSanitizer.clean(html, ['p']);
+
+        expect(result).not.toContain('style');
+        expect(result).not.toContain('color:red');
+        expect(result).toContain('Text');
       });
 
       it('should remove HTML comments', () => {
@@ -89,6 +181,80 @@ describe('HtmlSanitizer', () => {
         expect(result).not.toContain('comment');
         expect(result).toContain('Text');
         expect(result).toContain('More');
+      });
+
+      it('should handle multiple levels of entity encoding (nested encoding attack)', () => {
+        // &amp;lt; becomes &lt; which becomes <
+        const html = '&amp;lt;script&amp;gt;alert(1)&amp;lt;/script&amp;gt;<p>Safe</p>';
+        const result = HtmlSanitizer.clean(html, ['p']);
+
+        expect(result).not.toContain('script');
+        expect(result).not.toContain('alert');
+        expect(result).not.toContain('&lt;');
+        expect(result).not.toContain('<script>');
+        expect(result).toContain('Safe');
+      });
+
+      it('should handle triple-encoded entities', () => {
+        // Three levels of encoding
+        const html = '&amp;amp;lt;script&amp;amp;gt;bad()&amp;amp;lt;/script&amp;amp;gt;';
+        const result = HtmlSanitizer.clean(html, ['p']);
+
+        expect(result).not.toContain('script');
+        expect(result).not.toContain('bad');
+      });
+
+      it('should remove null bytes (string termination attack)', () => {
+        const html = '<p>Safe</p>\x00<script>alert(1)</script>';
+        const result = HtmlSanitizer.clean(html, ['p']);
+
+        expect(result).not.toContain('\x00');
+        expect(result).not.toContain('script');
+        expect(result).toContain('Safe');
+      });
+    });
+
+    describe('Enhanced anchor tag security (best practice)', () => {
+      it('should add target="_blank" and rel="noopener noreferrer" to external links', () => {
+        const html = '<a href="https://external.com">Link</a>';
+        const result = HtmlSanitizer.clean(html, ['a']);
+
+        expect(result).toContain('target="_blank"');
+        expect(result).toContain('rel="noopener noreferrer"');
+        expect(result).toContain('href="https://external.com"');
+      });
+
+      it('should add security attributes to http links', () => {
+        const html = '<a href="http://external.com">Link</a>';
+        const result = HtmlSanitizer.clean(html, ['a']);
+
+        expect(result).toContain('target="_blank"');
+        expect(result).toContain('rel="noopener noreferrer"');
+      });
+
+      it('should NOT add target/rel to relative links', () => {
+        const html = '<a href="/internal/page">Link</a>';
+        const result = HtmlSanitizer.clean(html, ['a']);
+
+        expect(result).not.toContain('target=');
+        expect(result).not.toContain('rel=');
+        expect(result).toContain('href="/internal/page"');
+      });
+
+      it('should NOT add target/rel to anchor links', () => {
+        const html = '<a href="#section">Link</a>';
+        const result = HtmlSanitizer.clean(html, ['a']);
+
+        expect(result).not.toContain('target=');
+        expect(result).not.toContain('rel=');
+      });
+
+      it('should NOT add target/rel to mailto links', () => {
+        const html = '<a href="mailto:test@example.com">Email</a>';
+        const result = HtmlSanitizer.clean(html, ['a']);
+
+        expect(result).not.toContain('target=');
+        expect(result).not.toContain('rel=');
       });
     });
 
@@ -215,6 +381,81 @@ describe('HtmlSanitizer', () => {
       expect(result).not.toContain('<div>');
       expect(result).not.toContain('<script>');
       expect(result).toContain('<b>');
+    });
+
+    describe('Additional XSS attack vectors (deployment security check)', () => {
+      it('should remove onclick event handlers from all tags', () => {
+        const html = '<img src="x" onclick="alert(1)"><div onclick="bad()">Text</div>';
+        const result = HtmlSanitizer.clean(html, ['img', 'div']);
+
+        expect(result).not.toContain('onclick');
+        expect(result).not.toContain('alert');
+        expect(result).not.toContain('bad()');
+      });
+
+      it('should remove onerror event handlers', () => {
+        const html = '<img src="invalid" onerror="alert(1)">';
+        const result = HtmlSanitizer.clean(html, ['img']);
+
+        expect(result).not.toContain('onerror');
+        expect(result).not.toContain('alert');
+      });
+
+      it('should remove onload event handlers', () => {
+        const html = '<body onload="alert(1)">Content</body>';
+        const result = HtmlSanitizer.clean(html, ['body']);
+
+        expect(result).not.toContain('onload');
+        expect(result).not.toContain('alert');
+      });
+
+      it('should remove onmouseover and other event handlers', () => {
+        const html = '<div onmouseover="alert(1)" onmouseout="bad()">Hover</div>';
+        const result = HtmlSanitizer.clean(html, ['div']);
+
+        expect(result).not.toContain('onmouseover');
+        expect(result).not.toContain('onmouseout');
+        expect(result).not.toContain('alert');
+        expect(result).toContain('Hover');
+      });
+
+      it('should handle encoded javascript protocol', () => {
+        const html = '<a href="jav&#x09;ascript:alert(1)">Link</a>';
+        const result = HtmlSanitizer.clean(html, ['a']);
+
+        expect(result).not.toContain('javascript');
+        expect(result).not.toContain('alert');
+      });
+
+      it('should remove svg script tags', () => {
+        const html = '<svg><script>alert(1)</script></svg>';
+        const result = HtmlSanitizer.clean(html, ['svg']);
+
+        expect(result).not.toContain('script');
+        expect(result).not.toContain('alert');
+      });
+
+      it('should handle style with @import', () => {
+        const html = '<style>@import url("http://evil.com/steal.css");</style>';
+        const result = HtmlSanitizer.clean(html, ['style', 'p']);
+
+        expect(result).not.toContain('style');
+        expect(result).not.toContain('@import');
+        expect(result).not.toContain('evil.com');
+      });
+
+      it('should handle complex mixed attack', () => {
+        const html =
+          '&lt;script&gt;bad1()&lt;/script&gt;<script>bad2()</script><p onclick="bad3()">Safe</p>';
+        const result = HtmlSanitizer.clean(html, ['p']);
+
+        expect(result).not.toContain('script');
+        expect(result).not.toContain('onclick');
+        expect(result).not.toContain('bad1');
+        expect(result).not.toContain('bad2');
+        expect(result).not.toContain('bad3');
+        expect(result).toContain('Safe');
+      });
     });
   });
 
