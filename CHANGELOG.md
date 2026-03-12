@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Add "default" export condition to all package.json exports for tsx/ts-node compatibility
+  - Fixes ERR_PACKAGE_PATH_NOT_EXPORTED error when using tsx, ts-node, or similar TypeScript loaders
+  - Required for Node.js v24+ module resolution in hybrid CJS/ESM environments
+  - Follows modern Node.js package best practices (Node.js 12.20+)
 - Added missing package.json exports for submodules (sanitizer, server, router, logger, etc.)
   - Resolves ERR_PACKAGE_PATH_NOT_EXPORTED error when importing subpaths
   - Enables direct imports like `@designofadecade/server/sanitizer`

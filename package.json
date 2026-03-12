@@ -8,47 +8,58 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
     },
     "./sanitizer": {
       "types": "./dist/sanitizer/HtmlSanitizer.d.ts",
-      "import": "./dist/sanitizer/HtmlSanitizer.js"
+      "import": "./dist/sanitizer/HtmlSanitizer.js",
+      "default": "./dist/sanitizer/HtmlSanitizer.js"
     },
     "./server": {
       "types": "./dist/server/Server.d.ts",
-      "import": "./dist/server/Server.js"
+      "import": "./dist/server/Server.js",
+      "default": "./dist/server/Server.js"
     },
     "./router": {
       "types": "./dist/router/Router.d.ts",
-      "import": "./dist/router/Router.js"
+      "import": "./dist/router/Router.js",
+      "default": "./dist/router/Router.js"
     },
     "./logger": {
       "types": "./dist/logger/Logger.d.ts",
-      "import": "./dist/logger/Logger.js"
+      "import": "./dist/logger/Logger.js",
+      "default": "./dist/logger/Logger.js"
     },
     "./client": {
       "types": "./dist/client/ApiClient.d.ts",
-      "import": "./dist/client/ApiClient.js"
+      "import": "./dist/client/ApiClient.js",
+      "default": "./dist/client/ApiClient.js"
     },
     "./context": {
       "types": "./dist/context/Context.d.ts",
-      "import": "./dist/context/Context.js"
+      "import": "./dist/context/Context.js",
+      "default": "./dist/context/Context.js"
     },
     "./events": {
       "types": "./dist/events/EventsManager.d.ts",
-      "import": "./dist/events/EventsManager.js"
+      "import": "./dist/events/EventsManager.js",
+      "default": "./dist/events/EventsManager.js"
     },
     "./websocket": {
       "types": "./dist/websocket/WebSocketServer.d.ts",
-      "import": "./dist/websocket/WebSocketServer.js"
+      "import": "./dist/websocket/WebSocketServer.js",
+      "default": "./dist/websocket/WebSocketServer.js"
     },
     "./state": {
       "types": "./dist/state/AppState.d.ts",
-      "import": "./dist/state/AppState.js"
+      "import": "./dist/state/AppState.js",
+      "default": "./dist/state/AppState.js"
     },
     "./utils": {
       "types": "./dist/utils/HtmlRenderer.d.ts",
-      "import": "./dist/utils/HtmlRenderer.js"
+      "import": "./dist/utils/HtmlRenderer.js",
+      "default": "./dist/utils/HtmlRenderer.js"
     }
   },
   "scripts": {
