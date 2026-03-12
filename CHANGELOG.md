@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Added missing package.json exports for submodules (sanitizer, server, router, logger, etc.)
+  - Resolves ERR_PACKAGE_PATH_NOT_EXPORTED error when importing subpaths
+  - Enables direct imports like `@designofadecade/server/sanitizer`
+
 ### Added
 - HtmlSanitizer now supports preserving specific attributes on allowed tags via optional `allowedAttributes` parameter
   - Enables granular control over which attributes are preserved on each tag
