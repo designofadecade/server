@@ -29,7 +29,17 @@ export default class RouteError {
      *
      * @param error - Error object or unknown error
      * @param options - Configuration options
-     * @returns RouterResponse object
+     * @returns RouterResponse with format:
+     * {
+     *   status: number,
+     *   body: {
+     *     success: false,
+     *     error: {
+     *       code: string,
+     *       message: string
+     *     }
+     *   }
+     * }
      *
      * @example
      * try {
@@ -43,7 +53,7 @@ export default class RouteError {
      * }
      */
     static fromError(error, options) {
-        const { defaultMessage, status = 500, error: errorType, safeErrorClasses = [], context = {}, } = options;
+        const { defaultMessage, status = 500, safeErrorClasses = [], context = {} } = options;
         // Combine default safe classes with custom ones
         const allSafeClasses = [...DEFAULT_SAFE_ERROR_CLASSES, ...safeErrorClasses];
         // Determine if error is safe to expose
@@ -64,21 +74,18 @@ export default class RouteError {
         });
         // Determine what to show to client
         const clientMessage = isSafe ? errorDetails.message : defaultMessage;
-        const clientError = errorType || this.getDefaultErrorType(status);
-        // Build response body
+        // Build response body with new standardized format
         const responseBody = {
-            error: clientError,
-            message: clientMessage,
-            statusCode: status,
+            success: false,
+            error: {
+                code: isSafe && errorDetails.code ? errorDetails.code : 'UNKNOWN_ERROR',
+                message: clientMessage,
+            },
         };
-        // Include error code if available and safe
-        if (isSafe && errorDetails.code) {
-            responseBody.code = errorDetails.code;
-        }
         return {
             status,
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(responseBody),
+            body: responseBody,
         };
     }
     /**
@@ -130,26 +137,6 @@ export default class RouteError {
             name: 'Error',
             message: 'Unknown error occurred',
         };
-    }
-    /**
-     * Gets default error type based on status code
-     *
-     * @param status - HTTP status code
-     * @returns Default error type string
-     */
-    static getDefaultErrorType(status) {
-        const errorTypes = {
-            400: 'Bad Request',
-            401: 'Unauthorized',
-            403: 'Forbidden',
-            404: 'Not Found',
-            409: 'Conflict',
-            422: 'Unprocessable Entity',
-            500: 'Internal Server Error',
-            502: 'Bad Gateway',
-            503: 'Service Unavailable',
-        };
-        return errorTypes[status] || 'Server Error';
     }
 }
 //# sourceMappingURL=RouteError.js.map
