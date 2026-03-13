@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.0.0] - 2026-03-13
+
+### Changed
+- **BREAKING:** `RouteError.fromError()` now returns response body as an object instead of stringified JSON
+  - Old behavior: `body: JSON.stringify({ error, message, statusCode, code? })`
+  - New behavior: `body: { success: false, error: { code, message } }`
+  - Allows routers to handle serialization themselves, providing more flexibility
+- **BREAKING:** Response structure now follows standard REST API format
+  - Always includes `success: false` field for consistency
+  - Error details nested under `error` object with `code` and `message` fields
+  - `code` field is always present (defaults to `'UNKNOWN_ERROR'` for unsafe errors)
+  - Removed `statusCode` field from body (status code remains in `response.status`)
+  - Removed `error` field with HTTP status text (e.g., "Bad Request", "Internal Server Error")
+
+### Migration Guide
+
+**Old code:**
+```typescript
+const response = RouteError.fromError(error, { 
+  defaultMessage: 'Failed', 
+  status: 400 
+});
+// response.body is a string: '{"error":"Bad Request","message":"Failed","statusCode":400}'
+const parsed = JSON.parse(response.body);
+console.log(parsed.error); // "Bad Request"
+console.log(parsed.message); // "Failed"
+```
+
+**New code:**
+```typescript
+const response = RouteError.fromError(error, { 
+  defaultMessage: 'Failed', 
+  status: 400 
+});
+// response.body is an object
+console.log(response.body.success); // false
+console.log(response.body.error.code); // "UNKNOWN_ERROR" or custom code
+console.log(response.body.error.message); // "Failed"
+```
+
+### Benefits
+- **Consistency:** Matches standard REST API response patterns used across applications
+- **Type Safety:** Object responses are easier to validate and work with in TypeScript
+- **Flexibility:** Routers can serialize to JSON, XML, or any format as needed
+- **Always Typed Errors:** `code` field always present for programmatic error handling
+- **Cleaner API:** Single `error` object instead of flat structure
+
 ## [4.4.1] - 2026-03-13
 
 ### Fixed

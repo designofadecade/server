@@ -48,7 +48,17 @@ export default class RouteError {
    *
    * @param error - Error object or unknown error
    * @param options - Configuration options
-   * @returns RouterResponse object
+   * @returns RouterResponse with format:
+   * {
+   *   status: number,
+   *   body: {
+   *     success: false,
+   *     error: {
+   *       code: string,
+   *       message: string
+   *     }
+   *   }
+   * }
    *
    * @example
    * try {
@@ -62,13 +72,7 @@ export default class RouteError {
    * }
    */
   static fromError(error: unknown, options: FromErrorOptions): RouterResponse {
-    const {
-      defaultMessage,
-      status = 500,
-      error: errorType,
-      safeErrorClasses = [],
-      context = {},
-    } = options;
+    const { defaultMessage, status = 500, safeErrorClasses = [], context = {} } = options;
 
     // Combine default safe classes with custom ones
     const allSafeClasses = [...DEFAULT_SAFE_ERROR_CLASSES, ...safeErrorClasses];
@@ -94,24 +98,20 @@ export default class RouteError {
 
     // Determine what to show to client
     const clientMessage = isSafe ? errorDetails.message : defaultMessage;
-    const clientError = errorType || this.getDefaultErrorType(status);
 
-    // Build response body
-    const responseBody: Record<string, unknown> = {
-      error: clientError,
-      message: clientMessage,
-      statusCode: status,
+    // Build response body with new standardized format
+    const responseBody = {
+      success: false,
+      error: {
+        code: isSafe && errorDetails.code ? errorDetails.code : 'UNKNOWN_ERROR',
+        message: clientMessage,
+      },
     };
-
-    // Include error code if available and safe
-    if (isSafe && errorDetails.code) {
-      responseBody.code = errorDetails.code;
-    }
 
     return {
       status,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(responseBody),
+      body: responseBody,
     };
   }
 

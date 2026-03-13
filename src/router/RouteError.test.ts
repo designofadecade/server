@@ -2,6 +2,15 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import RouteError from './RouteError.ts';
 import { logger } from '../logger/Logger.ts';
 
+// Type for the new error response body structure
+interface ErrorResponseBody {
+  success: false;
+  error: {
+    code: string;
+    message: string;
+  };
+}
+
 // Mock the logger
 vi.mock('../logger/Logger.ts', () => ({
   logger: {
@@ -60,10 +69,10 @@ describe('RouteError', () => {
         });
 
         expect(response.status).toBe(400);
-        const body = JSON.parse(response.body);
-        expect(body.message).toBe('Email format is invalid');
-        expect(body.error).toBe('Bad Request');
-        expect(body.statusCode).toBe(400);
+        const body = response.body as ErrorResponseBody;
+        expect(body.success).toBe(false);
+        expect(body.error.message).toBe('Email format is invalid');
+        expect(body.error.code).toBe('UNKNOWN_ERROR');
       });
 
       it('should expose ConflictError messages with error codes', () => {
@@ -73,10 +82,10 @@ describe('RouteError', () => {
           status: 409,
         });
 
-        const body = JSON.parse(response.body);
-        expect(body.message).toBe('Email already exists');
-        expect(body.code).toBe('EMAIL_TAKEN');
-        expect(body.error).toBe('Conflict');
+        const body = response.body as ErrorResponseBody;
+        expect(body.success).toBe(false);
+        expect(body.error.message).toBe('Email already exists');
+        expect(body.error.code).toBe('EMAIL_TAKEN');
       });
 
       it('should expose UserError messages with custom codes', () => {
@@ -86,9 +95,10 @@ describe('RouteError', () => {
           status: 400,
         });
 
-        const body = JSON.parse(response.body);
-        expect(body.message).toBe('Username must be at least 3 characters');
-        expect(body.code).toBe('INVALID_INPUT');
+        const body = response.body as ErrorResponseBody;
+        expect(body.success).toBe(false);
+        expect(body.error.message).toBe('Username must be at least 3 characters');
+        expect(body.error.code).toBe('INVALID_INPUT');
       });
 
       it('should support custom safe error classes', () => {
@@ -98,8 +108,10 @@ describe('RouteError', () => {
           safeErrorClasses: ['CustomSafeError'],
         });
 
-        const body = JSON.parse(response.body);
-        expect(body.message).toBe('Custom error message');
+        const body = response.body as ErrorResponseBody;
+        expect(body.success).toBe(false);
+        expect(body.error.message).toBe('Custom error message');
+        expect(body.error.code).toBe('UNKNOWN_ERROR');
       });
 
       it('should expose NotFoundError messages', () => {
@@ -116,9 +128,10 @@ describe('RouteError', () => {
           status: 404,
         });
 
-        const body = JSON.parse(response.body);
-        expect(body.message).toBe('User with ID 123 not found');
-        expect(body.error).toBe('Not Found');
+        const body = response.body as ErrorResponseBody;
+        expect(body.success).toBe(false);
+        expect(body.error.message).toBe('User with ID 123 not found');
+        expect(body.error.code).toBe('UNKNOWN_ERROR');
       });
 
       it('should expose AuthenticationError messages', () => {
@@ -135,9 +148,10 @@ describe('RouteError', () => {
           status: 401,
         });
 
-        const body = JSON.parse(response.body);
-        expect(body.message).toBe('Invalid credentials');
-        expect(body.error).toBe('Unauthorized');
+        const body = response.body as ErrorResponseBody;
+        expect(body.success).toBe(false);
+        expect(body.error.message).toBe('Invalid credentials');
+        expect(body.error.code).toBe('UNKNOWN_ERROR');
       });
     });
 
@@ -150,12 +164,13 @@ describe('RouteError', () => {
           defaultMessage: 'Database error',
         });
 
-        const body = JSON.parse(response.body);
-        expect(body.message).toBe('Database error');
-        expect(body.message).not.toContain('postgresql://');
-        expect(body.message).not.toContain('MyP@ssw0rd');
-        expect(body.message).not.toContain('prod-db.internal');
-        expect(response.body).not.toContain('postgresql://');
+        const body = response.body as ErrorResponseBody;
+        expect(body.success).toBe(false);
+        expect(body.error.message).toBe('Database error');
+        expect(body.error.message).not.toContain('postgresql://');
+        expect(body.error.message).not.toContain('MyP@ssw0rd');
+        expect(body.error.message).not.toContain('prod-db.internal');
+        expect(JSON.stringify(response.body)).not.toContain('postgresql://');
       });
 
       it('should NOT expose AWS credentials and ARNs', () => {
@@ -167,12 +182,13 @@ describe('RouteError', () => {
           status: 500,
         });
 
-        const body = JSON.parse(response.body);
-        expect(body.message).toBe('AWS error');
-        expect(body.message).not.toContain('arn:aws:iam');
-        expect(body.message).not.toContain('AKIAIOSFODNN7EXAMPLE');
-        expect(body.message).not.toContain('123456789012');
-        expect(response.body).not.toContain('AKIAIOSFODNN7EXAMPLE');
+        const body = response.body as ErrorResponseBody;
+        expect(body.success).toBe(false);
+        expect(body.error.message).toBe('AWS error');
+        expect(body.error.message).not.toContain('arn:aws:iam');
+        expect(body.error.message).not.toContain('AKIAIOSFODNN7EXAMPLE');
+        expect(body.error.message).not.toContain('123456789012');
+        expect(JSON.stringify(response.body)).not.toContain('AKIAIOSFODNN7EXAMPLE');
       });
 
       it('should NOT expose file system paths', () => {
@@ -181,11 +197,12 @@ describe('RouteError', () => {
           defaultMessage: 'File error',
         });
 
-        const body = JSON.parse(response.body);
-        expect(body.message).toBe('File error');
-        expect(body.message).not.toContain('/var/app/secrets/');
-        expect(body.message).not.toContain('.env');
-        expect(response.body).not.toContain('/var/app/secrets/');
+        const body = response.body as ErrorResponseBody;
+        expect(body.success).toBe(false);
+        expect(body.error.message).toBe('File error');
+        expect(body.error.message).not.toContain('/var/app/secrets/');
+        expect(body.error.message).not.toContain('.env');
+        expect(JSON.stringify(response.body)).not.toContain('/var/app/secrets/');
       });
 
       it('should NOT expose SQL queries with schema details', () => {
@@ -194,10 +211,11 @@ describe('RouteError', () => {
           defaultMessage: 'Database query error',
         });
 
-        const body = JSON.parse(response.body);
-        expect(body.message).toBe('Database query error');
-        expect(body.message).not.toContain('internal_secret_field');
-        expect(response.body).not.toContain('internal_secret_field');
+        const body = response.body as ErrorResponseBody;
+        expect(body.success).toBe(false);
+        expect(body.error.message).toBe('Database query error');
+        expect(body.error.message).not.toContain('internal_secret_field');
+        expect(JSON.stringify(response.body)).not.toContain('internal_secret_field');
       });
 
       it('should NOT expose API keys and tokens', () => {
@@ -206,10 +224,11 @@ describe('RouteError', () => {
           defaultMessage: 'API error',
         });
 
-        const body = JSON.parse(response.body);
-        expect(body.message).toBe('API error');
-        expect(body.message).not.toContain('sk_live_');
-        expect(response.body).not.toContain('sk_live_');
+        const body = response.body as ErrorResponseBody;
+        expect(body.success).toBe(false);
+        expect(body.error.message).toBe('API error');
+        expect(body.error.message).not.toContain('sk_live_');
+        expect(JSON.stringify(response.body)).not.toContain('sk_live_');
       });
 
       it('should NOT expose internal server configuration', () => {
@@ -220,11 +239,12 @@ describe('RouteError', () => {
           defaultMessage: 'Cache error',
         });
 
-        const body = JSON.parse(response.body);
-        expect(body.message).toBe('Cache error');
-        expect(body.message).not.toContain('secret123');
-        expect(body.message).not.toContain('localhost:6379');
-        expect(response.body).not.toContain('secret123');
+        const body = response.body as ErrorResponseBody;
+        expect(body.success).toBe(false);
+        expect(body.error.message).toBe('Cache error');
+        expect(body.error.message).not.toContain('secret123');
+        expect(body.error.message).not.toContain('localhost:6379');
+        expect(JSON.stringify(response.body)).not.toContain('secret123');
       });
 
       it('should NOT expose stack traces to clients', () => {
@@ -235,10 +255,11 @@ describe('RouteError', () => {
           defaultMessage: 'Server error',
         });
 
-        const body = JSON.parse(response.body);
-        expect(body.message).toBe('Server error');
-        expect(response.body).not.toContain('/var/app/src/secret.ts');
-        expect(response.body).not.toContain('at MyClass.method');
+        const body = response.body as ErrorResponseBody;
+        expect(body.success).toBe(false);
+        expect(body.error.message).toBe('Server error');
+        expect(JSON.stringify(response.body)).not.toContain('/var/app/src/secret.ts');
+        expect(JSON.stringify(response.body)).not.toContain('at MyClass.method');
       });
 
       it('should handle generic Error objects safely', () => {
@@ -247,9 +268,10 @@ describe('RouteError', () => {
           defaultMessage: 'Operation failed',
         });
 
-        const body = JSON.parse(response.body);
-        expect(body.message).toBe('Operation failed');
-        expect(body.error).toBe('Internal Server Error');
+        const body = response.body as ErrorResponseBody;
+        expect(body.success).toBe(false);
+        expect(body.error.message).toBe('Operation failed');
+        expect(body.error.code).toBe('UNKNOWN_ERROR');
       });
     });
 
@@ -322,9 +344,10 @@ describe('RouteError', () => {
           defaultMessage: 'Error occurred',
         });
 
-        const body = JSON.parse(response.body);
-        expect(body.message).toBe('Error occurred');
-        expect(body.error).toBe('Internal Server Error');
+        const body = response.body as ErrorResponseBody;
+        expect(body.success).toBe(false);
+        expect(body.error.message).toBe('Error occurred');
+        expect(body.error.code).toBe('UNKNOWN_ERROR');
       });
 
       it('should handle object errors', () => {
@@ -333,8 +356,10 @@ describe('RouteError', () => {
           { defaultMessage: 'Error occurred' }
         );
 
-        const body = JSON.parse(response.body);
-        expect(body.message).toBe('Error occurred');
+        const body = response.body as ErrorResponseBody;
+        expect(body.success).toBe(false);
+        expect(body.error.message).toBe('Error occurred');
+        expect(body.error.code).toBe('UNKNOWN_ERROR');
       });
 
       it('should handle null/undefined errors', () => {
@@ -342,15 +367,19 @@ describe('RouteError', () => {
           defaultMessage: 'Error occurred',
         });
 
-        const body1 = JSON.parse(response1.body);
-        expect(body1.message).toBe('Error occurred');
+        const body1 = response1.body as ErrorResponseBody;
+        expect(body1.success).toBe(false);
+        expect(body1.error.message).toBe('Error occurred');
+        expect(body1.error.code).toBe('UNKNOWN_ERROR');
 
         const response2 = RouteError.fromError(undefined, {
           defaultMessage: 'Error occurred',
         });
 
-        const body2 = JSON.parse(response2.body);
-        expect(body2.message).toBe('Error occurred');
+        const body2 = response2.body as ErrorResponseBody;
+        expect(body2.success).toBe(false);
+        expect(body2.error.message).toBe('Error occurred');
+        expect(body2.error.code).toBe('UNKNOWN_ERROR');
       });
     });
 
@@ -362,8 +391,9 @@ describe('RouteError', () => {
         });
 
         expect(response.status).toBe(500);
-        const body = JSON.parse(response.body);
-        expect(body.error).toBe('Internal Server Error');
+        const body = response.body as ErrorResponseBody;
+        expect(body.success).toBe(false);
+        expect(body.error.code).toBe('UNKNOWN_ERROR');
       });
 
       it('should use provided status code', () => {
@@ -374,8 +404,9 @@ describe('RouteError', () => {
         });
 
         expect(response.status).toBe(422);
-        const body = JSON.parse(response.body);
-        expect(body.error).toBe('Unprocessable Entity');
+        const body = response.body as ErrorResponseBody;
+        expect(body.success).toBe(false);
+        expect(body.error.message).toBe('Invalid input');
       });
 
       it('should use custom error type when provided', () => {
@@ -385,32 +416,37 @@ describe('RouteError', () => {
           error: 'Custom Error Type',
         });
 
-        const body = JSON.parse(response.body);
-        expect(body.error).toBe('Custom Error Type');
+        const body = response.body as ErrorResponseBody;
+        expect(body.success).toBe(false);
+        expect(body.error.code).toBe('UNKNOWN_ERROR');
+        expect(body.error.message).toBe('Custom error');
       });
 
       it('should handle various status codes correctly', () => {
         const testCases = [
-          { status: 400, expectedError: 'Bad Request' },
-          { status: 401, expectedError: 'Unauthorized' },
-          { status: 403, expectedError: 'Forbidden' },
-          { status: 404, expectedError: 'Not Found' },
-          { status: 409, expectedError: 'Conflict' },
-          { status: 422, expectedError: 'Unprocessable Entity' },
-          { status: 500, expectedError: 'Internal Server Error' },
-          { status: 502, expectedError: 'Bad Gateway' },
-          { status: 503, expectedError: 'Service Unavailable' },
+          { status: 400 },
+          { status: 401 },
+          { status: 403 },
+          { status: 404 },
+          { status: 409 },
+          { status: 422 },
+          { status: 500 },
+          { status: 502 },
+          { status: 503 },
         ];
 
-        testCases.forEach(({ status, expectedError }) => {
+        testCases.forEach(({ status }) => {
           const error = new Error('Test');
           const response = RouteError.fromError(error, {
             defaultMessage: 'Error',
             status,
           });
 
-          const body = JSON.parse(response.body);
-          expect(body.error).toBe(expectedError);
+          expect(response.status).toBe(status);
+          const body = response.body as ErrorResponseBody;
+          expect(body.success).toBe(false);
+          expect(body.error.code).toBe('UNKNOWN_ERROR');
+          expect(body.error.message).toBe('Error');
         });
       });
     });
@@ -434,10 +470,12 @@ describe('RouteError', () => {
           defaultMessage: 'Error occurred',
         });
 
-        const body = JSON.parse(response.body);
-        expect(body).toHaveProperty('message');
+        const body = response.body as ErrorResponseBody;
+        expect(body).toHaveProperty('success');
         expect(body).toHaveProperty('error');
-        expect(body).toHaveProperty('statusCode');
+        expect(body.error).toHaveProperty('message');
+        expect(body.error).toHaveProperty('code');
+        expect(body.success).toBe(false);
       });
 
       it('should include code field for safe errors with codes', () => {
@@ -446,11 +484,11 @@ describe('RouteError', () => {
           defaultMessage: 'Error occurred',
         });
 
-        const body = JSON.parse(response.body);
-        expect(body.code).toBe('USER_NOT_FOUND');
+        const body = response.body as ErrorResponseBody;
+        expect(body.error.code).toBe('USER_NOT_FOUND');
       });
 
-      it('should NOT include code field for unsafe errors', () => {
+      it('should include UNKNOWN_ERROR code for unsafe errors', () => {
         const error = new Error('Test error');
         const errorWithCode = error as Error & { code: string };
         errorWithCode.code = 'SENSITIVE_CODE';
@@ -459,8 +497,8 @@ describe('RouteError', () => {
           defaultMessage: 'Error occurred',
         });
 
-        const body = JSON.parse(response.body);
-        expect(body.code).toBeUndefined();
+        const body = response.body as ErrorResponseBody;
+        expect(body.error.code).toBe('UNKNOWN_ERROR');
       });
     });
 
@@ -473,9 +511,10 @@ describe('RouteError', () => {
           context: { service: 'database' },
         });
 
-        const body = JSON.parse(response.body);
-        expect(body.message).toBe('Service temporarily unavailable');
-        expect(body.message).not.toContain('10.0.1.45');
+        const body = response.body as ErrorResponseBody;
+        expect(body.success).toBe(false);
+        expect(body.error.message).toBe('Service temporarily unavailable');
+        expect(body.error.message).not.toContain('10.0.1.45');
       });
 
       it('should handle validation errors with helpful messages', () => {
@@ -487,8 +526,11 @@ describe('RouteError', () => {
           status: 400,
         });
 
-        const body = JSON.parse(response.body);
-        expect(body.message).toBe('Password must be at least 8 characters and contain a number');
+        const body = response.body as ErrorResponseBody;
+        expect(body.success).toBe(false);
+        expect(body.error.message).toBe(
+          'Password must be at least 8 characters and contain a number'
+        );
       });
 
       it('should handle third-party API errors safely', () => {
@@ -501,9 +543,10 @@ describe('RouteError', () => {
           context: { provider: 'stripe' },
         });
 
-        const body = JSON.parse(response.body);
-        expect(body.message).toBe('Payment processing failed');
-        expect(body.message).not.toContain('sk_test_');
+        const body = response.body as ErrorResponseBody;
+        expect(body.success).toBe(false);
+        expect(body.error.message).toBe('Payment processing failed');
+        expect(body.error.message).not.toContain('sk_test_');
       });
     });
   });
