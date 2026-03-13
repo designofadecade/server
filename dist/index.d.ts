@@ -16,6 +16,7 @@ export { default as Local } from './local/Local.js';
 export { logger } from './logger/Logger.js';
 export { default as ApiClient } from './client/ApiClient.js';
 export { default as RouteError } from './router/RouteError.js';
+export type { FromErrorOptions } from './router/RouteError.js';
 export { OpenApiGenerator, generateSwaggerUI } from './docs/OpenApiGenerator.js';
 export type { OpenApiInfo, OpenApiServer, OpenApiParameter, OpenApiResponse, OpenApiRouteConfig, OpenApiConfig, } from './docs/OpenApiGenerator.js';
 import HtmlSanitizer from './sanitizer/HtmlSanitizer.js';

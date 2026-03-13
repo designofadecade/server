@@ -32,6 +32,7 @@ export { default as Local } from './local/Local.js';
 export { logger } from './logger/Logger.js';
 export { default as ApiClient } from './client/ApiClient.js';
 export { default as RouteError } from './router/RouteError.js';
+export type { FromErrorOptions } from './router/RouteError.js';
 
 // Documentation
 export { OpenApiGenerator, generateSwaggerUI } from './docs/OpenApiGenerator.js';

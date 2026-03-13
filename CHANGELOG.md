@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.4.1] - 2026-03-13
+
+### Fixed
+- Fixed TypeScript type exports for `RouteError.fromError()` when using `moduleResolution: "bundler"`
+  - Added `FromErrorOptions` type export to main package index
+  - Resolves "Property 'fromError' does not exist on type 'typeof RouteError'" error
+  - Compatible with modern module resolution used by Vite, esbuild, and other bundlers
+  - No runtime changes - method already worked correctly, only type declarations were missing
+
+## [4.4.0] - 2026-03-13
+
 ## [4.3.0] - 2026-03-12
 
 ### Added
