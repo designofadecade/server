@@ -409,19 +409,6 @@ describe('RouteError', () => {
         expect(body.error.message).toBe('Invalid input');
       });
 
-      it('should use custom error type when provided', () => {
-        const error = new Error('Test error');
-        const response = RouteError.fromError(error, {
-          defaultMessage: 'Custom error',
-          error: 'Custom Error Type',
-        });
-
-        const body = response.body as ErrorResponseBody;
-        expect(body.success).toBe(false);
-        expect(body.error.code).toBe('UNKNOWN_ERROR');
-        expect(body.error.message).toBe('Custom error');
-      });
-
       it('should handle various status codes correctly', () => {
         const testCases = [
           { status: 400 },

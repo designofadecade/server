@@ -24,8 +24,6 @@ export interface FromErrorOptions {
   defaultMessage: string;
   /** HTTP status code (default: 500) */
   status?: number;
-  /** Error type/category (default: derived from status) */
-  error?: string;
   /** Additional error classes to treat as safe */
   safeErrorClasses?: string[];
   /** Additional context for logging */
