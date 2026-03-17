@@ -79,36 +79,64 @@ class Router {
         }
     }
     async lambdaEvent(event) {
-        let body = _a.MethodsWithBody.includes(event.requestContext.http.method)
-            ? event.body
-            : null;
-        if (event.headers['content-type']?.includes('application/json') && body) {
-            try {
-                body = JSON.parse(body);
+        try {
+            let body = _a.MethodsWithBody.includes(event.requestContext.http.method)
+                ? event.body
+                : null;
+            if (event.headers['content-type']?.includes('application/json') && body) {
+                try {
+                    body = JSON.parse(body);
+                }
+                catch {
+                    const errorResponse = RouteError.fromError(new Error('Invalid JSON in request body'), {
+                        defaultMessage: 'Invalid JSON in request body',
+                        status: 400,
+                    });
+                    return {
+                        statusCode: errorResponse.status || 400,
+                        headers: errorResponse.headers || { 'Content-Type': 'application/json' },
+                        body: typeof errorResponse.body === 'string'
+                            ? errorResponse.body
+                            : JSON.stringify(errorResponse.body),
+                    };
+                }
             }
-            catch {
-                return {
-                    statusCode: 400,
-                    body: JSON.stringify({ error: 'Invalid JSON in request body' }),
-                };
-            }
+            const response = await this.#request({
+                path: event.requestContext.http.path,
+                method: event.requestContext.http.method,
+                body: body,
+                cookies: this.#parseLambdaCookies(event.cookies || []),
+                params: {},
+                query: event?.queryStringParameters || {},
+                headers: event.headers || {},
+                authorizer: event.requestContext.authorizer || null,
+            });
+            return {
+                statusCode: response.status || 200,
+                headers: response.headers || { 'Content-Type': 'application/json' },
+                body: typeof response.body === 'string' ? response.body : JSON.stringify(response.body),
+                isBase64Encoded: response.isBase64Encoded || false,
+            };
         }
-        const response = await this.#request({
-            path: event.requestContext.http.path,
-            method: event.requestContext.http.method,
-            body: body,
-            cookies: this.#parseLambdaCookies(event.cookies || []),
-            params: {},
-            query: event?.queryStringParameters || {},
-            headers: event.headers || {},
-            authorizer: event.requestContext.authorizer || null,
-        });
-        return {
-            statusCode: response.status || 200,
-            headers: response.headers || { 'Content-Type': 'application/json' },
-            body: typeof response.body === 'string' ? response.body : JSON.stringify(response.body),
-            isBase64Encoded: response.isBase64Encoded || false,
-        };
+        catch (error) {
+            // Catch any unhandled errors and format them consistently
+            const errorResponse = RouteError.fromError(error, {
+                defaultMessage: 'Request processing failed',
+                status: 500,
+                context: {
+                    source: 'Router.lambdaEvent',
+                    path: event.requestContext?.http?.path,
+                    method: event.requestContext?.http?.method,
+                },
+            });
+            return {
+                statusCode: errorResponse.status || 500,
+                headers: errorResponse.headers || { 'Content-Type': 'application/json' },
+                body: typeof errorResponse.body === 'string'
+                    ? errorResponse.body
+                    : JSON.stringify(errorResponse.body),
+            };
+        }
     }
     async nodeJSRequest(req, res, { cors, lambdaOptions } = {}) {
         if (cors) {
