@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [10.1.0] - 2026-09-09
+
+Fixes an authorization bypass found while writing integration tests, and closes
+the testing gaps identified in the production-readiness review.
+
+### Security
+- **Route-level middleware was silently ignored on static routes (high).**
+  `#buildRoutesPatterns` stored only `{ handler }` for static paths, discarding
+  `middleware` and everything else on the registration. Dynamic paths stored the
+  whole route, so the same guard worked there. A route registered as
+
+  ```typescript
+  this.addRoute('/admin', 'GET', handler, [requireAdmin]);
+  ```
+
+  ran **without** `requireAdmin`, while `/admin/:id` correctly refused. Since
+  `docs/router.md` documents route middleware as the way to gate admin routes, any
+  guard on a static path was silently absent — the handler ran unauthenticated with
+  no error or warning. The full registration is now stored.
+
+  **Check your routes:** if you attach middleware to a route whose path contains no
+  `:` `*` `(` or `[`, it was never running before this release. Requests that
+  previously succeeded may now be correctly refused.
+
+### Added
+- Integration tests that exercise real servers and sockets rather than mocks:
+  - `Router.integration.test.ts` — a real `http.Server` over a real socket, covering
+    the malformed `Host` 400 and process survival, oversized and unparseable bodies,
+    forged vs. signed JWTs, bearer 401/403, CORS wildcard vs. allowlist, and route
+    middleware short-circuiting.
+  - `WebSocketServer.integration.test.ts` — real WebSocket connections, covering the
+    origin allowlist (403 for unlisted and absent origins), `verifyClient`, the
+    `maxPayload` cap closing with 1009, and the `connection` event exposing the
+    upgrade request.
+
+  These verify the fixes from 6.3.0 through 9.0.0, which until now had only been
+  confirmed by hand.
+- Edge-case suites for the branches attackers reach deliberately: malformed JWTs
+  (bad segments, unparseable header or payload, non-object claims, `nbf`), sanitizer
+  size caps, encoded protocols, malformed entities, and logger handling of BigInt,
+  Symbol, circular references, depth limits and payloads past the 256KB CloudWatch
+  cap.
+- A smoke test for the package entry point, previously the only source file with no
+  test at all.
+
+### Changed
+- Coverage now runs with `all: true`, so a source file with no tests reports as 0%
+  instead of being silently omitted from the report. This is what surfaced the
+  untested entry point.
+
+### Coverage
+686 -> 789 tests. Statements 90.8% -> 95.5%, branches 85.7% -> 90.0%, functions
+95.4% -> 99.0%. `Router.ts` moved from 85.0%/78.3% to 94.0%/86.1%, `Logger.ts` from
+79.1%/67.1% to 95.6%/82.2%, and `HtmlSanitizer.ts` from 89.5%/86.2% to 94.3%/89.9%.
+
 ## [10.0.1] - 2026-09-09
 
 ### Removed

@@ -91,7 +91,7 @@ export default class Router {
 
   #routes = {
     cache: new Map<string, RouteRegistration | null>(),
-    static: new Map<string, { handler: (request: RouterRequest) => Promise<RouterResponse> }>(),
+    static: new Map<string, RouteRegistration>(),
     dynamic: new Map<string, RouteRegistration[]>(),
   };
 
@@ -146,9 +146,11 @@ export default class Router {
 
           this.#routes.dynamic.get(method)!.push(route);
         } else {
-          this.#routes.static.set(pathMethodKey, {
-            handler: route.handler,
-          });
+          // Store the whole registration. Keeping only the handler silently
+          // dropped route-level middleware for every static path, so a route
+          // guarded by an auth middleware ran unguarded while the same guard on
+          // a dynamic path worked.
+          this.#routes.static.set(pathMethodKey, route);
         }
       }
     }

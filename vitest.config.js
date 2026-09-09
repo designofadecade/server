@@ -29,6 +29,11 @@ export default defineConfig({
         coverage: {
             provider: 'v8',
             reporter: ['text', 'json', 'html'],
+            // Report every source file, not just the ones a test happened to
+            // import. Without this a new file with no tests is silently absent
+            // from the report rather than showing up as 0%.
+            all: true,
+            include: ['src/**/*.ts'],
             exclude: [
                 'node_modules/',
                 'src/**/*.test.{js,ts}',
