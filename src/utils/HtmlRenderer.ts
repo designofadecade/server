@@ -1,14 +1,31 @@
 import fs from 'fs/promises';
 
+export interface RenderOptions {
+  /**
+   * HTML-escape interpolated values. Defaults to true.
+   *
+   * Set false only when the values are already safe HTML - typically output
+   * from `HtmlSanitizer.clean()` - and the template is composing it rather
+   * than displaying it. This restores pre-8.0.0 interpolation for `{{value}}`
+   * without re-opening the template-injection hole: values are still parked in
+   * the slot table, so data can never be read back as template syntax.
+   */
+  escape?: boolean;
+}
+
 export default class HtmlRenderer {
-  static async renderFromFile(templatePath: string, vars: Record<string, any>): Promise<string> {
+  static async renderFromFile(
+    templatePath: string,
+    vars: Record<string, any>,
+    options: RenderOptions = {}
+  ): Promise<string> {
     const templateContent = await fs.readFile(templatePath, 'utf8');
     if (!templateContent) return '';
 
-    return HtmlRenderer.render(templateContent, vars);
+    return HtmlRenderer.render(templateContent, vars, options);
   }
 
-  static render(template: string, vars: Record<string, any>): string {
+  static render(template: string, vars: Record<string, any>, options: RenderOptions = {}): string {
     if (typeof template !== 'string') return '';
 
     // SECURITY: NUL is reserved for the substitution sentinel below, so it is
@@ -22,7 +39,12 @@ export default class HtmlRenderer {
     // injected '{{#if}}' block was executed on the next pass of the loop.
     const slots: string[] = [];
 
-    const processed = HtmlRenderer.#processTemplate(safeTemplate, vars, slots);
+    // Escaping is on by default. Callers composing already-sanitized HTML opt
+    // out explicitly; template injection stays blocked either way, because every
+    // value still goes through the slot table.
+    const escape = options.escape !== false;
+
+    const processed = HtmlRenderer.#processTemplate(safeTemplate, vars, slots, escape);
 
     return processed.replace(/\0(\d+)\0/g, (_match, index) => slots[Number(index)] ?? '');
   }
@@ -54,7 +76,12 @@ export default class HtmlRenderer {
     return `\0${index}\0`;
   }
 
-  static #processTemplate(template: string, vars: Record<string, any>, slots: string[]): string {
+  static #processTemplate(
+    template: string,
+    vars: Record<string, any>,
+    slots: string[],
+    escape: boolean
+  ): string {
     let processed = template;
     let hasChanges = true;
 
@@ -95,7 +122,7 @@ export default class HtmlRenderer {
                   ? { ...vars, ...item, this: item, index }
                   : { ...vars, this: item, index };
 
-              return HtmlRenderer.#replaceVariables(content, itemVars, slots);
+              return HtmlRenderer.#replaceVariables(content, itemVars, slots, escape);
             })
             .join('');
         }
@@ -105,7 +132,7 @@ export default class HtmlRenderer {
     }
 
     // Final pass: replace all variables
-    return HtmlRenderer.#replaceVariables(processed, vars, slots);
+    return HtmlRenderer.#replaceVariables(processed, vars, slots, escape);
   }
 
   static #evaluateCondition(condition: string, vars: Record<string, any>): boolean {
@@ -207,7 +234,12 @@ export default class HtmlRenderer {
     return value;
   }
 
-  static #replaceVariables(template: string, vars: Record<string, any>, slots: string[]): string {
+  static #replaceVariables(
+    template: string,
+    vars: Record<string, any>,
+    slots: string[],
+    escape: boolean
+  ): string {
     // {{{key}}} - raw, unescaped. Only for values the caller knows are safe HTML.
     let processed = template.replace(/\{\{\{([\w.]+)\}\}\}/g, (_, path) =>
       HtmlRenderer.#slot(HtmlRenderer.#lookup(path, vars), slots, false)
@@ -217,7 +249,7 @@ export default class HtmlRenderer {
     // so an interpolated value cannot introduce markup or break out of an
     // attribute.
     processed = processed.replace(/\{\{([\w.]+)\}\}/g, (_, path) =>
-      HtmlRenderer.#slot(HtmlRenderer.#lookup(path, vars), slots, true)
+      HtmlRenderer.#slot(HtmlRenderer.#lookup(path, vars), slots, escape)
     );
 
     return processed;

@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [10.2.0] - 2026-09-09
+
+### Added
+- `HtmlRenderer.render()` and `renderFromFile()` accept a `RenderOptions` argument
+  with an `escape` flag (default `true`). Passing `{ escape: false }` restores
+  pre-8.0.0 interpolation for `{{value}}`.
+
+  8.0.0 made escaping unconditional, which is the right default but breaks a
+  legitimate pattern: composing HTML that the caller has *already* sanitized. An
+  application that runs `HtmlSanitizer.clean()` over rich text and then places the
+  result in an email or page template has no way to express that intent short of
+  editing every `{{value}}` in every template to `{{{value}}}` — impractical when
+  templates are external assets rather than code.
+
+  **This does not re-open the 8.0.0 template-injection hole.** Values still pass
+  through the slot table, so data can never be read back as template syntax
+  regardless of the escape setting; `{{secret}}` supplied as data stays literal and
+  an injected `{{#if}}` is never executed. The flag controls HTML escaping only.
+
+  Use it only for values you have sanitized. For anything user-supplied rendered
+  as text, keep the default.
+
+```typescript
+// Default - escaped, for untrusted values
+HtmlRenderer.render('<p>{{comment}}</p>', { comment: userInput });
+
+// Opt out - for HTML you have already sanitized
+const safe = HtmlSanitizer.clean(richText, ['strong', 'em', 'a']);
+HtmlRenderer.render('<div>{{body}}</div>', { body: safe }, { escape: false });
+```
+
+- Exported the `RenderOptions` type.
+
 ## [10.1.0] - 2026-09-09
 
 Fixes an authorization bypass found while writing integration tests, and closes

@@ -491,4 +491,81 @@ describe('HtmlRenderer', () => {
       expect(result).toBe('<p>A</p><p>B</p><p>C</p>');
     });
   });
+  describe('escape option', () => {
+    it('should escape by default', () => {
+      const result = HtmlRenderer.render('<div>{{body}}</div>', {
+        body: '<strong>bold</strong>',
+      });
+
+      expect(result).toBe('<div>&lt;strong&gt;bold&lt;/strong&gt;</div>');
+    });
+
+    it('should emit values verbatim when escape is false', () => {
+      // For callers composing already-sanitized HTML, e.g. output from
+      // HtmlSanitizer.clean() being placed into an email template.
+      const result = HtmlRenderer.render(
+        '<div>{{body}}</div>',
+        {
+          body: '<strong>bold</strong>',
+        },
+        { escape: false }
+      );
+
+      expect(result).toBe('<div><strong>bold</strong></div>');
+    });
+
+    it('should still block template injection when escape is false', () => {
+      // The slot table protects against this regardless of escaping,
+      // so opting out of escaping does not re-open the 8.0.0 hole.
+      const result = HtmlRenderer.render(
+        '{{#each items}}{{name}}{{/each}}',
+        {
+          secret: 'S3CRET',
+          items: [{ name: '{{secret}}' }],
+        },
+        { escape: false }
+      );
+
+      expect(result).not.toContain('S3CRET');
+      expect(result).toBe('{{secret}}');
+    });
+
+    it('should not execute an injected block when escape is false', () => {
+      const result = HtmlRenderer.render(
+        '{{#each items}}{{name}}{{/each}}',
+        {
+          admin: true,
+          items: [{ name: '{{#if admin}}PWNED{{/if}}' }],
+        },
+        { escape: false }
+      );
+
+      expect(result).toBe('{{#if admin}}PWNED{{/if}}');
+    });
+
+    it('should apply escape: false inside each blocks', () => {
+      const result = HtmlRenderer.render(
+        '{{#each blocks}}{{this}}{{/each}}',
+        {
+          blocks: ['<p>one</p>', '<p>two</p>'],
+        },
+        { escape: false }
+      );
+
+      expect(result).toBe('<p>one</p><p>two</p>');
+    });
+
+    it('should treat escape: true the same as the default', () => {
+      const withOption = HtmlRenderer.render('{{v}}', { v: '<b>x</b>' }, { escape: true });
+      const withDefault = HtmlRenderer.render('{{v}}', { v: '<b>x</b>' });
+
+      expect(withOption).toBe(withDefault);
+    });
+
+    it('should still honour triple braces when escaping is on', () => {
+      const result = HtmlRenderer.render('{{{v}}}', { v: '<b>x</b>' });
+
+      expect(result).toBe('<b>x</b>');
+    });
+  });
 });
