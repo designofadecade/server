@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { createHmac } from 'node:crypto';
 import Router from './Router.ts';
 import Routes from './Routes.ts';
 
@@ -7,6 +8,143 @@ describe('Router', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  describe('JWT authorizer', () => {
+    const SECRET = 'super-secret-signing-key';
+
+    const b64 = (value: unknown): string =>
+      Buffer.from(JSON.stringify(value)).toString('base64url');
+
+    const sign = (claims: Record<string, unknown>, secret = SECRET, alg = 'HS256'): string => {
+      const head = b64({ alg, typ: 'JWT' });
+      const body = b64(claims);
+      const sig = createHmac('sha256', secret).update(`${head}.${body}`).digest('base64url');
+      return `${head}.${body}.${sig}`;
+    };
+
+    /** Token with a well-formed payload but a signature that was never computed. */
+    const forge = (claims: Record<string, unknown>): string =>
+      `${b64({ alg: 'HS256', typ: 'JWT' })}.${b64(claims)}.AAAA`;
+
+    /**
+     * Builds a router whose single route records the authorizer it was given,
+     * so tests can assert on what the verifier actually exposed to handlers.
+     */
+    const makeRouter = (
+      options: Record<string, unknown> = {}
+    ): { router: Router; seen: () => unknown } => {
+      const captured: { value: unknown } = { value: undefined };
+      class CaptureRoutes extends Routes {
+        constructor(r: Router) {
+          super(r);
+          this.addRoute('/whoami', 'GET', async (req: { authorizer?: unknown }) => {
+            captured.value = req.authorizer;
+            return { status: 200, body: 'ok' };
+          });
+        }
+      }
+      const router = new Router({ initRoutes: [CaptureRoutes], ...options });
+      return { router, seen: () => captured.value };
+    };
+
+    const capture = async (
+      built: { router: Router; seen: () => unknown },
+      token: string
+    ): Promise<unknown> => {
+      const req = {
+        url: 'http://localhost:3000/whoami',
+        method: 'GET',
+        headers: { host: 'localhost:3000', authorization: `Bearer ${token}` },
+        on: vi.fn((event: string, cb: () => void) => {
+          if (event === 'end') cb();
+          return req;
+        }),
+      };
+      const res = { setHeader: vi.fn(), end: vi.fn(), statusCode: 0 };
+      await built.router.nodeJSRequest(req as never, res as never);
+      return built.seen();
+    };
+
+    it('should not expose an authorizer when no jwt option is configured', async () => {
+      // Previously the payload was decoded and trusted with no signature check.
+      const built = makeRouter();
+      const body = await capture(built, forge({ sub: 'admin', isAdmin: true }));
+
+      expect(body).toBeNull();
+    });
+
+    it('should reject a forged token when a secret is configured', async () => {
+      const built = makeRouter({ jwt: { secret: SECRET } });
+      const body = await capture(built, forge({ sub: 'admin', isAdmin: true }));
+
+      expect(body).toBeNull();
+    });
+
+    it('should accept a correctly signed token', async () => {
+      const built = makeRouter({ jwt: { secret: SECRET } });
+      const body = await capture(built, sign({ sub: 'user-1', email: 'a@b.c' }));
+
+      expect(body).toEqual({ lambda: { sub: 'user-1', email: 'a@b.c' } });
+    });
+
+    it('should reject a token signed with the wrong secret', async () => {
+      const built = makeRouter({ jwt: { secret: SECRET } });
+      const body = await capture(built, sign({ sub: 'user-1' }, 'not-the-secret'));
+
+      expect(body).toBeNull();
+    });
+
+    it('should reject alg: none', async () => {
+      const built = makeRouter({ jwt: { secret: SECRET } });
+      const head = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url');
+      const body64 = Buffer.from(JSON.stringify({ sub: 'admin' })).toString('base64url');
+      const body = await capture(built, `${head}.${body64}.`);
+
+      expect(body).toBeNull();
+    });
+
+    it('should reject an algorithm outside the allowlist', async () => {
+      const built = makeRouter({ jwt: { secret: SECRET, algorithms: ['HS512'] } });
+      const body = await capture(built, sign({ sub: 'user-1' }));
+
+      expect(body).toBeNull();
+    });
+
+    it('should reject an expired token', async () => {
+      const built = makeRouter({ jwt: { secret: SECRET } });
+      const past = Math.floor(Date.now() / 1000) - 60;
+      const body = await capture(built, sign({ sub: 'user-1', exp: past }));
+
+      expect(body).toBeNull();
+    });
+
+    it('should accept a token that is expired but within the clock tolerance', async () => {
+      const built = makeRouter({ jwt: { secret: SECRET, clockToleranceSec: 300 } });
+      const past = Math.floor(Date.now() / 1000) - 60;
+      const body = await capture(built, sign({ sub: 'user-1', exp: past }));
+
+      expect(body).toEqual({ lambda: { sub: 'user-1', exp: past } });
+    });
+
+    it('should use a custom verifier when supplied', async () => {
+      const verify = vi.fn(async () => ({ sub: 'from-custom-verifier' }));
+      const built = makeRouter({ jwt: { verify } });
+      const body = await capture(built, 'anything.at.all');
+
+      expect(verify).toHaveBeenCalledWith('anything.at.all');
+      expect(body).toEqual({ lambda: { sub: 'from-custom-verifier' } });
+    });
+
+    it('should treat a throwing custom verifier as a rejected token', async () => {
+      const verify = vi.fn(async () => {
+        throw new Error('bad token');
+      });
+      const built = makeRouter({ jwt: { verify } });
+      const body = await capture(built, 'anything.at.all');
+
+      expect(body).toBeNull();
+    });
   });
 
   describe('Constructor', () => {

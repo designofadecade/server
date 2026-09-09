@@ -7,6 +7,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [7.0.0] - 2026-09-09
+
+Closes the last finding from the 6.3.0 security review: JWTs presented on the
+Node.js path were never signature-checked. Fixing this safely requires refusing
+tokens that previous versions accepted, so it lands as a major.
+
+### Security
+- **BREAKING: `request.authorizer` is no longer populated from an unverified token
+  (critical).** `Router.nodeJSRequest()` base64-decoded the JWT payload and exposed
+  it as `request.authorizer.lambda` **without validating the signature**. Any caller
+  could mint a token with arbitrary claims — `sub`, `email`, `isAdmin` — and defeat
+  every check built on them. On AWS Lambda the same structure is filled in by API
+  Gateway *after* validation; the Node.js path had no such guarantee, and the
+  documentation recommended gating admin routes on exactly this value.
+  - Tokens are now verified before their claims are exposed.
+  - With no `jwt` option configured, `request.authorizer` is always `null`.
+  - The algorithm is taken from an allowlist, never from the token's own `alg`
+    header, so `alg: none` and algorithm-confusion forgeries are refused.
+  - `exp` and `nbf` are honoured, with optional `clockToleranceSec` leeway.
+  - Signatures are compared in constant time.
+- Bearer token comparison (`bearerToken`) now uses a constant-time comparison
+  instead of `!==`, so the configured token cannot be recovered from response timing.
+
+### Added
+- `jwt` option on `RouterOptions`:
+  - `jwt.secret` — shared secret for the built-in HMAC verifier
+  - `jwt.algorithms` — accepted algorithms, defaults to `['HS256']` (`HS256`/`HS384`/`HS512`)
+  - `jwt.verify` — custom async verifier for RS256/ES256/JWKS or an existing JWT
+    library; returns claims to accept, `null` to reject
+  - `jwt.clockToleranceSec` — leeway applied to `exp` and `nbf`, defaults to `0`
+- Exported `JwtOptions` and `JwtHmacAlgorithm` types.
+
+### Migration Guide
+
+If you do not read `request.authorizer`, no change is required.
+
+If you do, supply a `jwt` option — otherwise `authorizer` is `null` and any route
+gated on it will deny every request:
+
+```typescript
+// Before (6.x) — claims were trusted without verification
+const router = new Router({ initRoutes: [Routes] });
+
+// After (7.0.0)
+const router = new Router({
+  initRoutes: [Routes],
+  jwt: { secret: process.env.JWT_SECRET },
+});
+
+// Or bring your own verifier for asymmetric keys / JWKS
+const router = new Router({
+  initRoutes: [Routes],
+  jwt: { verify: async (token) => myJwtLibrary.verify(token, publicKey) },
+});
+```
+
+Tokens that were previously accepted **will now be rejected** if they are
+unsigned, signed with a different secret, expired, or use an algorithm outside
+the allowlist. This is the point of the change: treat any resulting failures as
+tokens that should never have been trusted.
+
+### Documentation
+- Rewrote the JWT section of `docs/router.md` to cover verification, the
+  algorithm allowlist and custom verifiers, replacing the 6.3.0 security warning.
+
 ## [6.3.0] - 2026-09-09
 
 Security release. Fixes a cross-site scripting bypass in `HtmlSanitizer`, a
