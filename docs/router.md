@@ -320,8 +320,8 @@ const router = new Router({
 ### Route-Specific Middleware
 
 ```typescript
-// NOTE: req.authorizer is an UNVERIFIED JWT payload on the Node.js path.
-// Verify the token signature in middleware before relying on claims like this.
+// req.authorizer is populated only from a verified token (see JWT Support).
+// It is null when no `jwt` option is configured or verification failed.
 const adminOnly = async (req: RouterRequest) => {
   if (!req.authorizer?.isAdmin) {
     return { status: 403, body: { error: 'Forbidden' } };
@@ -345,20 +345,47 @@ Requests must include: `Authorization: Bearer <token>`
 
 ### JWT Support
 
-> **Security warning — the JWT signature is not verified.**
->
-> On the Node.js path (`nodeJSRequest`), `req.authorizer` is produced by
-> base64-decoding the token payload. **Nothing checks the signature**, so any
-> caller can present an unsigned token with arbitrary claims and choose their own
-> `sub`, `email` or `isAdmin`. Treat `req.authorizer` as *untrusted input*.
->
-> Do **not** use it for authorization decisions (`if (req.authorizer?.isAdmin)`)
-> unless you have verified the signature yourself in middleware first. On AWS
-> Lambda behind API Gateway the equivalent structure is populated *after* the
-> gateway has validated the token, which is the case this mirrors — the Node.js
-> path has no such guarantee.
->
-> Signature verification is planned for the next major release.
+JWTs are verified before their claims are exposed. Configure verification with
+the `jwt` option; without it, `request.authorizer` is always `null`.
+
+```typescript
+// HMAC (HS256 by default) using a shared secret
+const router = new Router({
+  initRoutes: [ProtectedRoutes],
+  jwt: { secret: process.env.JWT_SECRET },
+});
+
+// Restrict the accepted algorithms, and allow 30s of clock skew
+const router = new Router({
+  jwt: {
+    secret: process.env.JWT_SECRET,
+    algorithms: ['HS512'],
+    clockToleranceSec: 30,
+  },
+});
+
+// RS256 / ES256 / JWKS — plug in any verifier you already use
+const router = new Router({
+  jwt: {
+    verify: async (token) => {
+      // return the claims for a valid token, or null to reject it
+      return await myJwtLibrary.verify(token, publicKey);
+    },
+  },
+});
+```
+
+The built-in verifier checks the HMAC signature in constant time, refuses any
+algorithm not on the allowlist (so `alg: none` and algorithm-confusion
+forgeries are rejected), and honours `exp` and `nbf`. A token that fails any of
+these checks leaves `request.authorizer` as `null` rather than raising — guard
+your routes on its presence.
+
+> **Upgrading from 6.x:** earlier versions base64-decoded the token payload and
+> exposed it as `request.authorizer` **without checking the signature**, so any
+> caller could choose their own claims. If you gate routes on `req.authorizer`,
+> you must now pass a `jwt` option or those checks will see `null` and deny
+> every request.
 
 ```typescript
 class ProtectedRoutes extends Routes {

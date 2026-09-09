@@ -1,4 +1,5 @@
 import { IncomingMessage, ServerResponse } from 'http';
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { logger } from '../logger/Logger.js';
 import RouteError from './RouteError.js';
 import Context from '../context/Context.js';
@@ -45,11 +46,40 @@ export interface RouterResponse {
   isBase64Encoded?: boolean;
 }
 
+/** HMAC algorithms verifiable with the built-in verifier. */
+export type JwtHmacAlgorithm = 'HS256' | 'HS384' | 'HS512';
+
+export interface JwtOptions {
+  /**
+   * Shared secret for HMAC verification. Required unless `verify` is supplied.
+   */
+  secret?: string;
+  /**
+   * Algorithms accepted for the built-in verifier. Defaults to `['HS256']`.
+   * The token's own `alg` header is only honoured if it appears here, which is
+   * what prevents algorithm-confusion attacks (including `alg: none`).
+   */
+  algorithms?: JwtHmacAlgorithm[];
+  /**
+   * Custom verifier, for RS256/ES256, JWKS, or an existing JWT library.
+   * Must return the decoded claims for a valid token, or `null`/throw for an
+   * invalid one. Takes precedence over `secret`.
+   */
+  verify?: (token: string) => Promise<Record<string, unknown> | null>;
+  /** Leeway in seconds applied to `exp` and `nbf`. Defaults to 0. */
+  clockToleranceSec?: number;
+}
+
 export interface RouterOptions {
   context?: Context;
   initRoutes?: (new (router: Router, context?: Context) => { routerRoutes: RouteRegistration[] })[];
   bearerToken?: string | null;
   middleware?: RouterMiddleware[];
+  /**
+   * JWT verification for the Node.js path. When omitted, `request.authorizer`
+   * is always `null` — an unverified token is never exposed.
+   */
+  jwt?: JwtOptions;
 }
 
 export type RouterMiddleware = (request: RouterRequest) => Promise<RouterResponse | void>;
@@ -66,6 +96,7 @@ export default class Router {
   };
 
   #bearerToken: string | null = null;
+  #jwt: JwtOptions | null = null;
   #globalMiddleware: RouterMiddleware[] = [];
 
   constructor({
@@ -73,8 +104,10 @@ export default class Router {
     initRoutes = [],
     bearerToken = null,
     middleware = [],
+    jwt,
   }: RouterOptions = {}) {
     this.#bearerToken = bearerToken;
+    this.#jwt = jwt ?? null;
     this.#globalMiddleware = Array.isArray(middleware) ? middleware : [];
 
     if (Array.isArray(initRoutes))
@@ -309,7 +342,7 @@ export default class Router {
         params: {},
         query: Object.fromEntries(requestUrl.searchParams),
         headers: req.headers as Record<string, string | string[] | undefined>,
-        authorizer: this.#createAuthorizerFromHeaders(req.headers),
+        authorizer: await this.#createAuthorizerFromHeaders(req.headers),
         lambdaOptions: lambdaOptions || {},
       });
 
@@ -382,7 +415,118 @@ export default class Router {
     );
   }
 
-  #createAuthorizerFromHeaders(headers: IncomingMessage['headers']): unknown {
+  static #HMAC_HASHES: Record<JwtHmacAlgorithm, string> = {
+    HS256: 'sha256',
+    HS384: 'sha384',
+    HS512: 'sha512',
+  };
+
+  /**
+   * Compares two secrets without leaking their contents through timing.
+   * Both sides are hashed first so that unequal lengths cannot be detected by
+   * timingSafeEqual throwing.
+   */
+  static #secretsMatch(a: string, b: string): boolean {
+    const hashedA = createHash('sha256').update(a, 'utf8').digest();
+    const hashedB = createHash('sha256').update(b, 'utf8').digest();
+    return timingSafeEqual(hashedA, hashedB);
+  }
+
+  /**
+   * Verifies a JWT and returns its claims, or null if the token is not valid.
+   *
+   * SECURITY: earlier versions base64-decoded the payload and exposed it as
+   * `request.authorizer` without checking the signature, so any caller could
+   * mint arbitrary claims (`sub`, `isAdmin`, ...) and defeat any check built on
+   * them. Verification is now mandatory: with no `jwt` option configured this
+   * returns null and `authorizer` stays empty.
+   */
+  async #verifyJwt(token: string): Promise<Record<string, unknown> | null> {
+    const options = this.#jwt;
+    if (!options) return null;
+
+    // A caller-supplied verifier wins, so RS256/ES256 and JWKS stay possible
+    // without this package taking on a JWT dependency.
+    if (options.verify) {
+      try {
+        const claims = await options.verify(token);
+        return claims && typeof claims === 'object' ? claims : null;
+      } catch (error: unknown) {
+        logger.warn('Custom JWT verifier rejected token', {
+          code: 'ROUTER_JWT_VERIFY_FAILED',
+          source: 'Router.verifyJwt',
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return null;
+      }
+    }
+
+    if (!options.secret) return null;
+
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+    const [headerSegment, payloadSegment, signatureSegment] = parts;
+
+    let header: { alg?: unknown };
+    try {
+      header = JSON.parse(Buffer.from(headerSegment, 'base64url').toString('utf8'));
+    } catch {
+      return null;
+    }
+
+    // SECURITY: the algorithm comes from the allowlist, never from the token.
+    // Trusting the token's own `alg` is the classic confusion bypass, and it is
+    // what makes `alg: none` forgeries work.
+    const allowed: JwtHmacAlgorithm[] = options.algorithms ?? ['HS256'];
+    const alg = header?.alg;
+    if (typeof alg !== 'string' || !allowed.includes(alg as JwtHmacAlgorithm)) {
+      logger.warn('JWT rejected: algorithm not allowed', {
+        code: 'ROUTER_JWT_ALG_NOT_ALLOWED',
+        source: 'Router.verifyJwt',
+        alg: typeof alg === 'string' ? alg : typeof alg,
+      });
+      return null;
+    }
+
+    const hash = Router.#HMAC_HASHES[alg as JwtHmacAlgorithm];
+    const expected = createHmac(hash, options.secret)
+      .update(`${headerSegment}.${payloadSegment}`)
+      .digest();
+    const provided = Buffer.from(signatureSegment, 'base64url');
+
+    if (expected.length !== provided.length || !timingSafeEqual(expected, provided)) {
+      logger.warn('JWT rejected: signature mismatch', {
+        code: 'ROUTER_JWT_BAD_SIGNATURE',
+        source: 'Router.verifyJwt',
+      });
+      return null;
+    }
+
+    let claims: Record<string, unknown>;
+    try {
+      claims = JSON.parse(Buffer.from(payloadSegment, 'base64url').toString('utf8'));
+    } catch {
+      return null;
+    }
+    if (!claims || typeof claims !== 'object') return null;
+
+    const now = Math.floor(Date.now() / 1000);
+    const skew = options.clockToleranceSec ?? 0;
+    if (typeof claims.exp === 'number' && now > claims.exp + skew) {
+      logger.warn('JWT rejected: expired', {
+        code: 'ROUTER_JWT_EXPIRED',
+        source: 'Router.verifyJwt',
+      });
+      return null;
+    }
+    if (typeof claims.nbf === 'number' && now + skew < claims.nbf) return null;
+
+    return claims;
+  }
+
+  async #createAuthorizerFromHeaders(headers: IncomingMessage['headers']): Promise<unknown> {
+    if (!this.#jwt) return null;
+
     const authHeader =
       headers?.authorization || (headers as { Authorization?: string })?.Authorization;
     if (!authHeader) return null;
@@ -391,27 +535,12 @@ export default class Router {
     const token = authValue?.replace(/^Bearer\s+/i, '') || '';
     if (!token) return null;
 
-    try {
-      // Decode JWT (base64url decode the payload)
-      const parts = token.split('.');
-      if (parts.length !== 3) return null;
+    const claims = await this.#verifyJwt(token);
+    if (!claims) return null;
 
-      const payload = parts[1];
-      const decoded = Buffer.from(payload, 'base64url').toString('utf8');
-      const claims = JSON.parse(decoded);
-
-      // Return in same structure as Lambda authorizer for consistency
-      return {
-        lambda: claims, // Mimic HTTP API Lambda authorizer structure
-      };
-    } catch (error: unknown) {
-      logger.error('Failed to decode JWT', {
-        code: 'ROUTER_JWT_DECODE_ERROR',
-        source: 'Router.decodeJwt',
-        error: error instanceof Error ? error : String(error),
-      });
-      return null;
-    }
+    // Same shape as an API Gateway Lambda authorizer, which populates this
+    // structure only after the gateway has validated the token.
+    return { lambda: claims };
   }
 
   async #getNodeJSRequestBody(req: IncomingMessage): Promise<unknown> {
@@ -461,7 +590,9 @@ export default class Router {
       const authValue = Array.isArray(authHeader) ? authHeader[0] : authHeader;
       const token = authValue?.replace(/^Bearer\s+/i, '') || '';
 
-      if (token !== this.#bearerToken) {
+      // SECURITY: constant-time comparison so the token cannot be recovered
+      // byte-by-byte from response timing.
+      if (!Router.#secretsMatch(token, this.#bearerToken)) {
         const authError = new Error('Invalid authorization token');
         authError.name = 'AuthorizationError';
         return RouteError.fromError(authError, {
