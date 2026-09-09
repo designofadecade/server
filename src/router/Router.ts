@@ -618,7 +618,14 @@ export default class Router {
     if ('pattern' in route && route.path !== request.path && route.pattern) {
       const match = route.pattern.exec(request.path);
       if (match?.pathname?.groups) {
-        request.params = match.pathname.groups;
+        // An optional pattern segment that did not match yields undefined. Drop
+        // those rather than handing a handler a `params` entry that is typed
+        // string but is actually undefined.
+        request.params = Object.fromEntries(
+          Object.entries(match.pathname.groups).filter(
+            (entry): entry is [string, string] => entry[1] !== undefined
+          )
+        );
       }
     }
 

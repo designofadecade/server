@@ -219,7 +219,10 @@ describe('Router', () => {
   });
 
   describe('Route Matching', () => {
+    let capturedParams: Record<string, string> | undefined;
+
     beforeEach(() => {
+      capturedParams = undefined;
       class TestRoutes extends Routes {
         constructor(router: Router) {
           super(router);
@@ -229,10 +232,41 @@ describe('Router', () => {
             body: request.params,
           }));
           this.addRoute('/wildcard/*', 'GET', async () => ({ status: 200, body: 'wildcard' }));
+          this.addRoute('/files/:name?', 'GET', async (request) => {
+            capturedParams = request.params;
+            return { status: 200, body: request.params };
+          });
         }
       }
 
       router = new Router({ initRoutes: [TestRoutes] });
+    });
+
+    it('should omit an optional segment that did not match', async () => {
+      // URLPattern reports an unmatched optional group as undefined. It used to
+      // be assigned straight into params, which is typed Record<string, string>,
+      // so a handler could read `undefined` where a string was promised.
+      const response = await router.lambdaEvent({
+        requestContext: { http: { method: 'GET', path: '/files' } },
+        headers: {},
+      });
+
+      expect(response.statusCode).toBe(200);
+      // Asserted on the object the handler actually received: JSON.stringify
+      // drops undefined values, so checking the serialised body would pass
+      // whether or not the key was filtered.
+      expect(capturedParams).not.toHaveProperty('name');
+      expect(Object.values(capturedParams ?? {})).not.toContain(undefined);
+    });
+
+    it('should include an optional segment that did match', async () => {
+      const response = await router.lambdaEvent({
+        requestContext: { http: { method: 'GET', path: '/files/report.pdf' } },
+        headers: {},
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(JSON.parse(response.body as string)).toEqual({ name: 'report.pdf' });
     });
 
     it('should match static routes', async () => {
@@ -742,7 +776,7 @@ describe('Router', () => {
   describe('Middleware', () => {
     it('should execute global middleware', async () => {
       const globalMiddleware = vi.fn(async (event: any) => {
-        // eslint-disable-line @typescript-eslint/no-explicit-any
+         
         event.middlewareRan = true;
       });
 
@@ -750,7 +784,7 @@ describe('Router', () => {
         constructor(router: Router) {
           super(router);
           this.addRoute('/test', 'GET', async (event: any) => ({
-            // eslint-disable-line @typescript-eslint/no-explicit-any
+             
             status: 200,
             body: { middlewareRan: event.middlewareRan },
           }));

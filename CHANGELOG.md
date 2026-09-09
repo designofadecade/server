@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [10.0.1] - 2026-09-09
+
+### Removed
+- Deleted the hand-written `URLPattern` type shim (`src/types/urlpattern.d.ts`).
+  `URLPattern` has been a global since Node 24 and is declared by `@types/node` 24,
+  and this package already requires Node >= 24 via `engines`, so the local
+  declaration was redundant. It was never shipped — `.d.ts` inputs are not emitted —
+  so consumers are unaffected beyond needing `@types/node` >= 24, which the Node
+  floor already implies.
+
+### Fixed
+- Route params no longer contain `undefined` values. The removed shim declared
+  pattern groups as `Record<string, string>`, but an optional segment that does not
+  match (`/files/:name?` against `/files`) yields `undefined` at runtime — so a
+  handler could read `undefined` from `request.params` where the types promised a
+  string. `@types/node` types this correctly as `Record<string, string | undefined>`,
+  which surfaced the mismatch; unmatched groups are now omitted from `params`.
+
+  This was latent for as long as the shim existed: the incorrect declaration hid it
+  from the compiler.
+
 ## [10.0.0] - 2026-09-09
 
 Stops the library terminating its host process, and modernises the toolchain.
