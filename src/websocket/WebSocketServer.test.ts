@@ -71,7 +71,11 @@ describe('WebSocketServer', () => {
 
       expect(wsServer).toBeInstanceOf(WebSocketServer);
       expect(wsServer).toBeInstanceOf(EventEmitter);
-      expect(WebSocketServerLibraryMock).toHaveBeenCalledWith({ port: 8080, host: '0.0.0.0' });
+      expect(WebSocketServerLibraryMock).toHaveBeenCalledWith({
+        port: 8080,
+        host: '0.0.0.0',
+        maxPayload: 1024 * 1024,
+      });
 
       consoleSpy.mockRestore();
     });
@@ -81,7 +85,11 @@ describe('WebSocketServer', () => {
 
       wsServer = new WebSocketServer({ port: 9000 });
 
-      expect(WebSocketServerLibraryMock).toHaveBeenCalledWith({ port: 9000, host: '0.0.0.0' });
+      expect(WebSocketServerLibraryMock).toHaveBeenCalledWith({
+        port: 9000,
+        host: '0.0.0.0',
+        maxPayload: 1024 * 1024,
+      });
 
       consoleSpy.mockRestore();
     });
@@ -91,7 +99,11 @@ describe('WebSocketServer', () => {
 
       wsServer = new WebSocketServer({ host: 'localhost' });
 
-      expect(WebSocketServerLibraryMock).toHaveBeenCalledWith({ port: 8080, host: 'localhost' });
+      expect(WebSocketServerLibraryMock).toHaveBeenCalledWith({
+        port: 8080,
+        host: 'localhost',
+        maxPayload: 1024 * 1024,
+      });
 
       consoleSpy.mockRestore();
     });
@@ -101,7 +113,11 @@ describe('WebSocketServer', () => {
 
       wsServer = new WebSocketServer({ port: 9000, host: 'localhost' });
 
-      expect(WebSocketServerLibraryMock).toHaveBeenCalledWith({ port: 9000, host: 'localhost' });
+      expect(WebSocketServerLibraryMock).toHaveBeenCalledWith({
+        port: 9000,
+        host: 'localhost',
+        maxPayload: 1024 * 1024,
+      });
 
       consoleSpy.mockRestore();
     });
@@ -643,6 +659,104 @@ describe('WebSocketServer', () => {
       expect(wsServer).toBeInstanceOf(WebSocketServer);
 
       consoleSpy.mockRestore();
+    });
+  });
+  describe('Security', () => {
+    it('should apply a custom maxPayload', () => {
+      wsServer = new WebSocketServer({ maxPayload: 4096 });
+
+      expect(WebSocketServerLibraryMock).toHaveBeenCalledWith(
+        expect.objectContaining({ maxPayload: 4096 })
+      );
+    });
+
+    it('should reject a non-positive maxPayload', () => {
+      expect(() => new WebSocketServer({ maxPayload: 0 })).toThrow('maxPayload');
+    });
+
+    it('should not install an upgrade gate when none is configured', () => {
+      wsServer = new WebSocketServer();
+
+      expect(WebSocketServerLibraryMock).toHaveBeenCalledWith(
+        expect.not.objectContaining({ verifyClient: expect.anything() })
+      );
+    });
+
+    it('should install an upgrade gate when allowedOrigins is set', () => {
+      wsServer = new WebSocketServer({ allowedOrigins: ['https://app.example.com'] });
+
+      expect(WebSocketServerLibraryMock).toHaveBeenCalledWith(
+        expect.objectContaining({ verifyClient: expect.any(Function) })
+      );
+    });
+
+    describe('upgrade gate', () => {
+      const gate = (options: Record<string, unknown>) => {
+        wsServer = new WebSocketServer(options);
+        const passed = WebSocketServerLibraryMock.mock.calls.at(-1)?.[0] as {
+          verifyClient: (info: unknown, done: (ok: boolean, code?: number) => void) => void;
+        };
+        return (origin?: string): Promise<{ ok: boolean; code?: number }> =>
+          new Promise((resolve) => {
+            passed.verifyClient({ origin, secure: false, req: {} }, (ok, code) =>
+              resolve({ ok, code })
+            );
+          });
+      };
+
+      it('should accept an allowlisted origin', async () => {
+        const check = gate({ allowedOrigins: ['https://app.example.com'] });
+
+        await expect(check('https://app.example.com')).resolves.toEqual({ ok: true });
+      });
+
+      it('should refuse an origin that is not allowlisted', async () => {
+        const check = gate({ allowedOrigins: ['https://app.example.com'] });
+
+        await expect(check('https://evil.example')).resolves.toEqual({ ok: false, code: 403 });
+      });
+
+      it('should refuse an upgrade with no Origin when an allowlist is set', async () => {
+        const check = gate({ allowedOrigins: ['https://app.example.com'] });
+
+        await expect(check(undefined)).resolves.toEqual({ ok: false, code: 403 });
+      });
+
+      it('should consult a custom verifyClient', async () => {
+        const check = gate({ verifyClient: () => false });
+
+        await expect(check('https://anywhere.example')).resolves.toEqual({
+          ok: false,
+          code: 403,
+        });
+      });
+
+      it('should support an async verifyClient', async () => {
+        const check = gate({ verifyClient: async () => true });
+
+        await expect(check('https://anywhere.example')).resolves.toEqual({ ok: true });
+      });
+
+      it('should refuse the upgrade when verifyClient throws', async () => {
+        const check = gate({
+          verifyClient: () => {
+            throw new Error('boom');
+          },
+        });
+
+        await expect(check('https://anywhere.example')).resolves.toEqual({
+          ok: false,
+          code: 403,
+        });
+      });
+
+      it('should apply the origin allowlist before verifyClient', async () => {
+        const verifyClient = vi.fn(() => true);
+        const check = gate({ allowedOrigins: ['https://app.example.com'], verifyClient });
+
+        await expect(check('https://evil.example')).resolves.toEqual({ ok: false, code: 403 });
+        expect(verifyClient).not.toHaveBeenCalled();
+      });
     });
   });
 });

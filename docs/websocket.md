@@ -46,14 +46,43 @@ new WebSocketServer(options?: WebSocketServerOptions)
 **Options:**
 - `port` (number, optional) - Port number (1-65535). Default: `8080`
 - `host` (string, optional) - Host to bind to. Default: `'0.0.0.0'`
+- `maxPayload` (number, optional) - Largest accepted frame in bytes. Default: `1048576` (1 MiB)
+- `allowedOrigins` (string[], optional) - Origins permitted to connect. When set, an
+  upgrade whose `Origin` is missing or unlisted is refused with 403
+- `verifyClient` (function, optional) - Custom upgrade gate receiving
+  `{ origin, secure, req }`; return `false` to refuse. May be async. Runs after the
+  `allowedOrigins` check
 
 **Throws:**
 - `Error` - If port is invalid (not between 1-65535)
+- `Error` - If `maxPayload` is not greater than 0
 
 **Example:**
 ```typescript
 const wss = new WebSocketServer({ port: 8080, host: 'localhost' });
+
+// Restrict to your own front-end and cap frames at 256 KB
+const wss = new WebSocketServer({
+  port: 8080,
+  allowedOrigins: ['https://app.example.com'],
+  maxPayload: 256 * 1024,
+});
+
+// Authenticate the upgrade yourself (e.g. a cookie or token)
+const wss = new WebSocketServer({
+  port: 8080,
+  verifyClient: async ({ req }) => isValidSession(req.headers.cookie),
+});
 ```
+
+> **Why `allowedOrigins` matters.** Browsers do not apply the same-origin policy to
+> WebSockets, and they *do* send cookies with the upgrade request. Without an origin
+> check, any website a user visits can open an authenticated socket to your server on
+> their behalf and read whatever it publishes — cross-site WebSocket hijacking. Set
+> `allowedOrigins` for any server that browsers connect to.
+>
+> Non-browser clients send no `Origin` header at all and are refused when
+> `allowedOrigins` is set; gate those with `verifyClient` instead.
 
 ### Properties
 
@@ -124,6 +153,18 @@ process.on('SIGTERM', async () => {
 ### Events
 
 The WebSocketServer extends EventEmitter and emits the following events:
+
+#### 'connection'
+
+Emitted when a client connects, with the socket and the HTTP upgrade request.
+Use the request to read headers or cookies for per-connection authentication.
+
+```typescript
+wss.on('connection', (ws, req) => {
+  const session = req.headers.cookie;
+  // ...
+});
+```
 
 #### 'message'
 
@@ -300,10 +341,13 @@ Individual client errors are logged but don't affect other connections:
 
 ## Security Considerations
 
-1. **Message Size:** Implement message size limits at application level
-2. **Rate Limiting:** Add rate limiting for message handling
-3. **Authentication:** Validate clients before accepting connections
-4. **Message Validation:** Always validate message payloads
+1. **Message Size:** Frames are capped at 1 MiB by default; tune with `maxPayload`
+2. **Origin:** Set `allowedOrigins` so other sites cannot open sockets on a
+   visitor's behalf
+3. **Authentication:** Validate clients at upgrade time with `verifyClient`, or from
+   the request passed to the `connection` event
+4. **Rate Limiting:** Add rate limiting for message handling
+5. **Message Validation:** Always validate message payloads
 
 ```typescript
 wss.on('message', (parsed) => {

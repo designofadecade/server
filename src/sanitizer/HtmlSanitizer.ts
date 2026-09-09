@@ -107,6 +107,100 @@ const MAX_DECODE_PASSES: number = 3;
  * @class HtmlSanitizer
  */
 export default class HtmlSanitizer {
+  /** Tags removed together with their contents before anything else runs. */
+  static #DANGEROUS_BLOCK_TAGS = [
+    'script',
+    'style',
+    'iframe',
+    'object',
+    'embed',
+    'applet',
+    'link',
+    'base',
+    'meta',
+    'form',
+    'input',
+    'button',
+    'textarea',
+    'select',
+  ] as const;
+
+  /**
+   * Removes `<!-- ... -->` comments in one left-to-right pass.
+   *
+   * SECURITY: `/<!--[\s\S]*?-->/g` restarts its lazy scan at every `<!--`, so
+   * input made of unterminated comment openers runs in O(n^2). An unterminated
+   * comment is left in place, matching the previous behaviour.
+   */
+  static #removeComments(input: string): string {
+    let result = '';
+    let cursor = 0;
+
+    for (;;) {
+      const start = input.indexOf('<!--', cursor);
+      if (start === -1) break;
+
+      result += input.slice(cursor, start);
+
+      const end = input.indexOf('-->', start + 4);
+      if (end === -1) {
+        // No terminator: leave the remainder untouched, as the regex did.
+        return result + input.slice(start);
+      }
+
+      cursor = end + 3;
+    }
+
+    return result + input.slice(cursor);
+  }
+
+  /**
+   * Removes `<tag ...> ... </tag>` blocks in one left-to-right pass.
+   *
+   * SECURITY: the previous `<(script|...)[^>]*>[\s\S]*?<\/\1>` form made the
+   * lazy body scan run to end-of-input for every unclosed opener, so a payload of
+   * repeated `<script>` cost O(n^2) - around 40 seconds of CPU at the 1MB input
+   * cap, enough for one request per second to pin a core. This never rescans a
+   * region it has already passed.
+   */
+  static #removeTagBlocks(input: string, tagNames: readonly string[]): string {
+    const opener = new RegExp(`<(${tagNames.join('|')})\\b[^>]*>`, 'gi');
+    const lowered = input.toLowerCase();
+
+    // Once a closing tag is absent from the remainder it is absent for every
+    // later opener too, so it is never searched for again.
+    const withoutCloser = new Set<string>();
+
+    let result = '';
+    let cursor = 0;
+    let match: RegExpExecArray | null;
+
+    while ((match = opener.exec(input)) !== null) {
+      const tagName = match[1].toLowerCase();
+
+      result += input.slice(cursor, match.index);
+
+      // Default to dropping just the opener when no closer exists.
+      let removeThrough = match.index + match[0].length;
+
+      if (!withoutCloser.has(tagName)) {
+        const closerStart = lowered.indexOf(`</${tagName}`, removeThrough);
+
+        if (closerStart === -1) {
+          withoutCloser.add(tagName);
+        } else {
+          const closerEnd = input.indexOf('>', closerStart);
+          removeThrough = closerEnd === -1 ? input.length : closerEnd + 1;
+        }
+      }
+
+      cursor = removeThrough;
+      opener.lastIndex = cursor;
+    }
+
+    return result + input.slice(cursor);
+  }
+
   // ========================================================================
   // Public API Methods
   // ========================================================================
@@ -294,15 +388,12 @@ export default class HtmlSanitizer {
     // ====================================================================
 
     // Remove HTML comments (could hide malicious content)
-    let cleaned: string = html.replace(/<!--[\s\S]*?-->/g, '');
+    let cleaned: string = HtmlSanitizer.#removeComments(html);
 
     // Remove dangerous tags entirely (including their content)
     // This is a safety net - these should already be blocked, but we remove them
     // in case they appear in the content
-    cleaned = cleaned.replace(
-      /<(script|style|iframe|object|embed|applet|link|base|meta|form|input|button|textarea|select)[^>]*>[\s\S]*?<\/\1>/gi,
-      ''
-    );
+    cleaned = HtmlSanitizer.#removeTagBlocks(cleaned, HtmlSanitizer.#DANGEROUS_BLOCK_TAGS);
 
     // Also remove self-closing dangerous tags
     cleaned = cleaned.replace(
@@ -644,8 +735,8 @@ export default class HtmlSanitizer {
     let stripPass = 0;
     while (text !== previousStripped && stripPass < MAX_DECODE_PASSES) {
       previousStripped = text;
-      text = text.replace(/<!--[\s\S]*?-->/g, '');
-      text = text.replace(/<(script|style)[^>]*>[\s\S]*?<\/\1>/gi, '');
+      text = HtmlSanitizer.#removeComments(text);
+      text = HtmlSanitizer.#removeTagBlocks(text, ['script', 'style']);
       text = text.replace(/<[^>]*>/g, '');
       stripPass++;
     }
