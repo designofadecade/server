@@ -247,6 +247,36 @@ static render(template: string, data: Record<string, any>): string
 
 Render HTML template with data.
 
+**Escaping.** `{{value}}` is HTML-escaped, so interpolated data cannot introduce
+markup or break out of an attribute:
+
+```typescript
+HtmlRenderer.render('<p>{{comment}}</p>', {
+  comment: '<img src=x onerror=alert(1)>'
+});
+// '<p>&lt;img src=x onerror=alert(1)&gt;</p>'
+```
+
+Use the triple-brace form `{{{value}}}` only for values you know are safe HTML —
+never for anything a user supplied:
+
+```typescript
+HtmlRenderer.render('<div>{{{body}}}</div>', { body: '<b>bold</b>' });
+// '<div><b>bold</b></div>'
+```
+
+**Data is never treated as template syntax.** A value containing `{{...}}` is
+rendered literally rather than resolved, so data cannot read other variables or
+introduce a block:
+
+```typescript
+HtmlRenderer.render('{{#each items}}{{name}}{{/each}}', {
+  secret: 'S3CRET',
+  items: [{ name: '{{secret}}' }]
+});
+// '{{secret}}' - not 'S3CRET'
+```
+
 **Parameters:**
 - `template` (string) - HTML template with `{{key}}` placeholders
 - `data` (object) - Data to inject into template

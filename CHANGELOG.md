@@ -7,6 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.0.0] - 2026-09-09
+
+Closes the `HtmlRenderer` findings from the security review. Interpolated values
+are now escaped by default, which changes the output of existing templates, so
+this lands as a major.
+
+### Security
+- **BREAKING: `HtmlRenderer` did not escape interpolated values (high).** `{{value}}`
+  wrote data straight into the output, so any user-supplied string became markup:
+  `render('<p>{{comment}}</p>', { comment: '<img src=x onerror=alert(1)>' })` produced
+  a live element, and a value containing `"` broke out of a surrounding attribute to
+  add its own. Values are now HTML-escaped (`&`, `<`, `>`, `"`, `'`).
+- **BREAKING: data was re-interpreted as template syntax (high).** Values substituted
+  inside `{{#each}}` were written back into the working string, which the render loop
+  and final pass then re-scanned. An array item of `{{secret}}` resolved against the
+  outer scope and leaked a sibling variable, and an item containing `{{#if}}` or
+  `{{#each}}` had that block executed. Substituted values are now parked in a slot
+  table and spliced in only after every construct has been processed, so nothing
+  originating in data is ever read as template syntax.
+- NUL bytes are stripped from templates and from substituted values.
+
+### Added
+- Triple-brace `{{{value}}}` for deliberate raw HTML output. Use it only for values
+  known to be safe; it bypasses escaping but is still immune to template injection.
+
+### Migration Guide
+
+If your templates interpolate plain text, no change is required.
+
+If you relied on `{{value}}` emitting HTML — a rendered fragment, a preformatted
+block — switch those to `{{{value}}}`:
+
+```typescript
+// Before (7.x) - emitted raw HTML
+HtmlRenderer.render('<div>{{body}}</div>', { body: '<b>bold</b>' });
+// '<div><b>bold</b></div>'
+
+// After (8.0.0) - escaped
+// '<div>&lt;b&gt;bold&lt;/b&gt;</div>'
+
+// Use the triple brace where raw HTML is intended
+HtmlRenderer.render('<div>{{{body}}}</div>', { body: '<b>bold</b>' });
+```
+
+Only use `{{{ }}}` for values you control. For anything user-supplied, keep the
+double brace, or sanitize first with `HtmlSanitizer.clean()`.
+
+A value containing `{{...}}` is now rendered literally instead of being resolved.
+If you were using that as a feature — storing template fragments in data and
+letting them expand — it no longer works, and it was reading whatever variable the
+data named.
+
+### Documentation
+- Documented escaping, the raw form, and the template-injection behavior in
+  `docs/utilities.md`.
+
 ## [7.0.0] - 2026-09-09
 
 Closes the last finding from the 6.3.0 security review: JWTs presented on the
