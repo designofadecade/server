@@ -20,7 +20,7 @@ vitest.config.js
 .github/
 .husky/
 .vscode/
-.eslintrc.json
+eslint.config.js
 .prettierrc.json
 .gitignore
 *.log

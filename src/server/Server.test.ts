@@ -149,57 +149,81 @@ describe('Server', () => {
       consoleSpy.mockRestore();
     });
 
-    it('should handle EADDRINUSE error', () => {
-      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-      const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => {});
+    const errorHandlerOf = (): ((error: unknown) => void) =>
+      mockHttpServer.on.mock.calls.find((call: unknown[]) => call[0] === 'error')[1];
 
-      server = new Server({}, mockRequestHandler);
-
-      // Get the error handler
-      const errorHandler = mockHttpServer.on.mock.calls.find((call) => call[0] === 'error')[1];
-
-      // Simulate EADDRINUSE error
-      errorHandler({ code: 'EADDRINUSE' });
-
-      // Should log error with JSON format
-      expect(consoleSpy).toHaveBeenCalled();
-      const logCall = consoleSpy.mock.calls.find((call) => {
+    const loggedMessage = (consoleSpy: { mock: { calls: string[][] } }, message: string) =>
+      consoleSpy.mock.calls.find((call) => {
         try {
           const parsed = JSON.parse(call[0]);
-          return parsed.level === 'ERROR' && parsed.message === 'Port is already in use';
+          return parsed.level === 'ERROR' && parsed.message === message;
         } catch {
           return false;
         }
       });
-      expect(logCall).toBeDefined();
+
+    it('should log and emit on EADDRINUSE without killing the process', () => {
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {}) as never);
+
+      server = new Server({}, mockRequestHandler);
+      const onError = vi.fn();
+      server.on('error', onError);
+
+      errorHandlerOf()({ code: 'EADDRINUSE' });
+
+      expect(loggedMessage(consoleSpy, 'Port is already in use')).toBeDefined();
+      // A library has no business terminating its host process.
+      expect(exitSpy).not.toHaveBeenCalled();
+      expect(onError).toHaveBeenCalledWith({ code: 'EADDRINUSE' });
+
+      consoleSpy.mockRestore();
+      exitSpy.mockRestore();
+    });
+
+    it('should log and emit on a generic error without killing the process', () => {
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {}) as never);
+
+      server = new Server({}, mockRequestHandler);
+      const onError = vi.fn();
+      server.on('error', onError);
+
+      const error = new Error('Generic error');
+      errorHandlerOf()(error);
+
+      expect(loggedMessage(consoleSpy, 'HTTP Server error')).toBeDefined();
+      expect(exitSpy).not.toHaveBeenCalled();
+      expect(onError).toHaveBeenCalledWith(error);
+
+      consoleSpy.mockRestore();
+      exitSpy.mockRestore();
+    });
+
+    it('should exit when exitOnError is set', () => {
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {}) as never);
+
+      server = new Server({ exitOnError: true }, mockRequestHandler);
+      server.on('error', vi.fn());
+
+      errorHandlerOf()({ code: 'EADDRINUSE' });
+
       expect(exitSpy).toHaveBeenCalledWith(1);
 
       consoleSpy.mockRestore();
       exitSpy.mockRestore();
     });
 
-    it('should handle generic errors', () => {
+    it('should surface an unhandled error rather than exiting silently', () => {
       const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-      const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => {});
+      const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {}) as never);
 
       server = new Server({}, mockRequestHandler);
 
-      const errorHandler = mockHttpServer.on.mock.calls.find((call) => call[0] === 'error')[1];
-
-      errorHandler(new Error('Generic error'));
-
-      // Should log error with JSON format
-      expect(consoleSpy).toHaveBeenCalled();
-      const logCall = consoleSpy.mock.calls.find((call) => {
-        try {
-          const parsed = JSON.parse(call[0]);
-          return parsed.level === 'ERROR' && parsed.message === 'HTTP Server error';
-        } catch {
-          return false;
-        }
-      });
-      expect(logCall).toBeDefined();
-      expect(exitSpy).toHaveBeenCalledWith(1);
+      // No 'error' listener: EventEmitter throws, which beats a silent exit(1).
+      expect(() => errorHandlerOf()(new Error('Generic error'))).toThrow('Generic error');
+      expect(exitSpy).not.toHaveBeenCalled();
 
       consoleSpy.mockRestore();
       exitSpy.mockRestore();
