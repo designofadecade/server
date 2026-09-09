@@ -7,6 +7,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [9.0.0] - 2026-09-09
+
+Final release from the security review: closes the sanitizer denial of service and
+the WebSocket hardening gaps. All findings from the review are now addressed.
+
+### Security
+- **`HtmlSanitizer` — quadratic blowup on hostile input (moderate/high).** The
+  dangerous-tag pattern `<(script|...)[^>]*>[\s\S]*?<\/\1>` and the comment pattern
+  `<!--[\s\S]*?-->` restarted their lazy body scan at every unclosed opener, so cost
+  grew with the square of the input. Measured 13ms / 47ms / 165ms / 623ms at 16KB /
+  32KB / 64KB / 128KB, extrapolating to roughly 40 seconds of CPU at the 1MB input
+  cap — one request per second was enough to pin a core. Both are now single
+  left-to-right scans that never re-read a region: the same 128KB input takes 5ms,
+  and the worst case at the full 1MB cap is 38ms.
+- **BREAKING: `WebSocketServer` frames are capped at 1 MiB (moderate).** No size
+  limit was configurable, so `ws`'s 100 MiB default applied and every frame was
+  buffered in full before reaching a handler. A handful of connections sending
+  maximum-sized frames could exhaust memory. The new default matches the 1MB limits
+  already used for request bodies and sanitizer input.
+- **`WebSocketServer` had no origin check (moderate).** Browsers do not apply the
+  same-origin policy to WebSockets and do send cookies with the upgrade, so any site
+  a user visited could open an authenticated socket on their behalf and read what it
+  published — cross-site WebSocket hijacking. There was no hook to prevent it: the
+  constructor took only `port` and `host`, and the `connection` event did not expose
+  the upgrade request.
+
+### Added
+- `WebSocketServer` options:
+  - `maxPayload` — largest accepted frame in bytes, defaults to 1 MiB
+  - `allowedOrigins` — origins permitted to connect; an upgrade with a missing or
+    unlisted `Origin` is refused with 403
+  - `verifyClient` — custom upgrade gate receiving `{ origin, secure, req }`, sync or
+    async, applied after the `allowedOrigins` check
+- `WebSocketServer` now emits `connection` with `(ws, req)`, so consumers can read
+  headers and cookies for their own authentication.
+- Exported `WebSocketServerOptions` and `WebSocketUpgradeInfo` types.
+
+### Migration Guide
+
+Frames larger than 1 MiB are now refused and the connection is closed with code
+1009. If you legitimately send larger messages, raise the cap:
+
+```typescript
+const wss = new WebSocketServer({ port: 8080, maxPayload: 8 * 1024 * 1024 });
+```
+
+The origin allowlist is opt-in, so nothing changes until you set it. For any server
+that browsers connect to, you should:
+
+```typescript
+const wss = new WebSocketServer({
+  port: 8080,
+  allowedOrigins: ['https://app.example.com'],
+});
+```
+
+Note that non-browser clients send no `Origin` header and are refused when
+`allowedOrigins` is set — gate those with `verifyClient` instead.
+
+### Documentation
+- Documented `maxPayload`, `allowedOrigins`, `verifyClient` and the `connection`
+  event in `docs/websocket.md`, replacing the previous advice to handle message
+  size limits and client validation "at application level" — which the API offered
+  no way to do.
+
 ## [8.0.0] - 2026-09-09
 
 Closes the `HtmlRenderer` findings from the security review. Interpolated values

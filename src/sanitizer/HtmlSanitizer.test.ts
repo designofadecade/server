@@ -1246,4 +1246,54 @@ describe('HtmlSanitizer', () => {
       consoleErrorSpy.mockRestore();
     });
   });
+  describe('input scaling (ReDoS)', () => {
+    // The dangerous-tag and comment patterns used a lazy body scan that
+    // restarted at every unclosed opener, so cost grew with the square of the
+    // input: ~0.6s at 128KB and tens of seconds at the 1MB cap, enough for one
+    // request per second to pin a core.
+    const elapsed = (fn: () => void): number => {
+      const start = performance.now();
+      fn();
+      return performance.now() - start;
+    };
+
+    it('should handle many unclosed dangerous openers in linear time', () => {
+      const payload = '<script>'.repeat(16000);
+
+      expect(elapsed(() => HtmlSanitizer.clean(payload, ['p']))).toBeLessThan(1000);
+    });
+
+    it('should handle many unterminated comments in linear time', () => {
+      const payload = '<!--'.repeat(32000);
+
+      expect(elapsed(() => HtmlSanitizer.clean(payload, ['p']))).toBeLessThan(1000);
+    });
+
+    it('should handle unclosed openers in stripAllTags in linear time', () => {
+      const payload = '<script>'.repeat(16000);
+
+      expect(elapsed(() => HtmlSanitizer.stripAllTags(payload))).toBeLessThan(1000);
+    });
+
+    it('should still remove a dangerous block and its contents', () => {
+      const result = HtmlSanitizer.clean('a<script>alert(1)</script>b', ['p']);
+
+      expect(result).not.toContain('alert(1)');
+      expect(result).toContain('a');
+      expect(result).toContain('b');
+    });
+
+    it('should remove a dangerous block whose closing tag has odd casing', () => {
+      const result = HtmlSanitizer.clean('a<ScRiPt>alert(1)</SCRIPT>b', ['p']);
+
+      expect(result).not.toContain('alert(1)');
+    });
+
+    it('should drop an unclosed dangerous opener without eating the rest', () => {
+      const result = HtmlSanitizer.clean('<p>keep</p><script>tail', ['p']);
+
+      expect(result).toContain('keep');
+      expect(result).not.toContain('<script');
+    });
+  });
 });
