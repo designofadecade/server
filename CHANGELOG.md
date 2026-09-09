@@ -22,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 No runtime or public API changes. `ws` is the only production dependency; all other updates are development-only.
 
+Note: the `Security` items above describe **dependency** updates only. This release does not modify any of the library's own runtime code.
+
 ## [6.1.0] - 2026-03-17
 
 ### Added
