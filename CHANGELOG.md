@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [10.2.1] - 2026-09-09
+
+### Documentation
+- Added `MIGRATION.md`, shipped in the published package. It consolidates the
+  6.x -> 10.x upgrade into a single checklist: what changed, a `grep` to find
+  whether it affects you, and the fix. Six releases sit between 6.1.0 and 10.2.0
+  and four are breaking, so reading the changelog entries individually and
+  synthesizing a path is error-prone — this replaces that.
+- Linked the guide from `README.md`.
+
 ## [10.2.0] - 2026-09-09
 
 ### Added

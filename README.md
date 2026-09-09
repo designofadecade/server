@@ -8,6 +8,10 @@
 
 A modern, type-safe Node.js server framework with built-in WebSocket support, routing, static file handling, and middleware capabilities. Built with TypeScript for Node.js 24+.
 
+> **Upgrading from an older major?** See [MIGRATION.md](./MIGRATION.md) for a
+> consolidated 6.x -> 10.x checklist, or [CHANGELOG.md](./CHANGELOG.md) for the
+> full history.
+
 ## Features
 
 - ✅ Full TypeScript support with comprehensive type definitions
