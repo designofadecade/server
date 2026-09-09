@@ -7,6 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [10.0.0] - 2026-09-09
+
+Stops the library terminating its host process, and modernises the toolchain.
+
+### Changed
+- **BREAKING: `Server` and `WebSocketServer` no longer call `process.exit(1)`.** Both
+  killed the host process on any server error — including a plain `EADDRINUSE` —
+  giving the application no chance to log, drain, retry on another port, or fail
+  over. A library has no business making that decision.
+  - Both now emit an `error` event instead. An application that listens decides what
+    to do; one that does not gets an uncaught exception with a stack trace, rather
+    than a silent exit code 1.
+  - `Server` now extends `EventEmitter` to make this possible.
+  - Pass `exitOnError: true` to either constructor to restore the old behaviour.
+
+### Migration Guide
+
+```typescript
+// Handle failures yourself (recommended)
+const server = new Server({ port: 3000 }, handler);
+server.on('error', (error) => {
+  logger.error('server failed', error);
+  process.exit(1); // your call, not the library's
+});
+
+// Or keep the previous fail-fast behaviour
+const server = new Server({ port: 3000, exitOnError: true }, handler);
+```
+
+The same applies to `WebSocketServer`.
+
+### Fixed
+- Two unused catch bindings in `ApiClient` that older lint rules did not report.
+
+### Development
+- Upgraded ESLint 8.57.1 → 10.10.0. ESLint 8 has been end-of-life and unsupported
+  since 2024, so it no longer receives fixes of its own.
+- Migrated `.eslintrc.json` to flat config (`eslint.config.js`); ESLint 9 removed
+  `.eslintrc` support. Replaced the separate `@typescript-eslint/*` packages with
+  the `typescript-eslint` meta-package (v8).
+- Upgraded `lint-staged` 16 → 17 and `@types/node` to 24.13.4.
+- Changed `moduleResolution` from the legacy `node` (node10) to `nodenext`, matching
+  how this ESM package is actually consumed.
+- Fixed the two pre-existing lint errors in test files; `npm run lint` now reports
+  zero errors.
+- Stopped tracking `dist/` in git. It was committed despite being listed in
+  `.gitignore`, so the checked-in build could drift from source. Publishes are
+  unaffected — both `prepublishOnly` and the release workflow build it fresh.
+
+### Note on TypeScript 7
+
+TypeScript was **not** upgraded to 7.x. `typescript-eslint` 8.70.0 (the current
+release) declares a peer range of `>=4.8.4 <6.1.0`, so TypeScript 7 and a working
+lint setup are mutually exclusive today. Since ESLint 8 reaching end-of-life was the
+actual security concern and TypeScript 7 offers none, the lint toolchain won.
+TypeScript stays on 5.9.3 until `typescript-eslint` supports 7.x.
+
 ## [9.0.0] - 2026-09-09
 
 Final release from the security review: closes the sanitizer denial of service and

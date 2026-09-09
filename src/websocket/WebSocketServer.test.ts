@@ -200,53 +200,81 @@ describe('WebSocketServer', () => {
       consoleSpy.mockRestore();
     });
 
-    it('should handle EADDRINUSE error', () => {
-      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-      const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => {});
+    const wsErrorHandler = (): ((error: unknown) => void) =>
+      mockWss.on.mock.calls.find((call: unknown[]) => call[0] === 'error')[1];
 
-      wsServer = new WebSocketServer({ port: 8080 });
-
-      const errorHandler = mockWss.on.mock.calls.find((call) => call[0] === 'error')[1];
-      errorHandler({ code: 'EADDRINUSE' });
-
-      // Check that console.log was called with JSON containing the error
-      expect(consoleSpy).toHaveBeenCalled();
-      const logCall = consoleSpy.mock.calls.find((call) => {
+    const wsLogged = (consoleSpy: { mock: { calls: string[][] } }, message: string) =>
+      consoleSpy.mock.calls.find((call) => {
         try {
           const parsed = JSON.parse(call[0]);
-          return parsed.level === 'ERROR' && parsed.message === 'WebSocket port is already in use';
+          return parsed.level === 'ERROR' && parsed.message === message;
         } catch {
           return false;
         }
       });
-      expect(logCall).toBeDefined();
+
+    it('should log and emit on EADDRINUSE without killing the process', () => {
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {}) as never);
+
+      wsServer = new WebSocketServer({ port: 8080 });
+      const onError = vi.fn();
+      wsServer.on('error', onError);
+
+      wsErrorHandler()({ code: 'EADDRINUSE' });
+
+      expect(wsLogged(consoleSpy, 'WebSocket port is already in use')).toBeDefined();
+      // A library has no business terminating its host process.
+      expect(exitSpy).not.toHaveBeenCalled();
+      expect(onError).toHaveBeenCalledWith({ code: 'EADDRINUSE' });
+
+      consoleSpy.mockRestore();
+      exitSpy.mockRestore();
+    });
+
+    it('should log and emit on a generic error without killing the process', () => {
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {}) as never);
+
+      wsServer = new WebSocketServer();
+      const onError = vi.fn();
+      wsServer.on('error', onError);
+
+      const error = new Error('Generic error');
+      wsErrorHandler()(error);
+
+      expect(wsLogged(consoleSpy, 'WebSocket Server error')).toBeDefined();
+      expect(exitSpy).not.toHaveBeenCalled();
+      expect(onError).toHaveBeenCalledWith(error);
+
+      consoleSpy.mockRestore();
+      exitSpy.mockRestore();
+    });
+
+    it('should exit when exitOnError is set', () => {
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {}) as never);
+
+      wsServer = new WebSocketServer({ exitOnError: true });
+      wsServer.on('error', vi.fn());
+
+      wsErrorHandler()({ code: 'EADDRINUSE' });
+
       expect(exitSpy).toHaveBeenCalledWith(1);
 
       consoleSpy.mockRestore();
       exitSpy.mockRestore();
     });
 
-    it('should handle generic errors', () => {
+    it('should surface an unhandled error rather than exiting silently', () => {
       const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-      const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => {});
+      const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {}) as never);
 
       wsServer = new WebSocketServer();
 
-      const errorHandler = mockWss.on.mock.calls.find((call) => call[0] === 'error')[1];
-      errorHandler(new Error('Generic error'));
-
-      // Check that console.log was called with JSON containing the error
-      expect(consoleSpy).toHaveBeenCalled();
-      const logCall = consoleSpy.mock.calls.find((call) => {
-        try {
-          const parsed = JSON.parse(call[0]);
-          return parsed.level === 'ERROR' && parsed.message === 'WebSocket Server error';
-        } catch {
-          return false;
-        }
-      });
-      expect(logCall).toBeDefined();
-      expect(exitSpy).toHaveBeenCalledWith(1);
+      // No 'error' listener: EventEmitter throws, which beats a silent exit(1).
+      expect(() => wsErrorHandler()(new Error('Generic error'))).toThrow('Generic error');
+      expect(exitSpy).not.toHaveBeenCalled();
 
       consoleSpy.mockRestore();
       exitSpy.mockRestore();

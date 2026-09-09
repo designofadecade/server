@@ -38,6 +38,15 @@ export interface WebSocketServerOptions {
    * `allowedOrigins` check when both are supplied.
    */
   verifyClient?: (info: WebSocketUpgradeInfo) => boolean | Promise<boolean>;
+  /**
+   * Terminate the process with `process.exit(1)` when the server errors.
+   * Defaults to false.
+   *
+   * A library has no business deciding to kill its host process. Errors are
+   * emitted as an `error` event instead; set this only if you want the old
+   * fail-fast behaviour.
+   */
+  exitOnError?: boolean;
 }
 
 /** Frames larger than this are rejected unless `maxPayload` overrides it. */
@@ -48,6 +57,7 @@ export default class WebSocketServer extends EventEmitter {
 
   #allowedOrigins: string[] | null = null;
   #verifyClient: WebSocketServerOptions['verifyClient'] = undefined;
+  #exitOnError: boolean = false;
 
   constructor({
     port = 8080,
@@ -55,6 +65,7 @@ export default class WebSocketServer extends EventEmitter {
     maxPayload = DEFAULT_MAX_PAYLOAD,
     allowedOrigins,
     verifyClient,
+    exitOnError = false,
   }: WebSocketServerOptions = {}) {
     super();
 
@@ -69,6 +80,7 @@ export default class WebSocketServer extends EventEmitter {
 
     this.#allowedOrigins = allowedOrigins ?? null;
     this.#verifyClient = verifyClient;
+    this.#exitOnError = exitOnError;
 
     this.#init(port, host, maxPayload);
   }
@@ -149,15 +161,23 @@ export default class WebSocketServer extends EventEmitter {
           port,
           error,
         });
+      } else {
+        logger.error('WebSocket Server error', {
+          code: 'WEBSOCKET_SERVER_ERROR',
+          source: 'WebSocketServer.init',
+          error,
+          errorCode: error.code,
+        });
+      }
+
+      if (this.#exitOnError) {
         process.exit(1);
       }
-      logger.error('WebSocket Server error', {
-        code: 'WEBSOCKET_SERVER_ERROR',
-        source: 'WebSocketServer.init',
-        error,
-        errorCode: error.code,
-      });
-      process.exit(1);
+
+      // Standard EventEmitter semantics: an application that listens decides
+      // what to do, and one that does not gets an uncaught exception with a
+      // stack trace rather than a silent exit code 1.
+      this.emit('error', error);
     });
 
     this.#wss.on('listening', () => {
