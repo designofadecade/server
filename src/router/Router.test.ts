@@ -324,6 +324,32 @@ describe('Router', () => {
       expect(mockRes.end).toHaveBeenCalled();
     });
 
+    it('should reject a malformed Host header with 400 instead of throwing', async () => {
+      // A Host of 'a b' makes the URL constructor throw. This used to happen
+      // outside the try block, so the rejection escaped nodeJSRequest() and
+      // could terminate the process under Node's unhandled-rejection policy.
+      mockReq.headers.host = 'a b';
+      mockReq.on.mockImplementation((event: string, callback: () => void) => {
+        if (event === 'end') callback();
+        return mockReq;
+      });
+
+      await expect(router.nodeJSRequest(mockReq, mockRes)).resolves.toBeUndefined();
+
+      expect(mockRes.statusCode).toBe(400);
+      expect(mockRes.end).toHaveBeenCalled();
+    });
+
+    it('should tolerate a missing Host header', async () => {
+      delete mockReq.headers.host;
+      mockReq.on.mockImplementation((event: string, callback: () => void) => {
+        if (event === 'end') callback();
+        return mockReq;
+      });
+
+      await expect(router.nodeJSRequest(mockReq, mockRes)).resolves.toBeUndefined();
+    });
+
     it('should handle CORS when enabled', async () => {
       mockReq.headers.origin = 'http://example.com';
       mockReq.on.mockImplementation((event: string, callback: () => void) => {
@@ -333,13 +359,51 @@ describe('Router', () => {
 
       await router.nodeJSRequest(mockReq, mockRes, { cors: true });
 
-      expect(mockRes.setHeader).toHaveBeenCalledWith(
-        'Access-Control-Allow-Origin',
-        'http://example.com'
+      // `cors: true` is anonymous: a wildcard origin and no credentials.
+      expect(mockRes.setHeader).toHaveBeenCalledWith('Access-Control-Allow-Origin', '*');
+      expect(mockRes.setHeader).not.toHaveBeenCalledWith(
+        'Access-Control-Allow-Credentials',
+        'true'
       );
       expect(mockRes.setHeader).toHaveBeenCalledWith(
         'Access-Control-Allow-Methods',
         expect.any(String)
+      );
+    });
+
+    it('should grant credentials to an allowlisted origin', async () => {
+      mockReq.headers.origin = 'https://app.example.com';
+      mockReq.on.mockImplementation((event: string, callback: () => void) => {
+        if (event === 'end') callback();
+        return mockReq;
+      });
+
+      await router.nodeJSRequest(mockReq, mockRes, { cors: ['https://app.example.com'] });
+
+      expect(mockRes.setHeader).toHaveBeenCalledWith(
+        'Access-Control-Allow-Origin',
+        'https://app.example.com'
+      );
+      expect(mockRes.setHeader).toHaveBeenCalledWith('Access-Control-Allow-Credentials', 'true');
+      expect(mockRes.setHeader).toHaveBeenCalledWith('Vary', 'Origin');
+    });
+
+    it('should not reflect an origin that is not on the allowlist', async () => {
+      mockReq.headers.origin = 'https://evil.example';
+      mockReq.on.mockImplementation((event: string, callback: () => void) => {
+        if (event === 'end') callback();
+        return mockReq;
+      });
+
+      await router.nodeJSRequest(mockReq, mockRes, { cors: ['https://app.example.com'] });
+
+      expect(mockRes.setHeader).not.toHaveBeenCalledWith(
+        'Access-Control-Allow-Origin',
+        'https://evil.example'
+      );
+      expect(mockRes.setHeader).not.toHaveBeenCalledWith(
+        'Access-Control-Allow-Credentials',
+        'true'
       );
     });
 
