@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.2.0] - 2026-09-09
+
+### Security
+- Updated `ws` to `^8.21.3` (from `^8.16.0`), picking up fixes for two high-severity advisories:
+  - Uninitialized memory disclosure ([GHSA-58qx-3vcg-4xpx](https://github.com/advisories/GHSA-58qx-3vcg-4xpx))
+  - Memory exhaustion DoS from tiny fragments and data chunks ([GHSA-96hv-2xvq-fx4p](https://github.com/advisories/GHSA-96hv-2xvq-fx4p))
+  - This raises the minimum `ws` version for consumers so the patched release cannot be deduped away by an older constraint elsewhere in the dependency tree.
+- Resolved all remaining development-time advisories (`brace-expansion`, `picomatch`, `postcss`, `yaml`, `fflate`, `esbuild`/`vite` via the vitest upgrade). `npm audit` now reports 0 vulnerabilities, down from 16.
+
+### Changed
+- Upgraded `vitest`, `@vitest/coverage-v8` and `@vitest/ui` to `^5.0.0` (from `^2.0.0`)
+- Upgraded `@types/node` to `^24.13.3` (from `^20.11.0`) to match the `engines.node >= 24.0.0` requirement and satisfy vitest 5's peer range
+
+No runtime or public API changes. `ws` is the only production dependency; all other updates are development-only.
+
 ## [6.1.0] - 2026-03-17
 
 ### Added
