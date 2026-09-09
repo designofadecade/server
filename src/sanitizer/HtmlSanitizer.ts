@@ -314,161 +314,178 @@ export default class HtmlSanitizer {
     // Step 7: Process HTML Tags
     // ====================================================================
 
-    cleaned = cleaned.replace(
-      /<\/?([a-z][a-z0-9]*)\b[^>]*>/gi,
-      (match: string, tagName: string): string => {
-        const lowerTagName: string = tagName.toLowerCase();
+    // SECURITY: Output tags are emitted only by the builder below. Any '<'
+    // that is not the start of a recognised tag is escaped to '&lt;'.
+    // Deleting tags with a plain string replace left stray '<' in the text,
+    // so removing one tag could splice its neighbours into a brand-new tag
+    // that was never re-inspected - e.g. '<<z>img onerror=...>' collapsing
+    // into a live '<img onerror=...>'.
+    const processTag = (match: string, tagName: string): string => {
+      const lowerTagName: string = tagName.toLowerCase();
 
-        // Extra safety: block dangerous tags even if they somehow got through
-        if (NEVER_ALLOWED_TAGS.has(lowerTagName)) {
-          logger.warn('Dangerous tag removed from content', {
-            code: 'SANITIZER_DANGEROUS_TAG_REMOVED',
-            source: 'HtmlSanitizer.clean',
-            tag: lowerTagName,
-          });
-          return '';
-        }
+      // Extra safety: block dangerous tags even if they somehow got through
+      if (NEVER_ALLOWED_TAGS.has(lowerTagName)) {
+        logger.warn('Dangerous tag removed from content', {
+          code: 'SANITIZER_DANGEROUS_TAG_REMOVED',
+          source: 'HtmlSanitizer.clean',
+          tag: lowerTagName,
+        });
+        return '';
+      }
 
-        // Remove tags not in the allowed list (preserve text content)
-        if (!validAllowedTags.includes(lowerTagName)) {
-          return '';
-        }
+      // Remove tags not in the allowed list (preserve text content)
+      if (!validAllowedTags.includes(lowerTagName)) {
+        return '';
+      }
 
-        // Handle closing tags - always allow if opening tag is allowed
-        if (match.startsWith('</')) {
-          return `</${lowerTagName}>`;
-        }
+      // Handle closing tags - always allow if opening tag is allowed
+      if (match.startsWith('</')) {
+        return `</${lowerTagName}>`;
+      }
 
-        // Detect self-closing tags
-        const isSelfClosing: boolean = match.endsWith('/>');
+      // Detect self-closing tags
+      const isSelfClosing: boolean = match.endsWith('/>');
 
-        // Extract and process attributes if allowedAttributes is specified
-        const preservedAttributes: string[] = [];
-        const allowedAttrsForTag = normalizedAllowedAttributes?.[lowerTagName];
+      // Extract and process attributes if allowedAttributes is specified
+      const preservedAttributes: string[] = [];
+      const allowedAttrsForTag = normalizedAllowedAttributes?.[lowerTagName];
 
-        if (allowedAttrsForTag) {
-          // Extract all attributes from the tag
-          const attrRegex = /([a-z][a-z0-9-]*)\s*=\s*["']([^"']*)["']/gi;
-          let attrMatch: RegExpExecArray | null;
+      if (allowedAttrsForTag) {
+        // Extract all attributes from the tag
+        const attrRegex = /([a-z][a-z0-9-]*)\s*=\s*["']([^"']*)["']/gi;
+        let attrMatch: RegExpExecArray | null;
 
-          while ((attrMatch = attrRegex.exec(match)) !== null) {
-            const attrName = attrMatch[1].toLowerCase();
-            const attrValue = attrMatch[2];
+        while ((attrMatch = attrRegex.exec(match)) !== null) {
+          const attrName = attrMatch[1].toLowerCase();
+          const attrValue = attrMatch[2];
 
-            // Skip event handlers (onclick, onerror, etc.)
-            if (attrName.startsWith('on')) {
-              logger.warn('Event handler attribute removed', {
-                code: 'SANITIZER_EVENT_HANDLER_REMOVED',
-                source: 'HtmlSanitizer.clean',
-                attribute: attrName,
-              });
-              continue;
-            }
-
-            // Check if this attribute is allowed for this tag
-            if (allowedAttrsForTag.has(attrName)) {
-              // Special handling for href attribute - must validate URL
-              if (attrName === 'href') {
-                const url = attrValue.trim();
-                if (this.isValidUrl(url)) {
-                  const escapedUrl = this.sanitizeForAttribute(url);
-                  preservedAttributes.push(`href="${escapedUrl}"`);
-                } else {
-                  logger.warn('Unsafe URL removed from href attribute', {
-                    code: 'SANITIZER_UNSAFE_HREF',
-                    source: 'HtmlSanitizer.clean',
-                    url,
-                  });
-                }
-              }
-              // Special handling for style attribute - validate CSS
-              else if (attrName === 'style') {
-                const sanitizedStyle = this.sanitizeStyleAttribute(attrValue);
-                if (sanitizedStyle) {
-                  preservedAttributes.push(`style="${sanitizedStyle}"`);
-                }
-              }
-              // For other allowed attributes, sanitize the value
-              else {
-                const escapedValue = this.sanitizeForAttribute(attrValue);
-                preservedAttributes.push(`${attrName}="${escapedValue}"`);
-              }
-            }
+          // Skip event handlers (onclick, onerror, etc.)
+          if (attrName.startsWith('on')) {
+            logger.warn('Event handler attribute removed', {
+              code: 'SANITIZER_EVENT_HANDLER_REMOVED',
+              source: 'HtmlSanitizer.clean',
+              attribute: attrName,
+            });
+            continue;
           }
-        }
 
-        // Special handling for anchor tags - validate URLs and add security attributes
-        if (lowerTagName === 'a') {
-          // If we haven't already handled href through allowedAttributes, handle it the old way
-          if (!allowedAttrsForTag?.has('href')) {
-            const hrefMatch: RegExpMatchArray | null = match.match(/href\s*=\s*["']([^"']*)["']/i);
-            if (hrefMatch && hrefMatch[1]) {
-              const url: string = hrefMatch[1].trim();
-
-              // Validate URL for security
+          // Check if this attribute is allowed for this tag
+          if (allowedAttrsForTag.has(attrName)) {
+            // Special handling for href attribute - must validate URL
+            if (attrName === 'href') {
+              const url = attrValue.trim();
               if (this.isValidUrl(url)) {
-                // Escape the URL to prevent attribute injection
-                const escapedUrl: string = this.sanitizeForAttribute(url);
+                const escapedUrl = this.sanitizeForAttribute(url);
                 preservedAttributes.push(`href="${escapedUrl}"`);
-
-                // SECURITY: Add target="_blank" and rel="noopener noreferrer" for external links
-                // This prevents tab nabbing attacks and ensures the new page can't access window.opener
-                const isExternal = /^https?:\/\//i.test(url);
-                if (isExternal) {
-                  // Only add these if not already in preservedAttributes
-                  if (!preservedAttributes.some((attr) => attr.startsWith('target='))) {
-                    preservedAttributes.push('target="_blank"');
-                  }
-                  if (!preservedAttributes.some((attr) => attr.startsWith('rel='))) {
-                    preservedAttributes.push('rel="noopener noreferrer"');
-                  }
-                }
               } else {
-                // Invalid URL - remove href but keep anchor tag
-                logger.warn('Unsafe URL removed from anchor tag', {
-                  code: 'SANITIZER_UNSAFE_URL',
+                logger.warn('Unsafe URL removed from href attribute', {
+                  code: 'SANITIZER_UNSAFE_HREF',
                   source: 'HtmlSanitizer.clean',
                   url,
                 });
               }
             }
-          } else {
-            // If href was handled through allowedAttributes, still add security attributes for external links
-            const hrefAttr = preservedAttributes.find((attr) => attr.startsWith('href='));
-            if (hrefAttr) {
-              const urlMatch = hrefAttr.match(/href="([^"]*)"/);
-              if (urlMatch) {
-                const url = urlMatch[1];
-                const isExternal = /^https?:\/\//i.test(url);
-                if (isExternal) {
-                  if (!preservedAttributes.some((attr) => attr.startsWith('target='))) {
-                    preservedAttributes.push('target="_blank"');
-                  }
-                  if (!preservedAttributes.some((attr) => attr.startsWith('rel='))) {
-                    preservedAttributes.push('rel="noopener noreferrer"');
-                  }
+            // Special handling for style attribute - validate CSS
+            else if (attrName === 'style') {
+              const sanitizedStyle = this.sanitizeStyleAttribute(attrValue);
+              if (sanitizedStyle) {
+                preservedAttributes.push(`style="${sanitizedStyle}"`);
+              }
+            }
+            // For other allowed attributes, sanitize the value
+            else {
+              const escapedValue = this.sanitizeForAttribute(attrValue);
+              preservedAttributes.push(`${attrName}="${escapedValue}"`);
+            }
+          }
+        }
+      }
+
+      // Special handling for anchor tags - validate URLs and add security attributes
+      if (lowerTagName === 'a') {
+        // If we haven't already handled href through allowedAttributes, handle it the old way
+        if (!allowedAttrsForTag?.has('href')) {
+          const hrefMatch: RegExpMatchArray | null = match.match(/href\s*=\s*["']([^"']*)["']/i);
+          if (hrefMatch && hrefMatch[1]) {
+            const url: string = hrefMatch[1].trim();
+
+            // Validate URL for security
+            if (this.isValidUrl(url)) {
+              // Escape the URL to prevent attribute injection
+              const escapedUrl: string = this.sanitizeForAttribute(url);
+              preservedAttributes.push(`href="${escapedUrl}"`);
+
+              // SECURITY: Add target="_blank" and rel="noopener noreferrer" for external links
+              // This prevents tab nabbing attacks and ensures the new page can't access window.opener
+              const isExternal = /^https?:\/\//i.test(url);
+              if (isExternal) {
+                // Only add these if not already in preservedAttributes
+                if (!preservedAttributes.some((attr) => attr.startsWith('target='))) {
+                  preservedAttributes.push('target="_blank"');
+                }
+                if (!preservedAttributes.some((attr) => attr.startsWith('rel='))) {
+                  preservedAttributes.push('rel="noopener noreferrer"');
+                }
+              }
+            } else {
+              // Invalid URL - remove href but keep anchor tag
+              logger.warn('Unsafe URL removed from anchor tag', {
+                code: 'SANITIZER_UNSAFE_URL',
+                source: 'HtmlSanitizer.clean',
+                url,
+              });
+            }
+          }
+        } else {
+          // If href was handled through allowedAttributes, still add security attributes for external links
+          const hrefAttr = preservedAttributes.find((attr) => attr.startsWith('href='));
+          if (hrefAttr) {
+            const urlMatch = hrefAttr.match(/href="([^"]*)"/);
+            if (urlMatch) {
+              const url = urlMatch[1];
+              const isExternal = /^https?:\/\//i.test(url);
+              if (isExternal) {
+                if (!preservedAttributes.some((attr) => attr.startsWith('target='))) {
+                  preservedAttributes.push('target="_blank"');
+                }
+                if (!preservedAttributes.some((attr) => attr.startsWith('rel='))) {
+                  preservedAttributes.push('rel="noopener noreferrer"');
                 }
               }
             }
           }
         }
-
-        // Handle self-closing tags (br, hr, img)
-        if (isSelfClosing && ['br', 'hr', 'img'].includes(lowerTagName)) {
-          const attrString =
-            preservedAttributes.length > 0 ? ' ' + preservedAttributes.join(' ') : '';
-          return `<${lowerTagName}${attrString} />`;
-        }
-
-        // Build the tag with preserved attributes
-        if (preservedAttributes.length > 0) {
-          return `<${lowerTagName} ${preservedAttributes.join(' ')}>`;
-        }
-
-        // For all other allowed tags, return simple opening tag
-        return `<${lowerTagName}>`;
       }
-    );
+
+      // Handle self-closing tags (br, hr, img)
+      if (isSelfClosing && ['br', 'hr', 'img'].includes(lowerTagName)) {
+        const attrString =
+          preservedAttributes.length > 0 ? ' ' + preservedAttributes.join(' ') : '';
+        return `<${lowerTagName}${attrString} />`;
+      }
+
+      // Build the tag with preserved attributes
+      if (preservedAttributes.length > 0) {
+        return `<${lowerTagName} ${preservedAttributes.join(' ')}>`;
+      }
+
+      // For all other allowed tags, return simple opening tag
+      return `<${lowerTagName}>`;
+    };
+
+    const tagPattern = /<\/?([a-z][a-z0-9]*)\b[^>]*>/gi;
+    let rebuilt = '';
+    let cursor = 0;
+    let tagMatch: RegExpExecArray | null;
+
+    while ((tagMatch = tagPattern.exec(cleaned)) !== null) {
+      rebuilt += cleaned.slice(cursor, tagMatch.index).replace(/</g, '&lt;');
+      rebuilt += processTag(tagMatch[0], tagMatch[1]);
+      cursor = tagPattern.lastIndex;
+    }
+
+    rebuilt += cleaned.slice(cursor).replace(/</g, '&lt;');
+    cleaned = rebuilt;
 
     // ====================================================================
     // Step 8: Final Security Check
@@ -609,17 +626,34 @@ export default class HtmlSanitizer {
       html = html.substring(0, MAX_INPUT_SIZE);
     }
 
-    // Remove HTML comments
-    let text: string = html.replace(/<!--[\s\S]*?-->/g, '');
+    // SECURITY: Entities are decoded BEFORE tags are stripped. Decoding
+    // afterwards meant '&lt;img src=x onerror=alert(1)&gt;' survived the strip
+    // as inert text and was then turned into a live tag in the returned value.
+    let text: string = html;
+    let previousText = '';
+    let decodePass = 0;
+    while (text !== previousText && decodePass < MAX_DECODE_PASSES) {
+      previousText = text;
+      text = this.decodeHtmlEntities(text);
+      decodePass++;
+    }
 
-    // Remove script and style tags with content
-    text = text.replace(/<(script|style)[^>]*>[\s\S]*?<\/\1>/gi, '');
+    // Strip comments, script/style blocks and tags, repeating until stable so
+    // that removing one construct cannot leave a usable one behind.
+    let previousStripped = '';
+    let stripPass = 0;
+    while (text !== previousStripped && stripPass < MAX_DECODE_PASSES) {
+      previousStripped = text;
+      text = text.replace(/<!--[\s\S]*?-->/g, '');
+      text = text.replace(/<(script|style)[^>]*>[\s\S]*?<\/\1>/gi, '');
+      text = text.replace(/<[^>]*>/g, '');
+      stripPass++;
+    }
 
-    // Remove all HTML tags
-    text = text.replace(/<[^>]*>/g, '');
-
-    // Decode HTML entities
-    text = this.decodeHtmlEntities(text);
+    // Any angle bracket still present is literal text, never markup. Escape it
+    // so the result cannot form a tag - clean() returns this value directly
+    // when no tags are allowed.
+    text = text.replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
     // Clean up extra whitespace
     text = text.replace(/\s+/g, ' ').trim();

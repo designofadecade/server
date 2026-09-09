@@ -229,17 +229,42 @@ export default class Router {
   async nodeJSRequest(
     req: IncomingMessage,
     res: ServerResponse,
-    { cors, lambdaOptions }: { cors?: boolean; lambdaOptions?: Record<string, unknown> } = {}
+    {
+      cors,
+      lambdaOptions,
+    }: { cors?: boolean | string[]; lambdaOptions?: Record<string, unknown> } = {}
   ): Promise<void> {
     if (cors) {
-      const origin = req.headers.origin || '*';
-      res.setHeader('Access-Control-Allow-Origin', origin);
+      // SECURITY: Reflecting an arbitrary Origin alongside
+      // Access-Control-Allow-Credentials lets any site make cookie-authenticated
+      // cross-origin calls and read the response. Credentials are therefore only
+      // granted to origins on an explicit allowlist; `cors: true` falls back to
+      // an anonymous wildcard, which browsers already refuse to pair with
+      // credentials.
+      const requestOrigin = req.headers.origin;
+
+      if (Array.isArray(cors)) {
+        // Vary on Origin so caches never serve one origin's response to another.
+        res.setHeader('Vary', 'Origin');
+        if (requestOrigin && cors.includes(requestOrigin)) {
+          res.setHeader('Access-Control-Allow-Origin', requestOrigin);
+          res.setHeader('Access-Control-Allow-Credentials', 'true');
+        } else if (requestOrigin) {
+          logger.warn('Blocked cross-origin request from non-allowlisted origin', {
+            code: 'ROUTER_CORS_ORIGIN_BLOCKED',
+            source: 'Router.nodeJSRequest',
+            origin: requestOrigin,
+          });
+        }
+      } else {
+        res.setHeader('Access-Control-Allow-Origin', '*');
+      }
+
       res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
       res.setHeader(
         'Access-Control-Allow-Headers',
         'Content-Type, Authorization, X-Requested-With'
       );
-      res.setHeader('Access-Control-Allow-Credentials', 'true');
       res.setHeader('Access-Control-Max-Age', '86400');
     }
 
@@ -249,7 +274,29 @@ export default class Router {
       return;
     }
 
-    const requestUrl = new URL(req.url!, `http://${req.headers.host}`);
+    // SECURITY: A malformed Host header (e.g. 'a b') makes the URL constructor
+    // throw. This used to sit outside the try below, so the rejection escaped
+    // nodeJSRequest() and took the process down under Node's default
+    // unhandled-rejection policy. Parse defensively and answer 400 instead.
+    let requestUrl: URL;
+    try {
+      requestUrl = new URL(req.url!, `http://${req.headers.host ?? 'localhost'}`);
+    } catch {
+      logger.warn('Rejected request with unparseable URL or Host header', {
+        code: 'ROUTER_INVALID_REQUEST_URL',
+        source: 'Router.nodeJSRequest',
+        host: req.headers.host,
+      });
+      res.statusCode = 400;
+      res.setHeader('Content-Type', 'application/json');
+      res.end(
+        JSON.stringify({
+          success: false,
+          error: { code: 'INVALID_REQUEST', message: 'Invalid request URL' },
+        })
+      );
+      return;
+    }
 
     try {
       const response = await this.#request({

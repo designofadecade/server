@@ -93,8 +93,12 @@ Handle Node.js HTTP requests.
 
 ```typescript
 nodeJSRequest(
-  req: IncomingMessage, 
-  res: ServerResponse
+  req: IncomingMessage,
+  res: ServerResponse,
+  options?: {
+    cors?: boolean | string[];
+    lambdaOptions?: Record<string, unknown>;
+  }
 ): Promise<void>
 ```
 
@@ -107,6 +111,28 @@ const server = new Server(
   router.nodeJSRequest.bind(router)
 );
 ```
+
+##### CORS
+
+`cors` accepts either a boolean or an array of allowed origins:
+
+```typescript
+// Anonymous access from anywhere. Sends `Access-Control-Allow-Origin: *`
+// and does NOT send credentials, so cookies are not exchanged.
+router.nodeJSRequest(req, res, { cors: true });
+
+// Credentialed access from specific origins. The Origin header is reflected
+// only when it appears in the list, and `Vary: Origin` is set.
+router.nodeJSRequest(req, res, {
+  cors: ['https://app.example.com', 'https://admin.example.com'],
+});
+```
+
+Pass an allowlist whenever requests carry cookies or an `Authorization` header.
+Never reflect an arbitrary `Origin` alongside
+`Access-Control-Allow-Credentials: true` — that combination lets any website
+make authenticated cross-origin calls as the signed-in user and read the
+response.
 
 #### lambdaEvent()
 
@@ -294,6 +320,8 @@ const router = new Router({
 ### Route-Specific Middleware
 
 ```typescript
+// NOTE: req.authorizer is an UNVERIFIED JWT payload on the Node.js path.
+// Verify the token signature in middleware before relying on claims like this.
 const adminOnly = async (req: RouterRequest) => {
   if (!req.authorizer?.isAdmin) {
     return { status: 403, body: { error: 'Forbidden' } };
@@ -316,6 +344,21 @@ const router = new Router({
 Requests must include: `Authorization: Bearer <token>`
 
 ### JWT Support
+
+> **Security warning — the JWT signature is not verified.**
+>
+> On the Node.js path (`nodeJSRequest`), `req.authorizer` is produced by
+> base64-decoding the token payload. **Nothing checks the signature**, so any
+> caller can present an unsigned token with arbitrary claims and choose their own
+> `sub`, `email` or `isAdmin`. Treat `req.authorizer` as *untrusted input*.
+>
+> Do **not** use it for authorization decisions (`if (req.authorizer?.isAdmin)`)
+> unless you have verified the signature yourself in middleware first. On AWS
+> Lambda behind API Gateway the equivalent structure is populated *after* the
+> gateway has validated the token, which is the case this mirrors — the Node.js
+> path has no such guarantee.
+>
+> Signature verification is planned for the next major release.
 
 ```typescript
 class ProtectedRoutes extends Routes {

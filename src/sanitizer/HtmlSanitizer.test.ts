@@ -643,6 +643,41 @@ describe('HtmlSanitizer', () => {
         expect(HtmlSanitizer.isValidColorValue('')).toBe(false);
       });
     });
+
+    describe('mutation XSS via tag removal', () => {
+      // Removing a disallowed tag used to splice its neighbours together into a
+      // brand-new tag that was never re-inspected, so a payload could smuggle a
+      // live element past any allowlist.
+      it('should not splice a live img tag out of a stripped neighbour', () => {
+        const result = HtmlSanitizer.clean('<<z>img src=x onerror=alert(1)>', ['p', 'b', 'a']);
+
+        // The payload may survive as inert text, but must not form a tag:
+        // the leading '<' is escaped, so there is no element for the browser
+        // to build and no attribute for it to fire.
+        expect(result).not.toContain('<img');
+        expect(result).not.toMatch(/<[a-z]/i);
+        expect(result).toContain('&lt;img');
+      });
+
+      it('should not splice a live svg tag out of a stripped closing tag', () => {
+        const result = HtmlSanitizer.clean('<</z>svg onload=alert(1)>', ['p']);
+
+        expect(result).not.toContain('<svg');
+      });
+
+      it('should escape stray angle brackets rather than passing them through', () => {
+        const result = HtmlSanitizer.clean('<<z>b>bold', ['b']);
+
+        expect(result).not.toMatch(/<b>/);
+        expect(result).toContain('&lt;');
+      });
+
+      it('should emit no tag outside the allowlist for spliced entity input', () => {
+        const result = HtmlSanitizer.clean('&lt;&lt;z&gt;img src=x onerror=alert(1)&gt;', ['p']);
+
+        expect(result).not.toContain('<img');
+      });
+    });
   });
 
   describe('sanitizeBasicHtml()', () => {
@@ -758,11 +793,27 @@ describe('HtmlSanitizer', () => {
       expect(result).not.toContain('>');
     });
 
-    it('should decode HTML entities', () => {
+    it('should decode HTML entities in text', () => {
+      const html = '<p>Tom &amp; Jerry</p>';
+      const result = HtmlSanitizer.stripAllTags(html);
+
+      expect(result).toBe('Tom & Jerry');
+    });
+
+    it('should not resurrect encoded tags when decoding entities', () => {
+      // Entities are decoded before tags are stripped, so an encoded tag is
+      // removed rather than being turned back into live markup on the way out.
       const html = '<p>&lt;b&gt;Not bold&lt;/b&gt;</p>';
       const result = HtmlSanitizer.stripAllTags(html);
 
-      expect(result).toBe('<b>Not bold</b>');
+      expect(result).toBe('Not bold');
+    });
+
+    it('should not emit an executable tag from encoded input', () => {
+      const result = HtmlSanitizer.stripAllTags('&lt;img src=x onerror=alert(1)&gt;');
+
+      expect(result).not.toContain('<img');
+      expect(result).not.toMatch(/<[a-z]/i);
     });
 
     it('should remove script tags and content', () => {

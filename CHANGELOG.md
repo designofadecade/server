@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.3.0] - 2026-09-09
+
+Security release. Fixes a cross-site scripting bypass in `HtmlSanitizer`, a
+remote denial of service in `Router`, and an unsafe CORS default. Upgrading is
+recommended for all users; see **Behavior changes** below before doing so.
+
+### Security
+- **`HtmlSanitizer.clean()` — XSS bypass via mutation (critical).** Disallowed tags
+  were removed with a single string replace and the result was never re-scanned, so
+  deleting one tag could splice its neighbours into a brand-new tag. `<<z>img src=x
+  onerror=alert(1)>` collapsed into a live `<img>` element regardless of the
+  allowlist. Tags are now emitted only by the sanitizer's own tag builder, and any
+  `<` that does not begin a recognised tag is escaped to `&lt;`.
+- **`HtmlSanitizer.stripAllTags()` — emitted live tags (high).** Entities were
+  decoded *after* tags were stripped, so `&lt;img src=x onerror=alert(1)&gt;` passed
+  through the strip as inert text and was then decoded into a real tag in the
+  returned "plain text". Entities are now decoded first, stripping repeats until
+  stable, and any remaining angle brackets are escaped. This also affects
+  `stripAll()` and `clean(html, [])`, which delegate to it.
+- **`Router.nodeJSRequest()` — remote denial of service (high).** The request URL
+  was built outside the surrounding `try`, so a malformed `Host` header (e.g.
+  `Host: a b`) threw from the URL constructor, escaped as an unhandled rejection and
+  could terminate the process. Malformed URLs and Host headers now return `400`.
+- **`Router.nodeJSRequest()` — unsafe CORS default (moderate).** `cors: true`
+  reflected any `Origin` back with `Access-Control-Allow-Credentials: true`, letting
+  any website make cookie-authenticated cross-origin requests and read the response.
+
+### Added
+- `cors` now accepts an array of allowed origins: `{ cors: ['https://app.example.com'] }`.
+  Listed origins are reflected and receive credentials; everything else is refused,
+  and `Vary: Origin` is set so caches cannot serve one origin's response to another.
+
+### Behavior changes
+- `cors: true` is now **anonymous**: it sends `Access-Control-Allow-Origin: *` and no
+  longer sends `Access-Control-Allow-Credentials`. Cookie- or `Authorization`-bearing
+  cross-origin requests that previously worked will now be refused by the browser.
+  **Migration:** pass an explicit allowlist — `{ cors: ['https://your-app.example'] }`.
+- `HtmlSanitizer` output may now contain `&lt;` where a stray `<` was previously
+  passed through verbatim, and `stripAllTags()` removes encoded tags rather than
+  decoding them back into markup.
+
+### Documentation
+- Documented that `req.authorizer` on the Node.js path is an **unverified** JWT
+  payload — the signature is never checked, so any caller can choose their own
+  claims. The `docs/router.md` examples that gated on `req.authorizer?.isAdmin` now
+  carry an explicit warning. Signature verification is planned for the next major
+  release; until then, verify tokens in middleware.
+- Documented the `cors` option, which was previously undocumented.
+
 ## [6.2.0] - 2026-09-09
 
 ### Security
