@@ -7,6 +7,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [10.3.1] - 2026-09-10
+
+Fixes a polynomial ReDoS reachable from attacker-controlled input in the HTML
+sanitizer, the template renderer and the router. No API change.
+
+### Security
+- **`HtmlSanitizer` could be stalled for minutes by one request (high).** Every
+  tag pattern ended in `[^>]*`. On input containing many `<` and no `>`, the
+  regex engine rescanned to the end of input from each `<` and backtracked,
+  making the work quadratic in input size. `MAX_INPUT_SIZE` did not help — 1MB
+  is *inside* the cap, and quadratic growth at that size extrapolated to roughly
+  19 minutes of blocked event loop. Node is single-threaded, so a single request
+  stalled the whole process; on Lambda it is a timeout you are billed for.
+
+  Measured before the fix: 20KB took 421ms, 40KB 1.6s, 80KB 6.6s — a clean 4x
+  per doubling. After: 500KB completes in under 60ms.
+
+  The tag patterns now match unquoted characters and fully quoted attribute
+  values separately. The alternatives are disjoint on their first character, so
+  the match is deterministic and linear. A naive `[^<>]*` would also have been
+  linear but wrong — a quoted attribute value may legally contain `<`, and
+  ending the tag there let attribute content escape into the document as
+  structure.
+
+  CodeQL flagged two of these sites; the same defect was present at three more
+  that it did not report. All five are fixed.
+
+- **`Router` path normalization was quadratic (moderate).** `path.replace(/\/+$/, '')`
+  has an anchored `+`, so the engine retried from every index in a run of
+  slashes, scanning to the end each time. Request paths are attacker-controlled,
+  though bounded by HTTP header limits, so the practical cost was ~100-260ms of
+  CPU per request rather than minutes. Trailing slashes are now stripped with an
+  index scan.
+
+- **`HtmlRenderer` `{{#if}}` condition matching was quadratic (low).** `\s+([^}]+)`
+  — both parts match a space, so the engine tried every split point and rescanned
+  to the end for each. Exploiting it requires an attacker-controlled *template*;
+  values passed as data go through the slot table and are never re-parsed as
+  template syntax, so ordinary use is not affected. `HtmlRenderer` has no input
+  cap, so it is fixed regardless: the condition must now start with a non-space,
+  making the two parts disjoint.
+
+### Changed
+- Sanitizing malformed input where a stray `<` immediately precedes a tag now
+  removes the whole construct instead of leaving part of it behind.
+  `HtmlSanitizer.clean('<<b>>')` returns `''` where it previously returned
+  `'&gt;'`. This is the only observable output difference — verified by diffing
+  every sanitizer and renderer output against 10.3.0 across a payload corpus —
+  and it errs toward removing more, not less.
+
+### Added
+- ReDoS regression tests for all three modules, asserting linear-time completion
+  on pathological input. Against the unfixed code these take 4-55 seconds each
+  and fail; against the fix they complete in milliseconds, so the bounds are not
+  timing-sensitive.
+- Sanitizer bypass tests covering multi-character sanitization: nested tag
+  reassembly (`<scr<script>ipt>`), triple nesting, comment splitting, entity and
+  hex encoding, tab-broken `javascript:` URLs, and `on*` handlers smuggled
+  through attribute values.
+
+  These pin a mitigation CodeQL cannot see. It reports
+  `js/incomplete-multi-character-sanitization` on the individual `.replace()`
+  calls, but the sanitizer repeats the strip until output is stable, escapes any
+  residual `<`, and re-emits only allowlisted tags from a builder. Those two
+  alerts are dismissed as false positives; these tests are what keeps that
+  dismissal honest, by failing if the mitigation is ever removed.
+
 ## [10.3.0] - 2026-09-10
 
 Type-definition fixes found while integrating the package into an AWS Lambda +
