@@ -33,6 +33,28 @@ describe('RouteError.fromError return type', () => {
     ).toEqualTypeOf<Record<string, string>>();
   });
 
+  /**
+   * `fromError` assigns `body` unconditionally, exactly as it does `status` and
+   * `headers`, so leaving it optional understates the guarantee in the same way.
+   * A consumer whose handler type declares `body` required got TS2322 one field
+   * over: "Property 'body' is optional in type 'RouteErrorResponse' but
+   * required in type 'RouteResponse'".
+   */
+  it('guarantees body is present', () => {
+    expectTypeOf(
+      RouteError.fromError(new Error('x'), { defaultMessage: 'm' }).body
+    ).toEqualTypeOf<unknown>();
+  });
+
+  it('is assignable to a handler signature that requires body', () => {
+    interface HandlerResponse {
+      status: number;
+      headers?: Record<string, string>;
+      body: unknown;
+    }
+    assertType<HandlerResponse>(RouteError.fromError(new Error('x'), { defaultMessage: 'm' }));
+  });
+
   it('stays assignable to the wider RouterResponse handlers return', () => {
     assertType<RouterResponse>(RouteError.fromError(new Error('x'), { defaultMessage: 'm' }));
   });

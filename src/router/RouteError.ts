@@ -19,22 +19,27 @@ const DEFAULT_SAFE_ERROR_CLASSES = [
 /**
  * The response `fromError` returns.
  *
- * `RouterResponse` leaves `status` and `headers` optional because a route
- * handler may omit them and let the router default them. `fromError` has no
- * such freedom — it always resolves a status (falling back to 500) and always
- * sets a JSON content type — so its return type states that. Without this a
- * consumer whose handler signature requires `status: number` gets a TS2322 on
- * every `return RouteError.fromError(...)`.
+ * `RouterResponse` leaves `status`, `headers` and `body` optional because a
+ * route handler may omit them and let the router default them. `fromError` has
+ * no such freedom — it always resolves a status (falling back to 500), always
+ * sets a JSON content type, and always assigns the body it just built — so its
+ * return type states that. Without this a consumer whose handler signature
+ * requires any of the three gets a TS2322 on every
+ * `return RouteError.fromError(...)`.
+ *
+ * `body` stays `unknown`: this narrows only its *optionality*, so the
+ * `RouteErrorBody` casts consumers already write keep working.
  */
 export interface RouteErrorResponse extends RouterResponse {
   status: number;
   headers: Record<string, string>;
+  body: unknown;
 }
 
 /**
  * Body shape `fromError` produces. Exported so consumers can type-narrow the
- * `body` they get back; `RouteErrorResponse.body` stays `unknown` so existing
- * casts keep working.
+ * `body` they get back; `RouteErrorResponse.body` stays `unknown` (required,
+ * but unnarrowed) so existing casts keep working.
  */
 export interface RouteErrorBody {
   success: false;

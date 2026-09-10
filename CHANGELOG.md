@@ -7,17 +7,129 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [10.4.0] - 2026-09-10
+
+Completes the 10.3.0 type-boundary work on the two fields it did not reach:
+`RouteError.fromError`'s `body`, and the _response_ side of
+`Local.LambdaProxyRouter`. Deployed handlers are unaffected; the Lambda change
+is local-dev only.
+
+### Fixed — types
+
+- **`RouteErrorResponse.body` is now required.** 10.3.0 narrowed `status` and
+  `headers` to required because `fromError` always assigns them. `body` is
+  assigned just as unconditionally but was left optional, so a consumer whose
+  handler type declares `body` required got the identical TS2322 one field over:
+  "Property 'body' is optional in type 'RouteErrorResponse' but required in
+  type 'RouteResponse'". `body` stays `unknown` — this narrows only its
+  optionality, so existing `RouteErrorBody` casts are unaffected.
+
+- **`Local.LambdaProxyRouter` accepts a handler typed with AWS's result type.**
+  This is the response-side mirror of 10.3.0's `LambdaHttpEvent` fix. The event
+  is a parameter and was checked contravariantly; the return type is covariant,
+  so `LambdaResponse` has to be a type AWS's own result is assignable _to_. It
+  was not, in three separate ways, and TypeScript only reports the first
+  mismatched property, so each was hidden behind the last:
+
+  - `APIGatewayProxyResultV2` is a union including a bare `string`.
+  - `APIGatewayProxyStructuredResultV2.statusCode` is optional.
+  - its header values are `string | number | boolean`, not `string`.
+
+  The only handler signature that compiled was one that abandoned the AWS types
+  at the boundary — the situation 10.3.0 set out to remove. `LambdaResponse` is
+  widened to match what AWS actually permits and the handler may now return
+  `LambdaResponse | string`.
+
+### Fixed — cookies
+
+- **Response cookies no longer disappear.** Payload format 2.0 returns cookies
+  in a top-level `cookies` array, because a header map cannot hold two values
+  under one name and cookie values contain commas, so they cannot be folded into
+  one string. Nothing in the response path could carry them:
+
+  - `LambdaProxyRouter` read a handler's `cookies` and discarded it, behind a
+    comment asserting cookies travel as `Set-Cookie` headers — which is true of
+    format 1.0, not 2.0. A handler that set a session cookie worked deployed and
+    silently did not work locally.
+  - `LambdaHttpResponse` had no `cookies` field at all, so a route served
+    through `router.lambdaEvent` could not set a cookie deployed either.
+
+  `RouterResponse.headers` now accepts `string | string[]`, and each transport
+  renders an array the way that transport expects: Node repeats the header, and
+  `lambdaEvent` lifts `set-cookie` into the format 2.0 `cookies` field and
+  comma-joins any other multi-value header. A route that sets cookies now
+  behaves identically in both.
+
+  `cookies` is omitted from the `lambdaEvent` response unless a route actually
+  set one, so responses that set no cookie are byte-for-byte unchanged.
+
+### Fixed — response fidelity
+
+- **Response bodies are passed through byte for byte.** `LambdaProxyRouter`
+  decoded a JSON response body and the router re-encoded it. That is a no-op for
+  compact JSON — which is why it went unnoticed — and a silent rewrite of
+  anything else: indentation collapsed, `\uXXXX` escapes were expanded, and
+  number formatting was normalised (`1.0` became `1`). API Gateway passes the
+  body through unchanged, so what a developer saw locally was not what the
+  deployed API sends. The decode is gone.
+
+- **A route's content type is no longer overwritten.** The default only checked
+  for the exact spellings `Content-Type` and `content-type`, so any other casing
+  fell through and the default was appended on top. `setHeader` _is_
+  case-insensitive, so it then overwrote the content type the route had
+  deliberately set — `CONTENT-TYPE: text/html` went out as `application/json`.
+  The check is now case-insensitive.
+
+- **Defaulting the content type no longer mutates the route's headers.** The
+  default was written into whatever object the route returned. A route returning
+  a shared header constant had it mutated for every later request, and a frozen
+  one threw. The headers are copied first.
+
+- **Both transports default the content type the same way.** The node path
+  defaulted it whenever it was absent; the lambda path only when `headers` was
+  absent entirely. A route that set any other header got a content type locally
+  and none deployed. Both now use the same rule.
+
+### Changed
+
+- **Local dev now infers a response the way API Gateway does.** Widening the
+  type alone would have been wrong: a handler returning a bare string hit
+  `.statusCode`/`.body` on a string, and local dev answered `200` with an
+  _empty_ body — silently dropping the payload for a handler AWS considers
+  conforming. Payload format 2.0 specifies that a return value carrying no
+  `statusCode` is inferred as `200`, `content-type: application/json`, with the
+  return value itself as the body, so `LambdaProxyRouter` now does that.
+
+  This changes local behaviour for a handler that returns an object with a
+  `body` but no `statusCode`: local now sends `{"body":"..."}`, matching
+  deployed, where it previously sent `"..."`. Such a handler was already off-type
+  under 10.3.x — `statusCode` was required — and the divergence from deployed
+  behaviour was the defect.
+
+- Non-string response header values are collapsed to strings. AWS permits
+  numbers and booleans; Node's `setHeader` rejects booleans outright.
+
+### Notes
+
+- `LambdaResponse.statusCode` and `headers` are now weaker types, as is
+  `RouterResponse.headers`. Code that _returns_ either is unaffected; code that
+  _reads_ one — and relied on `statusCode` being present, or on a header value
+  being a `string` — will need a guard. That makes this a minor, not a patch.
+- The response path is now byte-identical between local dev and deployed for
+  status, headers, cookies and body. Any remaining difference is a bug.
+
 ## [10.3.1] - 2026-09-10
 
 Fixes a polynomial ReDoS reachable from attacker-controlled input in the HTML
 sanitizer, the template renderer and the router. No API change.
 
 ### Security
+
 - **`HtmlSanitizer` could be stalled for minutes by one request (high).** Every
   tag pattern ended in `[^>]*`. On input containing many `<` and no `>`, the
   regex engine rescanned to the end of input from each `<` and backtracked,
   making the work quadratic in input size. `MAX_INPUT_SIZE` did not help — 1MB
-  is *inside* the cap, and quadratic growth at that size extrapolated to roughly
+  is _inside_ the cap, and quadratic growth at that size extrapolated to roughly
   19 minutes of blocked event loop. Node is single-threaded, so a single request
   stalled the whole process; on Lambda it is a timeout you are billed for.
 
@@ -43,13 +155,14 @@ sanitizer, the template renderer and the router. No API change.
 
 - **`HtmlRenderer` `{{#if}}` condition matching was quadratic (low).** `\s+([^}]+)`
   — both parts match a space, so the engine tried every split point and rescanned
-  to the end for each. Exploiting it requires an attacker-controlled *template*;
+  to the end for each. Exploiting it requires an attacker-controlled _template_;
   values passed as data go through the slot table and are never re-parsed as
   template syntax, so ordinary use is not affected. `HtmlRenderer` has no input
   cap, so it is fixed regardless: the condition must now start with a non-space,
   making the two parts disjoint.
 
 ### Changed
+
 - Sanitizing malformed input where a stray `<` immediately precedes a tag now
   removes the whole construct instead of leaving part of it behind.
   `HtmlSanitizer.clean('<<b>>')` returns `''` where it previously returned
@@ -58,6 +171,7 @@ sanitizer, the template renderer and the router. No API change.
   and it errs toward removing more, not less.
 
 ### Added
+
 - ReDoS regression tests for all three modules, asserting linear-time completion
   on pathological input. Against the unfixed code these take 4-55 seconds each
   and fail; against the fix they complete in milliseconds, so the bounds are not
@@ -83,13 +197,14 @@ in `Local` as well.
 
 Code following the documented patterns needs no edits — `as any` workarounds at
 the Lambda boundary simply become unnecessary. A few narrow surfaces did change
-shape; see *Upgrade Notes* below for what to check if you went off the documented
+shape; see _Upgrade Notes_ below for what to check if you went off the documented
 path.
 
 ### Fixed
+
 - **`RouteError.fromError()` declared `status` optional but always sets it.** It
   destructures with `status = 500` and returns that unconditionally, so
-  `RouterResponse` — where `status` is optional because a *handler* may omit it
+  `RouterResponse` — where `status` is optional because a _handler_ may omit it
   and let the router default it — was weaker than the guarantee. Any consumer
   whose handler declares a required `status` got `TS2322` on every
   `return RouteError.fromError(...)`.
@@ -99,7 +214,11 @@ path.
   for handlers.
 
 ```typescript
-interface HandlerResponse { status: number; headers?: Record<string, string>; body?: unknown }
+interface HandlerResponse {
+  status: number;
+  headers?: Record<string, string>;
+  body?: unknown;
+}
 
 async function getUser(): Promise<HandlerResponse> {
   try {
@@ -152,13 +271,15 @@ export const handler = async (event: APIGatewayProxyEventV2) => router.lambdaEve
 
 ```typescript
 class UserRoutes extends Routes {
-  constructor(router: Router, context?: AppContext) { super(router, context); }
+  constructor(router: Router, context?: AppContext) {
+    super(router, context);
+  }
 }
 new Router({ initRoutes: [UserRoutes] }); // TS2322 before this release
 ```
 
-  Both now use `RoutesConstructor`, whose context parameter is `never` and so
-  accepts any narrowing.
+Both now use `RoutesConstructor`, whose context parameter is `never` and so
+accepts any narrowing.
 
 - **`Context`'s protected members made it impractical to stub in tests.**
   `validate()`, `initialize()` and `dispose()` are `protected`, which only real
@@ -173,13 +294,17 @@ new Router({ initRoutes: [UserRoutes] }); // TS2322 before this release
   works as a convenience base for code that wants the lifecycle hooks.
 
 ```typescript
-interface AppContext extends ContextLike { db: Db; config: Config }
+interface AppContext extends ContextLike {
+  db: Db;
+  config: Config;
+}
 
 // In a unit test - no cast, and the stub is still checked against the real shape.
 const context: AppContext = { db: fakeDb, config: { assetsBucket: 'x' } };
 ```
 
 ### Added
+
 - Exported types that were previously unreachable from the package root:
   `LambdaHttpEvent`, `LambdaHttpResponse`, `RouteRegistration`,
   `RoutesConstructor`, `ContextLike`, `RouteErrorResponse`, `RouteErrorBody`, and
@@ -207,7 +332,7 @@ documented patterns. Three surfaces changed shape:
   implicit index signature, and so could never satisfy a target that declared
   one. The router reads only the declared fields.
 
-  Passing a *variable* is unaffected — excess property checks apply only to fresh
+  Passing a _variable_ is unaffected — excess property checks apply only to fresh
   object literals. Only code that constructs an event literal with extra fields,
   or reads an undeclared field off an event typed as `LambdaHttpEvent`, needs a
   cast or a wider local type. This surfaces as a compile error, never as a
@@ -228,12 +353,13 @@ documented patterns. Three surfaces changed shape:
 - **`RouterOptions.context` and `Routes.context` are typed `ContextLike`, not
   `Context`.** This widens what is accepted, so existing code compiles — a
   subclass that redeclares `protected context?: AppContext` is still fine. Only
-  code relying on `this.context` being *nominally* a `Context` needs to say so
+  code relying on `this.context` being _nominally_ a `Context` needs to say so
   explicitly.
 
 ## [10.2.1] - 2026-09-09
 
 ### Documentation
+
 - Added `MIGRATION.md`, shipped in the published package. It consolidates the
   6.x -> 10.x upgrade into a single checklist: what changed, a `grep` to find
   whether it affects you, and the fix. Six releases sit between 6.1.0 and 10.2.0
@@ -244,12 +370,13 @@ documented patterns. Three surfaces changed shape:
 ## [10.2.0] - 2026-09-09
 
 ### Added
+
 - `HtmlRenderer.render()` and `renderFromFile()` accept a `RenderOptions` argument
   with an `escape` flag (default `true`). Passing `{ escape: false }` restores
   pre-8.0.0 interpolation for `{{value}}`.
 
   8.0.0 made escaping unconditional, which is the right default but breaks a
-  legitimate pattern: composing HTML that the caller has *already* sanitized. An
+  legitimate pattern: composing HTML that the caller has _already_ sanitized. An
   application that runs `HtmlSanitizer.clean()` over rich text and then places the
   result in an email or page template has no way to express that intent short of
   editing every `{{value}}` in every template to `{{{value}}}` — impractical when
@@ -280,6 +407,7 @@ Fixes an authorization bypass found while writing integration tests, and closes
 the testing gaps identified in the production-readiness review.
 
 ### Security
+
 - **Route-level middleware was silently ignored on static routes (high).**
   `#buildRoutesPatterns` stored only `{ handler }` for static paths, discarding
   `middleware` and everything else on the registration. Dynamic paths stored the
@@ -299,6 +427,7 @@ the testing gaps identified in the production-readiness review.
   previously succeeded may now be correctly refused.
 
 ### Added
+
 - Integration tests that exercise real servers and sockets rather than mocks:
   - `Router.integration.test.ts` — a real `http.Server` over a real socket, covering
     the malformed `Host` 400 and process survival, oversized and unparseable bodies,
@@ -311,6 +440,7 @@ the testing gaps identified in the production-readiness review.
 
   These verify the fixes from 6.3.0 through 9.0.0, which until now had only been
   confirmed by hand.
+
 - Edge-case suites for the branches attackers reach deliberately: malformed JWTs
   (bad segments, unparseable header or payload, non-object claims, `nbf`), sanitizer
   size caps, encoded protocols, malformed entities, and logger handling of BigInt,
@@ -320,11 +450,13 @@ the testing gaps identified in the production-readiness review.
   test at all.
 
 ### Changed
+
 - Coverage now runs with `all: true`, so a source file with no tests reports as 0%
   instead of being silently omitted from the report. This is what surfaced the
   untested entry point.
 
 ### Coverage
+
 686 -> 789 tests. Statements 90.8% -> 95.5%, branches 85.7% -> 90.0%, functions
 95.4% -> 99.0%. `Router.ts` moved from 85.0%/78.3% to 94.0%/86.1%, `Logger.ts` from
 79.1%/67.1% to 95.6%/82.2%, and `HtmlSanitizer.ts` from 89.5%/86.2% to 94.3%/89.9%.
@@ -332,6 +464,7 @@ the testing gaps identified in the production-readiness review.
 ## [10.0.1] - 2026-09-09
 
 ### Removed
+
 - Deleted the hand-written `URLPattern` type shim (`src/types/urlpattern.d.ts`).
   `URLPattern` has been a global since Node 24 and is declared by `@types/node` 24,
   and this package already requires Node >= 24 via `engines`, so the local
@@ -340,6 +473,7 @@ the testing gaps identified in the production-readiness review.
   floor already implies.
 
 ### Fixed
+
 - Route params no longer contain `undefined` values. The removed shim declared
   pattern groups as `Record<string, string>`, but an optional segment that does not
   match (`/files/:name?` against `/files`) yields `undefined` at runtime — so a
@@ -355,6 +489,7 @@ the testing gaps identified in the production-readiness review.
 Stops the library terminating its host process, and modernises the toolchain.
 
 ### Changed
+
 - **BREAKING: `Server` and `WebSocketServer` no longer call `process.exit(1)`.** Both
   killed the host process on any server error — including a plain `EADDRINUSE` —
   giving the application no chance to log, drain, retry on another port, or fail
@@ -382,9 +517,11 @@ const server = new Server({ port: 3000, exitOnError: true }, handler);
 The same applies to `WebSocketServer`.
 
 ### Fixed
+
 - Two unused catch bindings in `ApiClient` that older lint rules did not report.
 
 ### Development
+
 - Upgraded ESLint 8.57.1 → 10.10.0. ESLint 8 has been end-of-life and unsupported
   since 2024, so it no longer receives fixes of its own.
 - Migrated `.eslintrc.json` to flat config (`eslint.config.js`); ESLint 9 removed
@@ -413,6 +550,7 @@ Final release from the security review: closes the sanitizer denial of service a
 the WebSocket hardening gaps. All findings from the review are now addressed.
 
 ### Security
+
 - **`HtmlSanitizer` — quadratic blowup on hostile input (moderate/high).** The
   dangerous-tag pattern `<(script|...)[^>]*>[\s\S]*?<\/\1>` and the comment pattern
   `<!--[\s\S]*?-->` restarted their lazy body scan at every unclosed opener, so cost
@@ -434,6 +572,7 @@ the WebSocket hardening gaps. All findings from the review are now addressed.
   the upgrade request.
 
 ### Added
+
 - `WebSocketServer` options:
   - `maxPayload` — largest accepted frame in bytes, defaults to 1 MiB
   - `allowedOrigins` — origins permitted to connect; an upgrade with a missing or
@@ -446,8 +585,7 @@ the WebSocket hardening gaps. All findings from the review are now addressed.
 
 ### Migration Guide
 
-Frames larger than 1 MiB are now refused and the connection is closed with code
-1009. If you legitimately send larger messages, raise the cap:
+Frames larger than 1 MiB are now refused and the connection is closed with code 1009. If you legitimately send larger messages, raise the cap:
 
 ```typescript
 const wss = new WebSocketServer({ port: 8080, maxPayload: 8 * 1024 * 1024 });
@@ -467,6 +605,7 @@ Note that non-browser clients send no `Origin` header and are refused when
 `allowedOrigins` is set — gate those with `verifyClient` instead.
 
 ### Documentation
+
 - Documented `maxPayload`, `allowedOrigins`, `verifyClient` and the `connection`
   event in `docs/websocket.md`, replacing the previous advice to handle message
   size limits and client validation "at application level" — which the API offered
@@ -479,6 +618,7 @@ are now escaped by default, which changes the output of existing templates, so
 this lands as a major.
 
 ### Security
+
 - **BREAKING: `HtmlRenderer` did not escape interpolated values (high).** `{{value}}`
   wrote data straight into the output, so any user-supplied string became markup:
   `render('<p>{{comment}}</p>', { comment: '<img src=x onerror=alert(1)>' })` produced
@@ -494,6 +634,7 @@ this lands as a major.
 - NUL bytes are stripped from templates and from substituted values.
 
 ### Added
+
 - Triple-brace `{{{value}}}` for deliberate raw HTML output. Use it only for values
   known to be safe; it bypasses escaping but is still immune to template injection.
 
@@ -525,6 +666,7 @@ letting them expand — it no longer works, and it was reading whatever variable
 data named.
 
 ### Documentation
+
 - Documented escaping, the raw form, and the template-injection behavior in
   `docs/utilities.md`.
 
@@ -535,12 +677,13 @@ Node.js path were never signature-checked. Fixing this safely requires refusing
 tokens that previous versions accepted, so it lands as a major.
 
 ### Security
+
 - **BREAKING: `request.authorizer` is no longer populated from an unverified token
   (critical).** `Router.nodeJSRequest()` base64-decoded the JWT payload and exposed
   it as `request.authorizer.lambda` **without validating the signature**. Any caller
   could mint a token with arbitrary claims — `sub`, `email`, `isAdmin` — and defeat
   every check built on them. On AWS Lambda the same structure is filled in by API
-  Gateway *after* validation; the Node.js path had no such guarantee, and the
+  Gateway _after_ validation; the Node.js path had no such guarantee, and the
   documentation recommended gating admin routes on exactly this value.
   - Tokens are now verified before their claims are exposed.
   - With no `jwt` option configured, `request.authorizer` is always `null`.
@@ -552,6 +695,7 @@ tokens that previous versions accepted, so it lands as a major.
   instead of `!==`, so the configured token cannot be recovered from response timing.
 
 ### Added
+
 - `jwt` option on `RouterOptions`:
   - `jwt.secret` — shared secret for the built-in HMAC verifier
   - `jwt.algorithms` — accepted algorithms, defaults to `['HS256']` (`HS256`/`HS384`/`HS512`)
@@ -590,6 +734,7 @@ the allowlist. This is the point of the change: treat any resulting failures as
 tokens that should never have been trusted.
 
 ### Documentation
+
 - Rewrote the JWT section of `docs/router.md` to cover verification, the
   algorithm allowlist and custom verifiers, replacing the 6.3.0 security warning.
 
@@ -600,14 +745,15 @@ remote denial of service in `Router`, and an unsafe CORS default. Upgrading is
 recommended for all users; see **Behavior changes** below before doing so.
 
 ### Security
+
 - **`HtmlSanitizer.clean()` — XSS bypass via mutation (critical).** Disallowed tags
   were removed with a single string replace and the result was never re-scanned, so
   deleting one tag could splice its neighbours into a brand-new tag. `<<z>img src=x
-  onerror=alert(1)>` collapsed into a live `<img>` element regardless of the
+onerror=alert(1)>` collapsed into a live `<img>` element regardless of the
   allowlist. Tags are now emitted only by the sanitizer's own tag builder, and any
   `<` that does not begin a recognised tag is escaped to `&lt;`.
 - **`HtmlSanitizer.stripAllTags()` — emitted live tags (high).** Entities were
-  decoded *after* tags were stripped, so `&lt;img src=x onerror=alert(1)&gt;` passed
+  decoded _after_ tags were stripped, so `&lt;img src=x onerror=alert(1)&gt;` passed
   through the strip as inert text and was then decoded into a real tag in the
   returned "plain text". Entities are now decoded first, stripping repeats until
   stable, and any remaining angle brackets are escaped. This also affects
@@ -621,11 +767,13 @@ recommended for all users; see **Behavior changes** below before doing so.
   any website make cookie-authenticated cross-origin requests and read the response.
 
 ### Added
+
 - `cors` now accepts an array of allowed origins: `{ cors: ['https://app.example.com'] }`.
   Listed origins are reflected and receive credentials; everything else is refused,
   and `Vary: Origin` is set so caches cannot serve one origin's response to another.
 
 ### Behavior changes
+
 - `cors: true` is now **anonymous**: it sends `Access-Control-Allow-Origin: *` and no
   longer sends `Access-Control-Allow-Credentials`. Cookie- or `Authorization`-bearing
   cross-origin requests that previously worked will now be refused by the browser.
@@ -635,6 +783,7 @@ recommended for all users; see **Behavior changes** below before doing so.
   decoding them back into markup.
 
 ### Documentation
+
 - Documented that `req.authorizer` on the Node.js path is an **unverified** JWT
   payload — the signature is never checked, so any caller can choose their own
   claims. The `docs/router.md` examples that gated on `req.authorizer?.isAdmin` now
@@ -645,6 +794,7 @@ recommended for all users; see **Behavior changes** below before doing so.
 ## [6.2.0] - 2026-09-09
 
 ### Security
+
 - Updated `ws` to `^8.21.3` (from `^8.16.0`), picking up fixes for two high-severity advisories:
   - Uninitialized memory disclosure ([GHSA-58qx-3vcg-4xpx](https://github.com/advisories/GHSA-58qx-3vcg-4xpx))
   - Memory exhaustion DoS from tiny fragments and data chunks ([GHSA-96hv-2xvq-fx4p](https://github.com/advisories/GHSA-96hv-2xvq-fx4p))
@@ -652,6 +802,7 @@ recommended for all users; see **Behavior changes** below before doing so.
 - Resolved all remaining development-time advisories (`brace-expansion`, `picomatch`, `postcss`, `yaml`, `fflate`, `esbuild`/`vite` via the vitest upgrade). `npm audit` now reports 0 vulnerabilities, down from 16.
 
 ### Changed
+
 - Upgraded `vitest`, `@vitest/coverage-v8` and `@vitest/ui` to `^5.0.0` (from `^2.0.0`)
 - Upgraded `@types/node` to `^24.13.3` (from `^20.11.0`) to match the `engines.node >= 24.0.0` requirement and satisfy vitest 5's peer range
 
@@ -662,14 +813,17 @@ Note: the `Security` items above describe **dependency** updates only. This rele
 ## [6.1.0] - 2026-03-17
 
 ### Added
+
 - `Router.lambdaEvent()` now catches all unhandled errors in a top-level `try/catch` and returns a consistent 500 error response via `RouteError.fromError()`, preventing unformatted errors from leaking to callers
 
 ### Changed
+
 - `Router.lambdaEvent()` JSON parse errors now use `RouteError.fromError()` for consistent error formatting, matching the structured `{ success: false, error: { code, message } }` response shape introduced in v6.0.0
 
 ## [6.0.0] - 2026-03-13
 
 ### Changed
+
 - **BREAKING:** `RouteError.fromError()` now returns response body as an object instead of stringified JSON
   - Old behavior: `body: JSON.stringify({ error, message, statusCode, code? })`
   - New behavior: `body: { success: false, error: { code, message } }`
@@ -684,10 +838,11 @@ Note: the `Security` items above describe **dependency** updates only. This rele
 ### Migration Guide
 
 **Old code:**
+
 ```typescript
-const response = RouteError.fromError(error, { 
-  defaultMessage: 'Failed', 
-  status: 400 
+const response = RouteError.fromError(error, {
+  defaultMessage: 'Failed',
+  status: 400,
 });
 // response.body is a string: '{"error":"Bad Request","message":"Failed","statusCode":400}'
 const parsed = JSON.parse(response.body);
@@ -696,10 +851,11 @@ console.log(parsed.message); // "Failed"
 ```
 
 **New code:**
+
 ```typescript
-const response = RouteError.fromError(error, { 
-  defaultMessage: 'Failed', 
-  status: 400 
+const response = RouteError.fromError(error, {
+  defaultMessage: 'Failed',
+  status: 400,
 });
 // response.body is an object
 console.log(response.body.success); // false
@@ -708,6 +864,7 @@ console.log(response.body.error.message); // "Failed"
 ```
 
 ### Benefits
+
 - **Consistency:** Matches standard REST API response patterns used across applications
 - **Type Safety:** Object responses are easier to validate and work with in TypeScript
 - **Flexibility:** Routers can serialize to JSON, XML, or any format as needed
@@ -717,6 +874,7 @@ console.log(response.body.error.message); // "Failed"
 ## [4.4.1] - 2026-03-13
 
 ### Fixed
+
 - Fixed TypeScript type exports for `RouteError.fromError()` when using `moduleResolution: "bundler"`
   - Added `FromErrorOptions` type export to main package index
   - Resolves "Property 'fromError' does not exist on type 'typeof RouteError'" error
@@ -728,6 +886,7 @@ console.log(response.body.error.message); // "Failed"
 ## [4.3.0] - 2026-03-12
 
 ### Added
+
 - **RouteError.fromError()** - Intelligent error handling with built-in security
   - Automatically distinguishes between safe (ValidationError, ConflictError, etc.) and unsafe (system/library) errors
   - Prevents sensitive data leaks (credentials, paths, ARNs, SQL schemas, API keys)
@@ -741,12 +900,14 @@ console.log(response.body.error.message); // "Failed"
 - Migration examples and real-world usage scenarios
 
 ### Changed
+
 - **BREAKING:** Removed `RouteError.create()` method in favor of secure `fromError()` only
 - Router.ts now uses `fromError()` for all error handling (authentication, authorization, not found, handler errors)
 - Router error handling now uses proper error classes (AuthenticationError, NotFoundError, etc.)
 - Simplified error handling - all logging now handled automatically by `fromError()`
 
 ### Security
+
 - Protected against exposure of database connection strings in error messages
 - Protected against exposure of AWS credentials and ARNs
 - Protected against exposure of file system paths
@@ -757,6 +918,7 @@ console.log(response.body.error.message); // "Failed"
 ## [4.2.2] - 2026-03-12
 
 ### Fixed
+
 - Add "default" export condition to all package.json exports for tsx/ts-node compatibility
   - Fixes ERR_PACKAGE_PATH_NOT_EXPORTED error when using tsx, ts-node, or similar TypeScript loaders
   - Required for Node.js v24+ module resolution in hybrid CJS/ESM environments
@@ -766,6 +928,7 @@ console.log(response.body.error.message); // "Failed"
   - Enables direct imports like `@designofadecade/server/sanitizer`
 
 ### Added
+
 - HtmlSanitizer now supports preserving specific attributes on allowed tags via optional `allowedAttributes` parameter
   - Enables granular control over which attributes are preserved on each tag
   - Maintains all existing security features (event handler blocking, URL validation, etc.)
@@ -776,10 +939,12 @@ console.log(response.body.error.message); // "Failed"
 ## [4.1.0] - 2026-03-12
 
 ### Changed
+
 - Improved CI/CD pipeline to use npm Trusted Publishing instead of tokens for enhanced security
 - Moved deployment checklist to docs folder for better organization
 
 ### Added
+
 - Documentation for granular npm token setup (for reference)
 - Enhanced HtmlSanitizer with additional security features:
   - Never-Allow List for inherently dangerous tags (script, iframe, form, etc.)
@@ -792,6 +957,7 @@ console.log(response.body.error.message); // "Failed"
 ## [4.0.0] - 2026-02-28
 
 ### Changed
+
 - Updated package to publish to npm.js registry instead of GitHub Packages
 - Improved package.json with enhanced keywords and metadata
 - Enhanced README.md with comprehensive badges, installation instructions, and documentation links
@@ -800,6 +966,7 @@ console.log(response.body.error.message); // "Failed"
 - Improved .gitignore with additional patterns
 
 ### Added
+
 - .npmignore file to ensure only necessary files are published
 - Security section in README
 - API Reference section in README with links to all documentation
@@ -807,12 +974,14 @@ console.log(response.body.error.message); // "Failed"
 - Additional badges for npm version, TypeScript, and build status
 
 ### Removed
+
 - .npmrc file (no longer needed for public npm registry)
 - Test and benchmark files from compiled output
 
 ## [3.0.0] - 2026-02-27
 
 ### Added
+
 - Core HTTP/HTTPS server implementation
 - WebSocket server with message formatting
 - Flexible routing system with URL pattern matching
@@ -837,6 +1006,7 @@ console.log(response.body.error.message); // "Failed"
 ## [1.0.0] - 2026-02-26
 
 ### Added
+
 - Initial package setup
 - GitHub Actions workflows for testing and publishing
 - ESLint and Prettier configuration

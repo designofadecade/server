@@ -90,9 +90,28 @@ export interface LambdaEvent {
   [key: string]: unknown;
 }
 
+/**
+ * The structured response a handler may return, shaped as API Gateway HTTP API
+ * (payload format 2.0) accepts it.
+ *
+ * Return types are checked covariantly, so this has to be a type AWS's own
+ * `APIGatewayProxyStructuredResultV2` is assignable *to*. That forces two
+ * fields wider than they look:
+ *
+ * - `statusCode` is optional, because format 2.0 infers `200` when a handler
+ *   omits it. Declaring it required rejected every handler typed with the AWS
+ *   result type.
+ * - header values are `string | number | boolean`, which is what AWS permits.
+ *   `Record<string, string>` was a second rejection hiding behind the first —
+ *   TypeScript only reports the earliest mismatched property, so fixing
+ *   `statusCode` alone would just have moved the error one field over.
+ *
+ * `LambdaProxyRouter` accepts `LambdaResponse | string`; see there for the bare
+ * string return format 2.0 also permits.
+ */
 export interface LambdaResponse {
-  statusCode: number;
-  headers?: Record<string, string>;
+  statusCode?: number;
+  headers?: Record<string, string | number | boolean>;
   cookies?: string[];
   body?: string;
   isBase64Encoded?: boolean;
@@ -124,7 +143,7 @@ export default class Local {
    * );
    */
   static LambdaProxyRouter(
-    LambdaHandler: (event: LambdaEvent) => Promise<LambdaResponse>,
+    LambdaHandler: (event: LambdaEvent) => Promise<LambdaResponse | string>,
     options: LambdaProxyRouterOptions = {}
   ) {
     const router = new Router({
@@ -152,7 +171,7 @@ export default class Local {
                   headers[name] = Array.isArray(value) ? value.join(', ') : value;
                 }
 
-                const LambdaResponse: LambdaResponse = await LambdaHandler({
+                const result: LambdaResponse | string = await LambdaHandler({
                   version: '2.0',
                   routeKey: `${request.method} ${request.path}`,
                   rawPath: request.path,
@@ -192,24 +211,54 @@ export default class Local {
                   ...(lambdaOptions.event || {}),
                 });
 
-                let body = LambdaResponse.body || null;
-                if (
-                  LambdaResponse.headers?.['content-type']?.includes('application/json') &&
-                  body
-                ) {
-                  try {
-                    body = JSON.parse(body);
-                  } catch {
-                    // Silently fail if body is not valid JSON
-                  }
+                // Format 2.0 lets a handler skip the response envelope: return
+                // anything without a `statusCode` and API Gateway infers
+                // `200`, a JSON content type, and the return value itself as
+                // the body. `APIGatewayProxyResultV2` permits a bare string for
+                // exactly this reason, so local dev has to infer the same way
+                // or a conforming handler silently loses its body here.
+                if (typeof result !== 'object' || result === null || result.statusCode == null) {
+                  return {
+                    status: 200,
+                    headers: { 'content-type': 'application/json' },
+                    body: typeof result === 'string' ? result : JSON.stringify(result),
+                    isBase64Encoded: false,
+                  };
                 }
 
-                // Note: Lambda cookies are handled via Set-Cookie headers, not separate cookies property
+                // AWS permits numeric and boolean header values; Node's
+                // `setHeader` does not accept booleans, and the router types
+                // headers as strings, so collapse them here. `set-cookie` is
+                // matched case-insensitively because header names are.
+                const responseHeaders: Record<string, string | string[]> = {};
+                const setCookie: string[] = [];
+
+                for (const [name, value] of Object.entries(result.headers ?? {})) {
+                  if (name.toLowerCase() === 'set-cookie') {
+                    setCookie.push(String(value));
+                    continue;
+                  }
+                  responseHeaders[name] = String(value);
+                }
+
+                // API Gateway emits every entry of the format 2.0 `cookies`
+                // field as its own `set-cookie` header. Discarding it meant a
+                // handler's cookies — sessions, auth — silently vanished
+                // locally while working deployed.
+                setCookie.push(...(result.cookies ?? []));
+                if (setCookie.length > 0) responseHeaders['set-cookie'] = setCookie;
+
+                // The body is passed through byte for byte, as API Gateway
+                // does. Decoding JSON here and letting the router re-encode it
+                // was a no-op for compact JSON and a silent rewrite for
+                // everything else: indentation collapsed, `\uXXXX` escapes were
+                // expanded and number formatting was normalised, so what a
+                // developer saw locally was not what the deployed API sends.
                 return {
-                  status: LambdaResponse.statusCode,
-                  headers: LambdaResponse.headers,
-                  body: body,
-                  isBase64Encoded: LambdaResponse.isBase64Encoded || false,
+                  status: result.statusCode,
+                  headers: responseHeaders,
+                  body: result.body ?? null,
+                  isBase64Encoded: result.isBase64Encoded || false,
                 };
               }
             );

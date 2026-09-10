@@ -39,6 +39,12 @@ export interface LambdaHttpEvent {
 export interface LambdaHttpResponse {
   statusCode: number;
   headers?: Record<string, string>;
+  /**
+   * Format 2.0 carries cookies here rather than in `headers`, because a header
+   * map cannot hold two values under one name. API Gateway emits one
+   * `set-cookie` header per entry. Present only when a route set a cookie.
+   */
+  cookies?: string[];
   body: string;
   isBase64Encoded?: boolean;
 }
@@ -88,7 +94,15 @@ export interface RouterRequest {
 
 export interface RouterResponse {
   status?: number;
-  headers?: Record<string, string>;
+  /**
+   * An array sets a repeated header. This is the only way to send more than one
+   * cookie: `set-cookie` may legally appear many times and its values contain
+   * commas, so they cannot be folded into one string. Each transport renders an
+   * array the way that transport expects — Node repeats the header, API Gateway
+   * moves `set-cookie` into the format 2.0 `cookies` field — so a route that
+   * sets cookies behaves the same locally and deployed.
+   */
+  headers?: Record<string, string | string[]>;
   body?: unknown;
   isBase64Encoded?: boolean;
 }
@@ -294,9 +308,16 @@ export default class Router {
         authorizer: event.requestContext.authorizer || null,
       });
 
+      const { headers, cookies } = Router.#splitResponseHeaders(
+        Router.#withDefaultContentType(response.headers)
+      );
+
       return {
         statusCode: response.status || 200,
-        headers: response.headers || { 'Content-Type': 'application/json' },
+        headers,
+        // Omitted rather than sent empty, so a route that sets no cookie
+        // produces the same response body it always has.
+        ...(cookies.length > 0 ? { cookies } : {}),
         body: typeof response.body === 'string' ? response.body : JSON.stringify(response.body),
         isBase64Encoded: response.isBase64Encoded || false,
       };
@@ -418,10 +439,7 @@ export default class Router {
 
       res.statusCode = response.status || 200;
 
-      const headers = response.headers || {};
-      if (!headers['Content-Type'] && !headers['content-type']) {
-        headers['Content-Type'] = 'application/json';
-      }
+      const headers = Router.#withDefaultContentType(response.headers);
 
       Object.entries(headers).forEach(([name, value]) => {
         res.setHeader(name, value);
@@ -476,6 +494,58 @@ export default class Router {
    * Stripping the empty entries here keeps that promise true rather than
    * pushing `string | undefined` onto every handler.
    */
+  /**
+   * Copies a route's response headers and supplies the default content type if
+   * the route set none.
+   *
+   * The copy matters: a route may return a shared or frozen header constant,
+   * and writing the default into it would mutate that constant for every later
+   * request — and throw outright on a frozen one. The lookup is
+   * case-insensitive because header names are; checking only two exact
+   * spellings let any other casing through, and since `setHeader` *is*
+   * case-insensitive the default then silently overwrote the content type the
+   * route had deliberately set.
+   */
+  static #withDefaultContentType(
+    headers: Record<string, string | string[]> | undefined
+  ): Record<string, string | string[]> {
+    const copied: Record<string, string | string[]> = { ...headers };
+
+    if (!Object.keys(copied).some((name) => name.toLowerCase() === 'content-type')) {
+      copied['Content-Type'] = 'application/json';
+    }
+
+    return copied;
+  }
+
+  /**
+   * Renders a response header map the way API Gateway HTTP API (payload format
+   * 2.0) expects it.
+   *
+   * `set-cookie` is lifted out into the top-level `cookies` array — a header
+   * map cannot carry two values under one name, and cookie values contain
+   * commas, so folding them into one string would corrupt them. Any other
+   * multi-value header is comma-joined, which is how HTTP combines repeated
+   * headers and how API Gateway itself presents them on the request side.
+   */
+  static #splitResponseHeaders(headers: Record<string, string | string[]>): {
+    headers: Record<string, string>;
+    cookies: string[];
+  } {
+    const flattened: Record<string, string> = {};
+    const cookies: string[] = [];
+
+    for (const [name, value] of Object.entries(headers)) {
+      if (name.toLowerCase() === 'set-cookie') {
+        cookies.push(...(Array.isArray(value) ? value : [value]));
+        continue;
+      }
+      flattened[name] = Array.isArray(value) ? value.join(', ') : value;
+    }
+
+    return { headers: flattened, cookies };
+  }
+
   static #compactQuery(
     query: Record<string, string | undefined> | undefined
   ): Record<string, string> {
