@@ -11,7 +11,14 @@ export type {
   RouterResponse,
   RouterOptions,
   RouterMiddleware,
+  RouteRegistration,
+  RoutesConstructor,
+  LambdaHttpEvent,
+  LambdaHttpResponse,
 } from './router/Router.js';
+
+// Context Types
+export type { ContextLike } from './context/Context.js';
 
 // WebSocket
 export { default as WebSocketServer } from './websocket/WebSocketServer.js';
@@ -32,7 +39,8 @@ export { default as Local } from './local/Local.js';
 export { logger } from './logger/Logger.js';
 export { default as ApiClient } from './client/ApiClient.js';
 export { default as RouteError } from './router/RouteError.js';
-export type { FromErrorOptions } from './router/RouteError.js';
+export type { FromErrorOptions, RouteErrorResponse, RouteErrorBody } from './router/RouteError.js';
+export type { LambdaEvent, LambdaResponse } from './local/Local.js';
 
 // Documentation
 export { OpenApiGenerator, generateSwaggerUI } from './docs/OpenApiGenerator.js';

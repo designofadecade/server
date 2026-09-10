@@ -94,22 +94,52 @@ The utility converts HTTP requests to AWS Lambda HTTP API (v2.0) format:
 
 ```typescript
 interface LambdaEvent {
+  version: string;                          // Always '2.0'
+  routeKey: string;                         // "<METHOD> <path>"
   rawPath: string;                          // Request path
-  headers: Record<string, string>;          // HTTP headers
+  rawQueryString: string;                   // Encoded query string
+  headers: Record<string, string | undefined>; // Repeated headers joined with ', '
   queryStringParameters: Record<string, string>;
-  cookies: Record<string, string>;          // Parsed cookies
+  cookies: string[];                        // ["name=value", ...], as API Gateway sends
   requestContext: {
+    accountId: string;
+    apiId: string;
+    domainName: string;
+    domainPrefix: string;
     http: {
       method: string;                       // HTTP method
       path: string;                         // Request path
+      protocol: string;
+      sourceIp: string;
+      userAgent: string;
     };
+    requestId: string;
+    routeKey: string;
+    stage: string;                          // '$default' unless overridden
+    time: string;
+    timeEpoch: number;
     authorizer: unknown;                    // Authorization data
     // ...additional fields from options
   };
-  body: string | null;                      // Request body
+  body?: string;                            // Omitted when there is no body
+  isBase64Encoded: boolean;
   // ...additional fields from options
 }
 ```
+
+The event carries every field AWS marks required on
+`APIGatewayProxyEventV2`, so a handler typed with `@types/aws-lambda` can be
+wrapped directly:
+
+```typescript
+import type { APIGatewayProxyEventV2 } from 'aws-lambda';
+
+const handler = async (event: APIGatewayProxyEventV2) => router.lambdaEvent(event);
+const local = Local.LambdaProxyRouter(handler);
+```
+
+Fields the local server cannot know (`accountId`, `apiId`, `requestId`, …) get
+placeholder values. Override any of them with the `requestContext` option.
 
 ## Lambda Response Format
 
@@ -347,19 +377,35 @@ interface LambdaProxyRouterOptions {
 }
 
 interface LambdaEvent {
+  version: string;
+  routeKey: string;
   rawPath: string;
-  headers: Record<string, string | string[] | undefined>;
+  rawQueryString: string;
+  headers: Record<string, string | undefined>;
   queryStringParameters: Record<string, string>;
-  cookies: Record<string, string>;
+  cookies: string[];
   requestContext: {
+    accountId: string;
+    apiId: string;
+    domainName: string;
+    domainPrefix: string;
     http: {
       method: string;
       path: string;
+      protocol: string;
+      sourceIp: string;
+      userAgent: string;
     };
+    requestId: string;
+    routeKey: string;
+    stage: string;
+    time: string;
+    timeEpoch: number;
     authorizer: unknown;
     [key: string]: unknown;
   };
-  body: string | null;
+  body?: string;
+  isBase64Encoded: boolean;
   [key: string]: unknown;
 }
 

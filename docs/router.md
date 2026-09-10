@@ -139,16 +139,28 @@ response.
 Handle AWS Lambda events (API Gateway HTTP format).
 
 ```typescript
-lambdaEvent(event: LambdaHttpEvent): Promise<LambdaResponse>
+lambdaEvent(event: LambdaHttpEvent): Promise<LambdaHttpResponse>
 ```
+
+`LambdaHttpEvent` is structural and accepts `APIGatewayProxyEventV2` from
+`@types/aws-lambda` directly, so a conventionally typed handler needs no cast:
 
 **Example:**
 ```typescript
+import type { APIGatewayProxyEventV2 } from 'aws-lambda';
+
 // AWS Lambda handler
-export const handler = async (event) => {
+export const handler = async (event: APIGatewayProxyEventV2) => {
   return await router.lambdaEvent(event);
 };
 ```
+
+`queryStringParameters` is typed `Record<string, string | undefined>` to match
+what API Gateway actually sends. Parameters with no value are dropped before
+handlers see them, so `request.query` remains `Record<string, string>`.
+
+Both `LambdaHttpEvent` and `LambdaHttpResponse` are exported from the package
+root if you need to name them.
 
 #### decodeJwt()
 
@@ -407,32 +419,36 @@ class ProtectedRoutes extends Routes {
 Pass shared resources to routes using Context:
 
 ```typescript
-import Context from '@designofadecade/server/context';
+import type { ContextLike } from '@designofadecade/server';
 
-class AppContext extends Context {
-  constructor(
-    public database: Database,
-    public cache: Redis
-  ) {
-    super();
-  }
+interface AppContext extends ContextLike {
+  database: Database;
+  cache: Redis;
 }
 
-const context = new AppContext(db, redis);
+const context: AppContext = { database: db, cache: redis };
 
 const router = new Router({
   context,
   initRoutes: [UserRoutes]
 });
 
+// Narrow the context in the constructor and handlers read it without a cast.
 class UserRoutes extends Routes {
+  constructor(router: Router, private ctx?: AppContext) {
+    super(router, ctx);
+  }
+
   async getUser(req: RouterRequest): Promise<RouterResponse> {
-    const db = (this.context as AppContext).database;
-    const user = await db.getUser(req.params.id);
+    const user = await this.ctx!.database.getUser(req.params.id);
     return { status: 200, body: user };
   }
 }
 ```
+
+`RouterOptions.context` accepts any object shape (`ContextLike`). The abstract
+`Context` class still works if you want its lifecycle hooks — see
+[Context & State](./context-state.md).
 
 ## Error Handling
 

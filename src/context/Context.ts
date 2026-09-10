@@ -1,9 +1,29 @@
 /**
+ * Structural stand-in for an application context.
+ *
+ * The framework never calls `validate`, `initialize` or `dispose` — it only
+ * stores a context and hands it to route classes — so it has no reason to
+ * demand the `Context` *class*. It did anyway, and because those members are
+ * `protected` they can only be satisfied by real inheritance: any consumer test
+ * that stubbed a context with a plain object hit TS2739 and had to cast the
+ * problem away in exactly the place type safety is most useful.
+ *
+ * `ContextLike` is therefore what the router accepts. Extend it to describe
+ * your own context (`interface AppContext extends ContextLike { db: Db }`) and
+ * plain objects satisfy it; the abstract `Context` class remains available as a
+ * convenience base and satisfies `ContextLike` too.
+ */
+export type ContextLike = object;
+
+/**
  * Abstract Context class for application context management
  *
- * This abstract class must be extended to provide type-safe context
- * throughout the application. It enforces a pattern where context
- * structure is explicitly defined through extension.
+ * Extend this when you want the lifecycle hooks below as extension points for
+ * your own code. The router does not require it — it accepts any `ContextLike`
+ * — and because `validate`, `initialize` and `dispose` are `protected`, a
+ * context typed as this class can only be satisfied by real inheritance. If you
+ * want to stub a context with a plain object in tests, describe it with
+ * `ContextLike` instead.
  *
  * @abstract
  * @class Context
@@ -28,13 +48,14 @@
  * });
  *
  * @example
- * // Access context in route handlers
+ * // Narrow the context in the route class constructor, so handlers read it
+ * // without a cast.
  * class UserRoutes extends Routes {
- *     constructor(router: Router, context?: AppContext) {
- *         super(router, context);
+ *     constructor(router: Router, private ctx?: AppContext) {
+ *         super(router, ctx);
  *
  *         this.addRoute('/users', 'GET', async () => {
- *             const users = await (this.context as AppContext).database.getUsers();
+ *             const users = await this.ctx!.database.getUsers();
  *             return { status: 200, body: users };
  *         });
  *     }

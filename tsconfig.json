@@ -39,6 +39,7 @@
     "node_modules",
     "dist",
     "**/*.test.ts",
+    "**/*.test-d.ts",
     "**/*.test.js",
     "**/*.bench.ts",
     "**/*.bench.js"

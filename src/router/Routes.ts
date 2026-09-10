@@ -1,14 +1,12 @@
 import type Router from './Router.js';
-import type { RouterRequest, RouterResponse, RouterMiddleware } from './Router.js';
-import type Context from '../context/Context.js';
-
-interface RouteRegistration {
-  path: string;
-  methods: string[];
-  pattern: URLPattern;
-  handler: (request: RouterRequest) => Promise<RouterResponse>;
-  middleware?: RouterMiddleware[];
-}
+import type {
+  RouterRequest,
+  RouterResponse,
+  RouterMiddleware,
+  RouteRegistration,
+  RoutesConstructor,
+} from './Router.js';
+import type { ContextLike } from '../context/Context.js';
 
 export default class Routes {
   /**
@@ -21,22 +19,22 @@ export default class Routes {
    * Array of nested route classes to register
    * @type {Array}
    */
-  static register: (new (router: Router, context?: Context) => Routes)[] = [];
+  static register: RoutesConstructor<Routes>[] = [];
 
   #routerRoutes: RouteRegistration[] = [];
   protected router: Router;
-  protected context?: Context;
+  protected context?: ContextLike;
 
-  constructor(router: Router, context?: Context) {
+  constructor(router: Router, context?: ContextLike) {
     this.router = router;
     this.context = context;
 
-    (this.constructor as typeof Routes).register.forEach(
-      (RouteClass: new (router: Router, context?: Context) => Routes) => {
-        const route = new RouteClass(router, context);
-        this.#routerRoutes.push(...route.routerRoutes);
-      }
-    );
+    (this.constructor as typeof Routes).register.forEach((RouteClass) => {
+      // `context` is `ContextLike`; the constructor parameter is `never` so
+      // that subclasses may narrow it. See `RoutesConstructor`.
+      const route = new RouteClass(router, context as never);
+      this.#routerRoutes.push(...route.routerRoutes);
+    });
   }
 
   get routerRoutes(): RouteRegistration[] {

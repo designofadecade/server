@@ -55,7 +55,7 @@ Creates a safe error response from an Error object with automatic security and l
 static fromError(
   error: unknown,
   options: FromErrorOptions
-): RouterResponse
+): RouteErrorResponse
 ```
 
 #### Parameters
@@ -73,10 +73,33 @@ static fromError(
 
 #### Returns
 
-RouterResponse with:
-- `status` - HTTP status code
-- `headers` - JSON content type header
-- `body` - JSON string with error, message, statusCode, and optionally code
+`RouteErrorResponse` — a `RouterResponse` whose `status` and `headers` are
+guaranteed present, because `fromError` always resolves a status (defaulting to
+500) and always sets a JSON content type:
+
+- `status` (number) - HTTP status code
+- `headers` (Record<string, string>) - JSON content type header
+- `body` - error payload; cast to `RouteErrorBody` to read `success` and
+  `error.code` / `error.message`
+
+This matters when your handlers declare a response type with a required
+`status`: the return is assignable directly, with no cast.
+
+```typescript
+interface HandlerResponse {
+  status: number;
+  headers?: Record<string, string>;
+  body?: unknown;
+}
+
+async function getUser(): Promise<HandlerResponse> {
+  try {
+    return { status: 200, body: await users.find() };
+  } catch (error) {
+    return RouteError.fromError(error, { defaultMessage: 'Error loading user' });
+  }
+}
+```
 
 #### Safe Error Classes (Default)
 
@@ -576,7 +599,20 @@ interface FromErrorOptions {
 static fromError(
   error: unknown,
   options: FromErrorOptions
-): RouterResponse
+): RouteErrorResponse
+
+interface RouteErrorResponse extends RouterResponse {
+  status: number;
+  headers: Record<string, string>;
+}
+
+interface RouteErrorBody {
+  success: false;
+  error: {
+    code: string;
+    message: string;
+  };
+}
 ```
 
 ## Related Documentation

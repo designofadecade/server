@@ -24,30 +24,73 @@ import Router from '../router/Router.js';
 import Routes from '../router/Routes.js';
 import type { RouterRequest, RouterResponse } from '../router/Router.js';
 import type { IncomingMessage, ServerResponse } from 'http';
+import { randomUUID } from 'node:crypto';
 
 interface LambdaProxyRouterOptions {
   requestContext?: Record<string, unknown>;
   event?: Record<string, unknown>;
 }
 
-interface LambdaEvent {
+/**
+ * The event `LambdaProxyRouter` synthesises, shaped as an API Gateway HTTP API
+ * (payload format 2.0) event.
+ *
+ * Every field AWS marks required is present, because the wrapped handler is
+ * usually typed with `APIGatewayProxyEventV2` from `@types/aws-lambda` and
+ * function parameters are checked contravariantly: this type has to be
+ * assignable *to* AWS's, not merely resemble it. It previously omitted
+ * `version`, `routeKey`, `rawQueryString` and `isBase64Encoded`, so passing a
+ * conventionally typed handler was a type error.
+ */
+export interface LambdaEvent {
+  version: string;
+  routeKey: string;
   rawPath: string;
-  headers: Record<string, string | string[] | undefined>;
+  rawQueryString: string;
+  /**
+   * API Gateway v2 collapses repeated headers into one comma-joined string, so
+   * these are `string`, not Node's `string | string[]`. Emitting Node's shape
+   * made local dev diverge from deployed behaviour and made this type
+   * unassignable to `APIGatewayProxyEventV2`.
+   */
+  headers: Record<string, string | undefined>;
   queryStringParameters: Record<string, string>;
-  cookies: Record<string, string>;
+  /**
+   * API Gateway v2 sends cookies as `["name=value", ...]`, not as an object.
+   * Emitting an object here meant a wrapped `Router.lambdaEvent` handler ran
+   * its array guard, found a non-array, and silently discarded every cookie.
+   */
+  cookies: string[];
   requestContext: {
+    accountId: string;
+    apiId: string;
+    domainName: string;
+    domainPrefix: string;
     http: {
       method: string;
       path: string;
+      protocol: string;
+      sourceIp: string;
+      userAgent: string;
     };
+    requestId: string;
+    routeKey: string;
+    stage: string;
+    time: string;
+    timeEpoch: number;
     authorizer: unknown;
     [key: string]: unknown;
   };
-  body: string | null;
+  /**
+   * Omitted when there is no body. API Gateway leaves the field out rather than
+   * sending `null`, and AWS's type says `string | undefined` accordingly.
+   */
+  body?: string;
+  isBase64Encoded: boolean;
   [key: string]: unknown;
 }
 
-interface LambdaResponse {
+export interface LambdaResponse {
   statusCode: number;
   headers?: Record<string, string>;
   cookies?: string[];
@@ -100,20 +143,52 @@ export default class Local {
                     event?: Record<string, unknown>;
                   }) || {};
 
+                const rawQueryString = new URLSearchParams(request.query).toString();
+                const now = new Date();
+
+                // Match API Gateway, which joins repeated headers with ", ".
+                const headers: Record<string, string | undefined> = {};
+                for (const [name, value] of Object.entries(request.headers)) {
+                  headers[name] = Array.isArray(value) ? value.join(', ') : value;
+                }
+
                 const LambdaResponse: LambdaResponse = await LambdaHandler({
+                  version: '2.0',
+                  routeKey: `${request.method} ${request.path}`,
                   rawPath: request.path,
-                  headers: request.headers,
+                  rawQueryString,
+                  headers,
                   queryStringParameters: request.query,
-                  cookies: request.cookies,
+                  // API Gateway v2 wire format: an array of "name=value" pairs.
+                  cookies: Object.entries(request.cookies).map(
+                    ([name, value]) => `${name}=${value}`
+                  ),
                   requestContext: {
+                    // Placeholders for the fields API Gateway would populate.
+                    // They exist so a handler typed with the real AWS event can
+                    // read them without an undefined surprise; override any of
+                    // them via the `requestContext` option.
+                    accountId: 'local',
+                    apiId: 'local',
+                    domainName: headers.host ?? 'localhost',
+                    domainPrefix: (headers.host ?? 'localhost').split('.')[0] ?? 'localhost',
                     http: {
                       method: request.method,
                       path: request.path,
+                      protocol: 'HTTP/1.1',
+                      sourceIp: headers['x-forwarded-for']?.split(',')[0]?.trim() ?? '127.0.0.1',
+                      userAgent: headers['user-agent'] ?? '',
                     },
+                    requestId: randomUUID(),
+                    routeKey: `${request.method} ${request.path}`,
+                    stage: '$default',
+                    time: now.toISOString(),
+                    timeEpoch: now.getTime(),
                     authorizer: request.authorizer || null,
                     ...(lambdaOptions.requestContext || {}),
-                  },
-                  body: request.body ? JSON.stringify(request.body) : null,
+                  } as LambdaEvent['requestContext'],
+                  body: request.body ? JSON.stringify(request.body) : undefined,
+                  isBase64Encoded: false,
                   ...(lambdaOptions.event || {}),
                 });
 

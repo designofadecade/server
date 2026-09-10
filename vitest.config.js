@@ -26,6 +26,15 @@ export default defineConfig({
         globals: true,
         environment: 'node',
         include: ['src/**/*.test.{js,ts}'],
+        // Type-level regression tests. Several defects this package has shipped
+        // were invisible to runtime tests because they only affected the .d.ts
+        // a consumer sees, so those assertions live in *.test-d.ts and are
+        // checked by tsc rather than executed.
+        typecheck: {
+            enabled: true,
+            include: ['src/**/*.test-d.ts'],
+            tsconfig: './tsconfig.typecheck.json',
+        },
         coverage: {
             provider: 'v8',
             reporter: ['text', 'json', 'html'],
@@ -37,6 +46,7 @@ export default defineConfig({
             exclude: [
                 'node_modules/',
                 'src/**/*.test.{js,ts}',
+                'src/**/*.test-d.ts',
                 'src/**/*.bench.{js,ts}',
             ],
         },

@@ -343,14 +343,13 @@ const display = HtmlSanitizer.clean(content, allowedTags);
 ### 4. Context Usage
 
 ```typescript
-// Keep context immutable
-class AppContext extends Context {
-  constructor(
-    public readonly db: Database,  // readonly
-    public readonly config: Config // readonly
-  ) {
-    super();
-  }
+import type { ContextLike } from '@designofadecade/server';
+
+// Keep context immutable. A structural interface also lets tests stand in a
+// plain object without casting.
+interface AppContext extends ContextLike {
+  readonly db: Database;
+  readonly config: Config;
 }
 ```
 

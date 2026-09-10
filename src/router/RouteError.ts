@@ -17,6 +17,34 @@ const DEFAULT_SAFE_ERROR_CLASSES = [
 ];
 
 /**
+ * The response `fromError` returns.
+ *
+ * `RouterResponse` leaves `status` and `headers` optional because a route
+ * handler may omit them and let the router default them. `fromError` has no
+ * such freedom — it always resolves a status (falling back to 500) and always
+ * sets a JSON content type — so its return type states that. Without this a
+ * consumer whose handler signature requires `status: number` gets a TS2322 on
+ * every `return RouteError.fromError(...)`.
+ */
+export interface RouteErrorResponse extends RouterResponse {
+  status: number;
+  headers: Record<string, string>;
+}
+
+/**
+ * Body shape `fromError` produces. Exported so consumers can type-narrow the
+ * `body` they get back; `RouteErrorResponse.body` stays `unknown` so existing
+ * casts keep working.
+ */
+export interface RouteErrorBody {
+  success: false;
+  error: {
+    code: string;
+    message: string;
+  };
+}
+
+/**
  * Options for creating error responses from Error objects
  */
 export interface FromErrorOptions {
@@ -46,7 +74,7 @@ export default class RouteError {
    *
    * @param error - Error object or unknown error
    * @param options - Configuration options
-   * @returns RouterResponse with format:
+   * @returns RouteErrorResponse with format:
    * {
    *   status: number,
    *   body: {
@@ -69,7 +97,7 @@ export default class RouteError {
    *   });
    * }
    */
-  static fromError(error: unknown, options: FromErrorOptions): RouterResponse {
+  static fromError(error: unknown, options: FromErrorOptions): RouteErrorResponse {
     const { defaultMessage, status = 500, safeErrorClasses = [], context = {} } = options;
 
     // Combine default safe classes with custom ones
@@ -98,7 +126,7 @@ export default class RouteError {
     const clientMessage = isSafe ? errorDetails.message : defaultMessage;
 
     // Build response body with new standardized format
-    const responseBody = {
+    const responseBody: RouteErrorBody = {
       success: false,
       error: {
         code: isSafe && errorDetails.code ? errorDetails.code : 'UNKNOWN_ERROR',

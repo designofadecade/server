@@ -4,38 +4,50 @@ Application context and state management for shared resources and configuration.
 
 ## Context
 
-Abstract base class for type-safe application context throughout your application.
+A pattern for passing shared resources (database connections, services,
+configuration) to routes and handlers in a type-safe way.
 
 ### Overview
 
-The `Context` class provides a pattern for passing shared resources (database connections, services, configuration) to routes and handlers in a type-safe way.
+There are two ways to describe a context, and the router accepts both:
+
+- **`ContextLike`** (recommended) — a structural interface. Extend it to
+  describe your context and any matching object satisfies it, including plain
+  objects built in tests.
+- **`Context`** — an abstract class you extend, offering `validate()`,
+  `initialize()` and `dispose()` as extension points for your own code.
+
+Prefer `ContextLike` unless you want the class's lifecycle hooks. `Context`'s
+methods are `protected`, which means only real inheritance can satisfy them, so
+a context typed as the class cannot be stood in for by an object literal in a
+test.
+
+> The framework never calls `validate()`, `initialize()` or `dispose()` itself —
+> it stores the context and hands it to your route classes. They exist for your
+> own code to call.
 
 ### Installation
 
 ```typescript
 import Context from '@designofadecade/server/context';
+import type { ContextLike } from '@designofadecade/server';
 ```
 
 ### Quick Start
 
 ```typescript
-import Context from '@designofadecade/server/context';
 import Router from '@designofadecade/server/router';
 import Routes from '@designofadecade/server/router/Routes';
+import type { ContextLike } from '@designofadecade/server';
 
-// Define your application context
-class AppContext extends Context {
-  constructor(
-    public readonly database: Database,
-    public readonly redis: Redis,
-    public readonly config: Config
-  ) {
-    super();
-  }
+// Describe your application context
+interface AppContext extends ContextLike {
+  readonly database: Database;
+  readonly redis: Redis;
+  readonly config: Config;
 }
 
-// Create context instance
-const context = new AppContext(db, redis, config);
+const context: AppContext = { database: db, redis, config };
 
 // Pass to router
 const router = new Router({
@@ -43,12 +55,15 @@ const router = new Router({
   initRoutes: [UserRoutes, PostRoutes]
 });
 
-// Access in routes
+// Narrow the context in your route class constructor
 class UserRoutes extends Routes {
+  constructor(router: Router, private ctx?: AppContext) {
+    super(router, ctx);
+  }
+
   async getUser(req: RouterRequest): Promise<RouterResponse> {
-    const ctx = this.context as AppContext;
-    const user = await ctx.database.users.findById(req.params.id);
-    
+    const user = await this.ctx!.database.users.findById(req.params.id);
+
     return {
       status: 200,
       body: user
@@ -56,6 +71,49 @@ class UserRoutes extends Routes {
   }
 }
 ```
+
+### Testing with a stub context
+
+Because `ContextLike` is structural, a test can supply a plain object with only
+the parts the code under test touches — no cast, and the compiler still checks
+the stub against the real shape:
+
+```typescript
+const context: AppContext = {
+  database: { users: { findById: async () => ({ id: '1' }) } } as Database,
+  redis: fakeRedis,
+  config: { assetsBucket: 'test-bucket' } as Config
+};
+
+const routes = new UserRoutes(router, context);
+```
+
+### Using the abstract class instead
+
+`Context` remains available as a convenience base and satisfies `ContextLike`:
+
+```typescript
+import Context from '@designofadecade/server/context';
+
+class AppContext extends Context {
+  constructor(
+    public readonly database: Database,
+    public readonly config: Config
+  ) {
+    super();
+  }
+
+  protected override validate(): boolean {
+    return Boolean(this.database);
+  }
+}
+
+const router = new Router({ context: new AppContext(db, config) });
+```
+
+To stub a class-based context in a test, construct the real subclass with fake
+collaborators rather than casting an object literal — the protected members
+cannot be satisfied structurally.
 
 ### API Reference
 
@@ -575,20 +633,25 @@ describe('My Tests', () => {
 
 1. **Immutable Resources:** Make context properties readonly
    ```typescript
-   class AppContext extends Context {
-     constructor(
-       public readonly db: Database,  // readonly
-       public readonly config: Config // readonly
-     ) {
-       super();
-     }
+   interface AppContext extends ContextLike {
+     readonly db: Database;
+     readonly config: Config;
    }
    ```
 
-2. **Type Safety:** Always cast context in routes
+2. **Type Safety:** Narrow the context in the route constructor rather than
+   casting `this.context` in each handler — a cast silently survives a context
+   change, a typed parameter does not.
    ```typescript
-   const ctx = this.context as AppContext;
-   const data = await ctx.database.query();
+   class UserRoutes extends Routes {
+     constructor(router: Router, private ctx?: AppContext) {
+       super(router, ctx);
+     }
+
+     async list() {
+       return this.ctx!.db.query();
+     }
+   }
    ```
 
 3. **Lifecycle Management:** Use initialize/dispose for setup/cleanup

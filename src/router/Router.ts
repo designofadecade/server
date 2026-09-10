@@ -2,9 +2,20 @@ import { IncomingMessage, ServerResponse } from 'http';
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { logger } from '../logger/Logger.js';
 import RouteError from './RouteError.js';
-import Context from '../context/Context.js';
+import type { ContextLike } from '../context/Context.js';
 
-interface LambdaHttpEvent {
+/**
+ * The subset of an API Gateway HTTP API (payload format 2.0) event the router
+ * reads. Deliberately structural and permissive so that an event typed with
+ * `APIGatewayProxyEventV2` from `@types/aws-lambda` — the documented way to
+ * write a Lambda — is assignable to it without a cast.
+ *
+ * Note the absence of an index signature. `APIGatewayProxyEventV2` is an
+ * interface, so it carries no implicit one and could never satisfy a target
+ * that declared one; the router reads only the fields below, so requiring it
+ * bought nothing and blocked the primary use case.
+ */
+export interface LambdaHttpEvent {
   requestContext: {
     http: {
       method: string;
@@ -15,17 +26,53 @@ interface LambdaHttpEvent {
   headers: Record<string, string | string[] | undefined>;
   body?: string | null;
   cookies?: string[];
-  queryStringParameters?: Record<string, string>;
-  [key: string]: unknown;
+  /**
+   * API Gateway omits query parameters that were not supplied, so a lookup
+   * yields `string | undefined`. This used to claim `Record<string, string>`,
+   * which was both narrower than AWS's own type (making the canonical handler
+   * fail to typecheck) and a misstatement of the wire format.
+   */
+  queryStringParameters?: Record<string, string | undefined>;
 }
 
-interface RouteRegistration {
+/** The API Gateway HTTP API (payload format 2.0) response `lambdaEvent` returns. */
+export interface LambdaHttpResponse {
+  statusCode: number;
+  headers?: Record<string, string>;
+  body: string;
+  isBase64Encoded?: boolean;
+}
+
+export interface RouteRegistration {
   path: string;
   methods: string[];
   pattern: URLPattern;
   handler: (request: RouterRequest) => Promise<RouterResponse>;
   middleware?: RouterMiddleware[];
 }
+
+/**
+ * Constructor of a route class.
+ *
+ * `context` is typed `never` on purpose. TypeScript checks constructor
+ * parameters contravariantly, so declaring it as `Context` rejected the very
+ * pattern this package documents — a route class whose constructor narrows the
+ * context to the application's own type:
+ *
+ * ```ts
+ * class UserRoutes extends Routes {
+ *   constructor(router: Router, context?: AppContext) { super(router, context); }
+ * }
+ * new Router({ initRoutes: [UserRoutes] }); // used to be a type error
+ * ```
+ *
+ * `never` is assignable to every type, so any narrowing is accepted. The router
+ * casts once at the single call site where it constructs these classes.
+ */
+export type RoutesConstructor<T = { routerRoutes: RouteRegistration[] }> = new (
+  router: Router,
+  context?: never
+) => T;
 
 export interface RouterRequest {
   path: string;
@@ -71,8 +118,12 @@ export interface JwtOptions {
 }
 
 export interface RouterOptions {
-  context?: Context;
-  initRoutes?: (new (router: Router, context?: Context) => { routerRoutes: RouteRegistration[] })[];
+  /**
+   * Application context handed to each route class. Any object shape is
+   * accepted — see `ContextLike`; the router only passes it through.
+   */
+  context?: ContextLike;
+  initRoutes?: RoutesConstructor[];
   bearerToken?: string | null;
   middleware?: RouterMiddleware[];
   /**
@@ -113,7 +164,9 @@ export default class Router {
     if (Array.isArray(initRoutes))
       this.#buildRoutesPatterns(
         initRoutes
-          .map((RoutesClass) => new RoutesClass(this, context).routerRoutes)
+          // `context` is `ContextLike`; the constructor parameter is `never` so
+          // that subclasses may narrow it. See `RoutesConstructor`.
+          .map((RoutesClass) => new RoutesClass(this, context as never).routerRoutes)
           .flat()
           .filter((route) => route && route.path && route.handler)
       );
@@ -192,12 +245,7 @@ export default class Router {
     }
   }
 
-  async lambdaEvent(event: LambdaHttpEvent): Promise<{
-    statusCode: number;
-    headers?: Record<string, string>;
-    body: string;
-    isBase64Encoded?: boolean;
-  }> {
+  async lambdaEvent(event: LambdaHttpEvent): Promise<LambdaHttpResponse> {
     try {
       let body = Router.MethodsWithBody.includes(event.requestContext.http.method)
         ? event.body
@@ -228,7 +276,7 @@ export default class Router {
         body: body,
         cookies: this.#parseLambdaCookies(event.cookies || []),
         params: {},
-        query: event?.queryStringParameters || {},
+        query: Router.#compactQuery(event?.queryStringParameters),
         headers: event.headers || {},
         authorizer: event.requestContext.authorizer || null,
       });
@@ -407,6 +455,25 @@ export default class Router {
    * Parse Lambda HTTP API v2.0 cookies array into key-value object
    * Lambda provides cookies as an array like: ["cookie1=value1", "cookie2=value2"]
    */
+  /**
+   * Drop query parameters API Gateway sent with no value.
+   *
+   * The event type admits `undefined` values because that is what AWS's own
+   * type says, but `RouterRequest.query` promises `Record<string, string>`.
+   * Stripping the empty entries here keeps that promise true rather than
+   * pushing `string | undefined` onto every handler.
+   */
+  static #compactQuery(
+    query: Record<string, string | undefined> | undefined
+  ): Record<string, string> {
+    if (!query) return {};
+    const compacted: Record<string, string> = {};
+    for (const [key, value] of Object.entries(query)) {
+      if (value !== undefined) compacted[key] = value;
+    }
+    return compacted;
+  }
+
   #parseLambdaCookies(cookies: string[]): Record<string, string> {
     if (!Array.isArray(cookies) || cookies.length === 0) return {};
     return Object.fromEntries(

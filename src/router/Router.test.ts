@@ -776,7 +776,6 @@ describe('Router', () => {
   describe('Middleware', () => {
     it('should execute global middleware', async () => {
       const globalMiddleware = vi.fn(async (event: any) => {
-         
         event.middlewareRan = true;
       });
 
@@ -784,7 +783,6 @@ describe('Router', () => {
         constructor(router: Router) {
           super(router);
           this.addRoute('/test', 'GET', async (event: any) => ({
-             
             status: 200,
             body: { middlewareRan: event.middlewareRan },
           }));
@@ -903,5 +901,61 @@ describe('Router', () => {
       const response = await router.lambdaEvent(event);
       expect(response.statusCode).toBe(500);
     });
+  });
+});
+
+describe('Router lambdaEvent query parameters', () => {
+  let capturedQuery: Record<string, string> | undefined;
+  let router: Router;
+
+  beforeEach(() => {
+    capturedQuery = undefined;
+    class QueryRoutes extends Routes {
+      constructor(r: Router) {
+        super(r);
+        this.addRoute('/search', 'GET', async (request) => {
+          capturedQuery = request.query;
+          return { status: 200, body: request.query };
+        });
+      }
+    }
+    router = new Router({ initRoutes: [QueryRoutes] });
+  });
+
+  it('passes through query parameters that have values', async () => {
+    const response = await router.lambdaEvent({
+      requestContext: { http: { method: 'GET', path: '/search' } },
+      headers: {},
+      queryStringParameters: { q: 'hello', page: '2' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(capturedQuery).toEqual({ q: 'hello', page: '2' });
+  });
+
+  /**
+   * The event type admits `undefined` values because AWS's own type does, but
+   * `RouterRequest.query` promises `Record<string, string>`. Undefined values
+   * used to be forwarded verbatim, so a handler could read `undefined` where a
+   * string was promised.
+   */
+  it('drops query parameters sent without a value', async () => {
+    await router.lambdaEvent({
+      requestContext: { http: { method: 'GET', path: '/search' } },
+      headers: {},
+      queryStringParameters: { q: 'hello', empty: undefined },
+    });
+
+    expect(capturedQuery).not.toHaveProperty('empty');
+    expect(Object.values(capturedQuery ?? {})).not.toContain(undefined);
+  });
+
+  it('defaults to an empty object when the event has no query parameters', async () => {
+    await router.lambdaEvent({
+      requestContext: { http: { method: 'GET', path: '/search' } },
+      headers: {},
+    });
+
+    expect(capturedQuery).toEqual({});
   });
 });

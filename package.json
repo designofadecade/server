@@ -76,7 +76,8 @@
     "prepublishOnly": "npm run build",
     "lint": "eslint .",
     "format": "prettier --write \"src/**/*.ts\"",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "typecheck:types": "tsc --noEmit -p tsconfig.typecheck.json"
   },
   "engines": {
     "node": ">=24.0.0"
@@ -113,6 +114,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@types/aws-lambda": "^8.10.163",
     "@types/node": "^24.13.4",
     "@types/ws": "^8.5.10",
     "@vitest/coverage-v8": "^5.0.0",

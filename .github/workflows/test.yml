@@ -48,3 +48,30 @@ jobs:
           flags: unittests
           name: codecov-umbrella
           fail_ci_if_error: false
+
+  # Non-blocking early warning for the next TypeScript major. TypeScript 7 is
+  # released but cannot be adopted yet: typescript-eslint peers
+  # `typescript: >=4.8.4 <6.1.0`, so upgrading would break linting. This job
+  # surfaces a TS-next regression in the shipped .d.ts before the switch
+  # becomes possible, without gating the build.
+  typescript-next:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      # tsconfig.typecheck.json covers src plus the *.test-d.ts consumer-facing
+      # type assertions, so a TS-next change to variance or inference shows up
+      # here rather than in a consumer's project.
+      - name: Typecheck against TypeScript next
+        run: npx -y -p typescript@next tsc --noEmit -p tsconfig.typecheck.json

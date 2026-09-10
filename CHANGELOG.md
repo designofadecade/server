@@ -7,6 +7,163 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [10.3.0] - 2026-09-10
+
+Type-definition fixes found while integrating the package into an AWS Lambda +
+TypeScript consumer. All three reported issues were confirmed against the source
+and are consumer-facing type problems; fixing the second uncovered a runtime bug
+in `Local` as well.
+
+Code following the documented patterns needs no edits — `as any` workarounds at
+the Lambda boundary simply become unnecessary. A few narrow surfaces did change
+shape; see *Upgrade Notes* below for what to check if you went off the documented
+path.
+
+### Fixed
+- **`RouteError.fromError()` declared `status` optional but always sets it.** It
+  destructures with `status = 500` and returns that unconditionally, so
+  `RouterResponse` — where `status` is optional because a *handler* may omit it
+  and let the router default it — was weaker than the guarantee. Any consumer
+  whose handler declares a required `status` got `TS2322` on every
+  `return RouteError.fromError(...)`.
+
+  `fromError` now returns `RouteErrorResponse`, which narrows `status` and
+  `headers` to required. `RouterResponse.status` stays optional, which is correct
+  for handlers.
+
+```typescript
+interface HandlerResponse { status: number; headers?: Record<string, string>; body?: unknown }
+
+async function getUser(): Promise<HandlerResponse> {
+  try {
+    return { status: 200, body: await users.find() };
+  } catch (error) {
+    // Previously TS2322; now assignable directly.
+    return RouteError.fromError(error, { defaultMessage: 'Error loading user' });
+  }
+}
+```
+
+- **`LambdaHttpEvent` was incompatible with `@types/aws-lambda`.**
+  `queryStringParameters` was typed `Record<string, string>`, narrower than AWS's
+  `{ [name: string]: string | undefined }`, so the canonical handler failed to
+  typecheck and needed an `as any` at the boundary. It is now
+  `Record<string, string | undefined>`, which also matches the wire format —
+  API Gateway genuinely omits values.
+
+  Handlers are unaffected: `RouterRequest.query` remains
+  `Record<string, string>`, and parameters with no value are now dropped at the
+  boundary rather than forwarded as `undefined` behind a type that promised
+  `string`.
+
+```typescript
+import type { APIGatewayProxyEventV2 } from 'aws-lambda';
+
+// Previously TS2345; now accepted with no cast.
+export const handler = async (event: APIGatewayProxyEventV2) => router.lambdaEvent(event);
+```
+
+- **`Local.LambdaProxyRouter` silently discarded every cookie.** It built the
+  Lambda event with `cookies` as an object, but API Gateway v2 sends
+  `["name=value", ...]` and `Router.lambdaEvent` guards with `Array.isArray`.
+  Handed an object it took the guard and returned `{}`, so a cookie-authenticated
+  route worked when deployed and failed locally. Cookies are now emitted in wire
+  format.
+
+- **`Local`'s event was not assignable to `APIGatewayProxyEventV2`.** It omitted
+  `version`, `routeKey`, `rawQueryString` and `isBase64Encoded`, sent Node's
+  `string | string[]` headers where API Gateway sends one joined string, and
+  supplied only part of `requestContext`. Because function parameters are checked
+  contravariantly, passing a handler typed with the official AWS event — including
+  `router.lambdaEvent` — was a type error. The synthesised event now carries every
+  field AWS marks required.
+
+- **The documented typed-context pattern did not compile.** `RouterOptions.initRoutes`
+  and `Routes.register` typed the route-class constructor's context parameter as
+  `Context`. Constructor parameters are contravariant, so a route class that
+  narrowed it — the pattern shown throughout the docs — was rejected:
+
+```typescript
+class UserRoutes extends Routes {
+  constructor(router: Router, context?: AppContext) { super(router, context); }
+}
+new Router({ initRoutes: [UserRoutes] }); // TS2322 before this release
+```
+
+  Both now use `RoutesConstructor`, whose context parameter is `never` and so
+  accepts any narrowing.
+
+- **`Context`'s protected members made it impractical to stub in tests.**
+  `validate()`, `initialize()` and `dispose()` are `protected`, which only real
+  inheritance can satisfy, so a consumer test passing a plain object where a
+  `Context` was expected hit `TS2739` and had to cast — discarding type safety in
+  exactly the place it is most useful.
+
+  The framework never calls those methods; it stores the context and hands it to
+  route classes. `RouterOptions.context` and `Routes.context` therefore now accept
+  `ContextLike`, a structural type. Extend it to describe your own context and
+  plain objects satisfy it. The abstract `Context` class is unchanged and still
+  works as a convenience base for code that wants the lifecycle hooks.
+
+```typescript
+interface AppContext extends ContextLike { db: Db; config: Config }
+
+// In a unit test - no cast, and the stub is still checked against the real shape.
+const context: AppContext = { db: fakeDb, config: { assetsBucket: 'x' } };
+```
+
+### Added
+- Exported types that were previously unreachable from the package root:
+  `LambdaHttpEvent`, `LambdaHttpResponse`, `RouteRegistration`,
+  `RoutesConstructor`, `ContextLike`, `RouteErrorResponse`, `RouteErrorBody`, and
+  `LambdaEvent` / `LambdaResponse` from `Local`. Consumers had to restate these
+  shapes by hand.
+- `*.test-d.ts` type-level regression tests, run by `vitest --typecheck` as part
+  of `npm test`. Every defect in this release was invisible to the runtime suite
+  because it only affected the `.d.ts` a consumer sees.
+- `npm run typecheck:types` and a non-blocking `typescript-next` CI job, which
+  typechecks source and the type tests against `typescript@next`. TypeScript 7 is
+  released but cannot be adopted yet — `typescript-eslint` peers
+  `typescript: >=4.8.4 <6.1.0` — so this surfaces a regression before the switch
+  becomes possible. Source and the shipped `.d.ts` compile clean under 7.0.2
+  today.
+- `@types/aws-lambda` as a devDependency, so the type tests assert against AWS's
+  real definitions rather than a local replica.
+
+### Upgrade Notes
+
+Nothing here affects deployed behaviour, and nothing affects code using the
+documented patterns. Three surfaces changed shape:
+
+- **`LambdaHttpEvent` no longer has an `[key: string]: unknown` index signature**
+  (type-only). It had to go: `APIGatewayProxyEventV2` is an interface, carries no
+  implicit index signature, and so could never satisfy a target that declared
+  one. The router reads only the declared fields.
+
+  Passing a *variable* is unaffected — excess property checks apply only to fresh
+  object literals. Only code that constructs an event literal with extra fields,
+  or reads an undeclared field off an event typed as `LambdaHttpEvent`, needs a
+  cast or a wider local type. This surfaces as a compile error, never as a
+  runtime surprise.
+
+- **`Local.LambdaProxyRouter` now synthesises a correct API Gateway v2 event**
+  (local development only). Deployed behaviour was already this shape — that is
+  the point of the change. Worth a look only if you pass `LambdaProxyRouter` a
+  hand-written handler rather than one wrapping `router.lambdaEvent`:
+  - `event.cookies` is `string[]` (`["name=value"]`), was an object. Through a
+    wrapped `Router.lambdaEvent` cookies previously never arrived at all, so
+    nothing that worked before can regress here.
+  - `event.headers[name]` is `string`, with repeated headers joined by `", "`;
+    was Node's `string | string[]`.
+  - `event.body` is omitted when there is no body; was `null`. Check falsiness
+    rather than `=== null`.
+
+- **`RouterOptions.context` and `Routes.context` are typed `ContextLike`, not
+  `Context`.** This widens what is accepted, so existing code compiles — a
+  subclass that redeclares `protected context?: AppContext` is still fine. Only
+  code relying on `this.context` being *nominally* a `Context` needs to say so
+  explicitly.
+
 ## [10.2.1] - 2026-09-09
 
 ### Documentation
