@@ -91,7 +91,7 @@ export default class HtmlRenderer {
 
       // Process {{#if}} with {{else}} - innermost first (non-greedy match)
       processed = processed.replace(
-        /\{\{#if\s+([^}\s][^}]*)\}\}((?:(?!\{\{#if|\{\{#each).)*?)\{\{else\}\}((?:(?!\{\{#if|\{\{#each).)*?)\{\{\/if\}\}/s,
+        /\{\{#if\s+([^{}\s][^{}]*)\}\}((?:(?!\{\{#if|\{\{#each).)*?)\{\{else\}\}((?:(?!\{\{#if|\{\{#each).)*?)\{\{\/if\}\}/s,
         (_match, condition, ifContent, elseContent) => {
           const isTruthy = HtmlRenderer.#evaluateCondition(condition, vars);
           return isTruthy ? ifContent : elseContent;
@@ -100,7 +100,7 @@ export default class HtmlRenderer {
 
       // Process {{#if}} without {{else}} - innermost first (non-greedy match)
       processed = processed.replace(
-        /\{\{#if\s+([^}\s][^}]*)\}\}((?:(?!\{\{#if|\{\{#each).)*?)\{\{\/if\}\}/s,
+        /\{\{#if\s+([^{}\s][^{}]*)\}\}((?:(?!\{\{#if|\{\{#each).)*?)\{\{\/if\}\}/s,
         (_match, condition, content) => {
           const isTruthy = HtmlRenderer.#evaluateCondition(condition, vars);
           return isTruthy ? content : '';
