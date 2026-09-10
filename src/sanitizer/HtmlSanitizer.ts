@@ -50,6 +50,22 @@ export interface SanitizationResult {
 /**
  * Maximum input size to prevent DoS attacks (1MB)
  */
+/**
+ * Attribute section of an HTML tag.
+ *
+ * A quoted attribute value may legally contain '<', so `[^>]*` cannot simply
+ * become `[^<>]*` — that would end the tag early and let attribute content leak
+ * out as document structure. This matches unquoted characters and fully quoted
+ * values separately. The three alternatives are disjoint on their first
+ * character, so the match is deterministic and runs in linear time.
+ *
+ * SECURITY: the previous `[^>]*` was a polynomial ReDoS. On input with many
+ * '<' and no '>', the engine rescanned to end of input from every '<' and
+ * backtracked, so sanitizing 1MB of attacker-supplied text — well inside
+ * MAX_INPUT_SIZE — blocked the event loop for minutes.
+ */
+const TAG_ATTRS = `(?:[^<>"']|"[^"]*"|'[^']*')*`;
+
 const MAX_INPUT_SIZE: number = 1024 * 1024;
 
 /**
@@ -164,7 +180,7 @@ export default class HtmlSanitizer {
    * region it has already passed.
    */
   static #removeTagBlocks(input: string, tagNames: readonly string[]): string {
-    const opener = new RegExp(`<(${tagNames.join('|')})\\b[^>]*>`, 'gi');
+    const opener = new RegExp(`<(${tagNames.join('|')})\\b${TAG_ATTRS}>`, 'gi');
     const lowered = input.toLowerCase();
 
     // Once a closing tag is absent from the remainder it is absent for every
@@ -397,7 +413,10 @@ export default class HtmlSanitizer {
 
     // Also remove self-closing dangerous tags
     cleaned = cleaned.replace(
-      /<(script|style|iframe|object|embed|applet|link|base|meta|form|input|button|textarea|select)[^>]*\/?>/gi,
+      new RegExp(
+        `<(script|style|iframe|object|embed|applet|link|base|meta|form|input|button|textarea|select)${TAG_ATTRS}\\/?>`,
+        'gi'
+      ),
       ''
     );
 
@@ -564,7 +583,7 @@ export default class HtmlSanitizer {
       return `<${lowerTagName}>`;
     };
 
-    const tagPattern = /<\/?([a-z][a-z0-9]*)\b[^>]*>/gi;
+    const tagPattern = new RegExp(`</?([a-z][a-z0-9]*)\\b${TAG_ATTRS}>`, 'gi');
     let rebuilt = '';
     let cursor = 0;
     let tagMatch: RegExpExecArray | null;
@@ -664,7 +683,7 @@ export default class HtmlSanitizer {
 
     // Replace opening tags of the specified type
     return html.replace(
-      new RegExp(`<${lowerTagName}\\b([^>]*)>`, 'gi'),
+      new RegExp(`<${lowerTagName}\\b(${TAG_ATTRS})>`, 'gi'),
       (_match: string, existingAttrs: string): string => {
         // Parse existing attributes to preserve href, src, etc.
         const preservedAttrs: string[] = [];
@@ -737,7 +756,7 @@ export default class HtmlSanitizer {
       previousStripped = text;
       text = HtmlSanitizer.#removeComments(text);
       text = HtmlSanitizer.#removeTagBlocks(text, ['script', 'style']);
-      text = text.replace(/<[^>]*>/g, '');
+      text = text.replace(new RegExp(`<${TAG_ATTRS}>`, 'g'), '');
       stripPass++;
     }
 

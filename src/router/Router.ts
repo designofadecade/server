@@ -180,8 +180,7 @@ export default class Router {
 
       // Normalize: collapse multiple slashes, remove trailing slash (except root)
       let normalizedPath = route.path.replace(/\/+/g, '/');
-      normalizedPath =
-        normalizedPath.length > 1 ? normalizedPath.replace(/\/+$/, '') : normalizedPath;
+      normalizedPath = Router.#stripTrailingSlashes(normalizedPath);
 
       for (const method of route.methods) {
         const pathMethodKey = `${normalizedPath}::${method}`;
@@ -214,7 +213,7 @@ export default class Router {
     method: string
   ): RouteRegistration | { handler: (request: RouterRequest) => Promise<RouterResponse> } | null {
     // Normalize path: remove trailing slash (except for root "/")
-    const normalizedPath = path.length > 1 ? path.replace(/\/+$/, '') : path;
+    const normalizedPath = Router.#stripTrailingSlashes(path);
 
     if (this.#routes.static.has(`${normalizedPath}::${method}`))
       return this.#routes.static.get(`${normalizedPath}::${method}`)!;
@@ -234,6 +233,20 @@ export default class Router {
     this.#pruneCache();
 
     return route || null;
+  }
+
+  /**
+   * Strip trailing slashes, keeping a lone "/" intact.
+   *
+   * `replace(/\/+$/, '')` looks equivalent but is quadratic: the anchored `+`
+   * makes the engine retry from every index in a run of slashes, each time
+   * scanning to the end before failing. A path is attacker-controlled, so a
+   * request of many slashes turned into O(n^2) work on the event loop.
+   */
+  static #stripTrailingSlashes(path: string): string {
+    let end = path.length;
+    while (end > 1 && path.charCodeAt(end - 1) === 47 /* '/' */) end--;
+    return end === path.length ? path : path.slice(0, end);
   }
 
   #pruneCache(): void {
