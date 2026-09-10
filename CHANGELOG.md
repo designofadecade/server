@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [10.4.1] - 2026-09-10
+
+Package metadata only. No code, no type and no build-output changes; the
+published `dist` is identical to 10.4.0.
+
+### Changed
+
+- The npm description now leads with what distinguishes this package — the same
+  routes running on AWS Lambda (API Gateway HTTP API v2) and a plain Node HTTP
+  server — rather than with the brand name. It matches the repository
+  description.
+- Keywords gained the serverless cluster (`aws-lambda`, `lambda`, `serverless`,
+  `api-gateway`) and `nodejs`/`backend`. That capability has been the focus of
+  the last three releases and was absent from the terms anyone would search.
+
 ## [10.4.0] - 2026-09-10
 
 Completes the 10.3.0 type-boundary work on the two fields it did not reach:
