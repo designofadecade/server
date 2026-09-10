@@ -1,6 +1,6 @@
 {
   "name": "@designofadecade/server",
-  "version": "10.4.0",
+  "version": "10.4.1",
   "description": "Type-safe ESM server framework for Node 24+. The same routes run on AWS Lambda (API Gateway HTTP API v2) and a plain Node HTTP server, with WebSockets, middleware, routing and HTML sanitization built in.",
   "type": "module",
   "main": "./dist/index.js",
