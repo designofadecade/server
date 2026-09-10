@@ -24,9 +24,7 @@ const safe = HtmlSanitizer.clean(userInput, ['p', 'b', 'i']);
 
 // Allow common formatting tags
 const html = userInput;
-const cleaned = HtmlSanitizer.clean(html, [
-  'p', 'br', 'strong', 'em', 'a', 'ul', 'ol', 'li'
-]);
+const cleaned = HtmlSanitizer.clean(html, ['p', 'br', 'strong', 'em', 'a', 'ul', 'ol', 'li']);
 ```
 
 ## API Reference
@@ -37,13 +35,14 @@ Sanitizes HTML by allowing only specified tags and optionally preserving specifi
 
 ```typescript
 static clean(
-  html: string, 
+  html: string,
   allowedTags: string[],
   allowedAttributes?: Record<string, string[]>
 ): string
 ```
 
 **Parameters:**
+
 - `html` (string) - HTML string to sanitize
 - `allowedTags` (string[]) - Array of allowed tag names (case-insensitive)
 - `allowedAttributes` (optional) - Object mapping tag names to arrays of allowed attribute names
@@ -51,6 +50,7 @@ static clean(
 **Returns:** Sanitized HTML string
 
 **Features:**
+
 - Removes disallowed tags while preserving text content
 - Validates and sanitizes URLs in anchor tags
 - Removes HTML comments
@@ -62,12 +62,13 @@ static clean(
 - Validates CSS style attributes for safe color properties only
 
 **Example:**
+
 ```typescript
 // Basic usage
-const safe = HtmlSanitizer.clean(
-  '<p>Hello <b>World</b></p><script>alert("xss")</script>',
-  ['p', 'b']
-);
+const safe = HtmlSanitizer.clean('<p>Hello <b>World</b></p><script>alert("xss")</script>', [
+  'p',
+  'b',
+]);
 // Result: '<p>Hello <b>World</b></p>'
 
 // With anchor tags
@@ -78,7 +79,7 @@ const clean = HtmlSanitizer.clean(html, ['a']);
 // Preserve specific attributes
 const htmlWithAttrs = '<span class="legal-tag" data-uuid="123" onclick="alert()">Text</span>';
 const result = HtmlSanitizer.clean(htmlWithAttrs, ['span'], {
-  span: ['class', 'data-uuid']
+  span: ['class', 'data-uuid'],
 });
 // Result: '<span class="legal-tag" data-uuid="123">Text</span>'
 // (onclick removed, safe attributes preserved)
@@ -86,7 +87,7 @@ const result = HtmlSanitizer.clean(htmlWithAttrs, ['span'], {
 // Preserve style attributes (safe CSS only)
 const styledHtml = '<span style="color: #ff0000; behavior: url(xss.htc);">Red</span>';
 const styled = HtmlSanitizer.clean(styledHtml, ['span'], {
-  span: ['style']
+  span: ['style'],
 });
 // Result: '<span style="color: #ff0000">Red</span>'
 // (dangerous 'behavior' property removed)
@@ -101,21 +102,22 @@ static stripAllTags(html: string): string
 ```
 
 **Parameters:**
+
 - `html` (string) - HTML string to process
 
 **Returns:** Plain text with all HTML removed
 
 **Features:**
+
 - DoS protection (max 1MB input)
 - Preserves text content
 - Removes comments and scripts
 - Decodes HTML entities
 
 **Example:**
+
 ```typescript
-const text = HtmlSanitizer.stripAllTags(
-  '<p>Hello <b>World</b></p><!-- comment -->'
-);
+const text = HtmlSanitizer.stripAllTags('<p>Hello <b>World</b></p><!-- comment -->');
 // Result: 'Hello World'
 ```
 
@@ -128,16 +130,19 @@ static sanitizeForAttribute(value: string): string
 ```
 
 **Parameters:**
+
 - `value` (string) - Value to escape
 
 **Returns:** Escaped string safe for attributes
 
 **Features:**
+
 - DoS protection (max 1MB input)
 - Escapes quotes, angle brackets, ampersands
 - Prevents attribute injection
 
 **Example:**
+
 ```typescript
 const userInput = 'Hello "World" & <Friends>';
 const safe = HtmlSanitizer.sanitizeForAttribute(userInput);
@@ -156,16 +161,19 @@ static sanitizeForHtml(html: string): string
 ```
 
 **Parameters:**
+
 - `html` (string) - HTML to escape
 
 **Returns:** Escaped HTML safe to display
 
 **Features:**
+
 - DoS protection (max 1MB input)
 - Escapes <, >, &, ", '
 - Preserves text for display
 
 **Example:**
+
 ```typescript
 const code = '<script>alert("xss")</script>';
 const safe = HtmlSanitizer.sanitizeForHtml(code);
@@ -184,11 +192,13 @@ static isValidUrl(url: string): boolean
 ```
 
 **Parameters:**
+
 - `url` (string) - URL to validate
 
 **Returns:** `true` if URL is safe, `false` otherwise
 
 **Blocks:**
+
 - `javascript:` URLs
 - `data:` URIs
 - `vbscript:` URLs
@@ -199,6 +209,7 @@ static isValidUrl(url: string): boolean
 - URLs exceeding 2048 characters
 
 **Allows:**
+
 - `https://` URLs
 - `http://` URLs
 - `mailto:` links
@@ -208,14 +219,15 @@ static isValidUrl(url: string): boolean
 - Fragment identifiers (`#`)
 
 **Example:**
-```typescript
-HtmlSanitizer.isValidUrl('https://example.com');        // true
-HtmlSanitizer.isValidUrl('/path/to/page');              // true
-HtmlSanitizer.isValidUrl('mailto:user@example.com');    // true
 
-HtmlSanitizer.isValidUrl('javascript:alert(1)');        // false
-HtmlSanitizer.isValidUrl('data:text/html,<script>');    // false
-HtmlSanitizer.isValidUrl('vbscript:msgbox(1)');         // false
+```typescript
+HtmlSanitizer.isValidUrl('https://example.com'); // true
+HtmlSanitizer.isValidUrl('/path/to/page'); // true
+HtmlSanitizer.isValidUrl('mailto:user@example.com'); // true
+
+HtmlSanitizer.isValidUrl('javascript:alert(1)'); // false
+HtmlSanitizer.isValidUrl('data:text/html,<script>'); // false
+HtmlSanitizer.isValidUrl('vbscript:msgbox(1)'); // false
 ```
 
 ### decodeHtmlEntities()
@@ -227,11 +239,13 @@ static decodeHtmlEntities(text: string): string
 ```
 
 **Parameters:**
+
 - `text` (string) - Text with HTML entities
 
 **Returns:** Text with entities decoded
 
 **Features:**
+
 - DoS protection (max 1MB input)
 - Named entities (&amp;, &lt;, etc.)
 - Numeric entities (&#65;, &#x41;)
@@ -239,6 +253,7 @@ static decodeHtmlEntities(text: string): string
 - Error handling for invalid entities
 
 **Example:**
+
 ```typescript
 const text = 'Hello &amp; &lt;World&gt; &#65;';
 const decoded = HtmlSanitizer.decodeHtmlEntities(text);
@@ -257,10 +272,26 @@ const allowedTags = ['p', 'br', 'strong', 'em', 'u', 'b', 'i'];
 
 ```typescript
 const allowedTags = [
-  'p', 'br', 'strong', 'em', 'u', 'b', 'i',
-  'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
-  'ul', 'ol', 'li',
-  'a', 'blockquote', 'code', 'pre'
+  'p',
+  'br',
+  'strong',
+  'em',
+  'u',
+  'b',
+  'i',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
+  'ul',
+  'ol',
+  'li',
+  'a',
+  'blockquote',
+  'code',
+  'pre',
 ];
 ```
 
@@ -268,19 +299,30 @@ const allowedTags = [
 
 ```typescript
 const allowedTags = [
-  'p', 'br', 'strong', 'em', 'code', 'pre',
-  'a', 'ul', 'ol', 'li', 'blockquote',
-  'h1', 'h2', 'h3', 'h4', 'h5', 'h6'
+  'p',
+  'br',
+  'strong',
+  'em',
+  'code',
+  'pre',
+  'a',
+  'ul',
+  'ol',
+  'li',
+  'blockquote',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
 ];
 ```
 
 ### Comments/Posts
 
 ```typescript
-const allowedTags = [
-  'p', 'br', 'a', 'strong', 'em',
-  'ul', 'ol', 'li', 'blockquote'
-];
+const allowedTags = ['p', 'br', 'a', 'strong', 'em', 'ul', 'ol', 'li', 'blockquote'];
 ```
 
 ## Attribute Preservation
@@ -293,7 +335,7 @@ The `allowedAttributes` parameter enables fine-grained control over which attrib
 // Preserve class and data attributes
 const html = '<span class="highlight" data-id="123">Text</span>';
 const result = HtmlSanitizer.clean(html, ['span'], {
-  span: ['class', 'data-id']
+  span: ['class', 'data-id'],
 });
 // Result: '<span class="highlight" data-id="123">Text</span>'
 ```
@@ -309,7 +351,7 @@ const html = `
 
 const result = HtmlSanitizer.clean(html, ['span', 'a'], {
   span: ['class', 'data-uuid'],
-  a: ['href', 'target', 'rel']
+  a: ['href', 'target', 'rel'],
 });
 // span: class and data-uuid preserved
 // a: href, target, rel preserved (plus auto-added security attrs for external links)
@@ -325,14 +367,15 @@ Style attributes are validated to allow only safe CSS color properties:
 // Safe color styles
 const html = '<span style="color: #ff0000; background-color: rgb(255, 255, 255);">Text</span>';
 const result = HtmlSanitizer.clean(html, ['span'], {
-  span: ['style']
+  span: ['style'],
 });
 // Result: '<span style="color: #ff0000; background-color: rgb(255, 255, 255)">Text</span>'
 
 // Dangerous CSS filtered out
-const dangerous = '<span style="color: red; behavior: url(xss.htc); -moz-binding: url(xss.xml);">Text</span>';
+const dangerous =
+  '<span style="color: red; behavior: url(xss.htc); -moz-binding: url(xss.xml);">Text</span>';
 const safe = HtmlSanitizer.clean(dangerous, ['span'], {
-  span: ['style']
+  span: ['style'],
 });
 // Result: '<span style="color: red">Text</span>'
 // (dangerous properties removed)
@@ -341,16 +384,19 @@ const safe = HtmlSanitizer.clean(dangerous, ['span'], {
 ### Allowed CSS Properties
 
 When preserving style attributes, only these CSS properties are allowed:
+
 - `color` - Text color
 - `background-color` - Background color
 
 Valid color formats:
+
 - Hex: `#fff`, `#ffffff`, `#FF0000`
 - RGB: `rgb(255, 0, 0)`
 - RGBA: `rgba(255, 0, 0, 0.5)`
 - Named: `red`, `blue`, `green`, `transparent`, etc.
 
 Blocked CSS patterns:
+
 - `javascript:` - XSS vector
 - `expression()` - IE expression XSS
 - `behavior:` - IE behavior binding
@@ -367,21 +413,21 @@ Even when using `allowedAttributes`, these security features remain active:
 // Event handlers always blocked
 const html = '<span class="safe" onclick="alert(1)" onload="bad()">Text</span>';
 const result = HtmlSanitizer.clean(html, ['span'], {
-  span: ['class', 'onclick', 'onload'] // onclick/onload requested but will be blocked
+  span: ['class', 'onclick', 'onload'], // onclick/onload requested but will be blocked
 });
 // Result: '<span class="safe">Text</span>'
 
 // URLs still validated
 const link = '<a href="javascript:alert(1)" class="link">Click</a>';
 const safe = HtmlSanitizer.clean(link, ['a'], {
-  a: ['href', 'class']
+  a: ['href', 'class'],
 });
 // Result: '<a class="link">Click</a>' (dangerous href removed)
 
 // External links get security attributes
 const external = '<a href="https://external.com" class="link">External</a>';
 const secured = HtmlSanitizer.clean(external, ['a'], {
-  a: ['href', 'class']
+  a: ['href', 'class'],
 });
 // Result: '<a href="https://external.com" class="link" target="_blank" rel="noopener noreferrer">External</a>'
 ```
@@ -389,29 +435,33 @@ const secured = HtmlSanitizer.clean(external, ['a'], {
 ### Use Cases
 
 **Email Rendering:**
+
 ```typescript
 // Preserve inline styles for email clients
 const emailHtml = '<span style="color: #007bff;">Important</span>';
 HtmlSanitizer.clean(emailHtml, ['span'], {
-  span: ['style']
+  span: ['style'],
 });
 ```
 
 **Legal Compliance Tracking:**
+
 ```typescript
 // Preserve metadata for legal terms
-const legalContent = '<span class="legal-tag" data-uuid="term-123" data-version="1.0">Terms apply</span>';
+const legalContent =
+  '<span class="legal-tag" data-uuid="term-123" data-version="1.0">Terms apply</span>';
 HtmlSanitizer.clean(legalContent, ['span'], {
-  span: ['class', 'data-uuid', 'data-version']
+  span: ['class', 'data-uuid', 'data-version'],
 });
 ```
 
 **Content Management:**
+
 ```typescript
 // Preserve IDs and classes for CMS
 const cmsContent = '<div class="article-body" id="content-456">Article text</div>';
 HtmlSanitizer.clean(cmsContent, ['div'], {
-  div: ['class', 'id']
+  div: ['class', 'id'],
 });
 ```
 
@@ -427,7 +477,7 @@ const result = HtmlSanitizer.clean(html, ['span']);
 
 // With allowedAttributes - preserves specified attributes
 const result2 = HtmlSanitizer.clean(html, ['span'], {
-  span: ['class', 'data-id']
+  span: ['class', 'data-id'],
 });
 // Result: '<span class="test" data-id="123">Text</span>'
 ```
@@ -501,38 +551,42 @@ All errors include `source` field for tracking (e.g., `HtmlSanitizer.clean`).
 ## Best Practices
 
 1. **Minimal Allowed Tags:** Only allow tags you actually need
+
    ```typescript
    // Bad - too permissive
    const allowed = ['div', 'span', 'p', 'a', 'img', 'iframe'];
-   
+
    // Good - minimal
    const allowed = ['p', 'br', 'strong', 'em'];
    ```
 
 2. **Context-Specific Sanitization:** Different contexts need different rules
+
    ```typescript
    // For comments
    const commentAllowed = ['p', 'br', 'strong', 'em'];
-   
+
    // For blog posts
    const postAllowed = ['p', 'br', 'strong', 'em', 'a', 'ul', 'ol', 'li'];
-   
+
    // For admin content
    const adminAllowed = [...postAllowed, 'img', 'h1', 'h2', 'blockquote'];
    ```
 
 3. **Double Sanitization:** Sanitize on input AND output
+
    ```typescript
    // On input - save sanitized version
    const sanitized = HtmlSanitizer.clean(userInput, allowedTags);
    await db.save({ content: sanitized });
-   
+
    // On output - sanitize again for extra safety
    const safe = HtmlSanitizer.clean(content, allowedTags);
    return safe;
    ```
 
 4. **URL Validation:** Always validate URLs in user content
+
    ```typescript
    // Before rendering
    if (content.includes('href=')) {
@@ -557,24 +611,24 @@ import HtmlSanitizer from '@designofadecade/server/sanitizer';
 async function saveComment(userId: string, rawContent: string) {
   // Define allowed tags for comments
   const allowedTags = ['p', 'br', 'strong', 'em', 'a'];
-  
+
   // Sanitize input
   const sanitized = HtmlSanitizer.clean(rawContent, allowedTags);
-  
+
   // Save to database
   await db.comments.create({
     userId,
     content: sanitized,
-    createdAt: new Date()
+    createdAt: new Date(),
   });
 }
 
 async function displayComment(commentId: string) {
   const comment = await db.comments.find(commentId);
-  
+
   // Sanitize again before display (defense in depth)
   const safe = HtmlSanitizer.clean(comment.content, allowedTags);
-  
+
   return safe;
 }
 ```
@@ -585,22 +639,33 @@ async function displayComment(commentId: string) {
 import HtmlSanitizer from '@designofadecade/server/sanitizer';
 
 const richTextAllowed = [
-  'p', 'br', 'strong', 'em', 'u',
-  'h2', 'h3', 'h4',
-  'ul', 'ol', 'li',
-  'a', 'blockquote', 'code', 'pre'
+  'p',
+  'br',
+  'strong',
+  'em',
+  'u',
+  'h2',
+  'h3',
+  'h4',
+  'ul',
+  'ol',
+  'li',
+  'a',
+  'blockquote',
+  'code',
+  'pre',
 ];
 
 async function saveBlogPost(title: string, content: string) {
   // Sanitize title (plain text only)
   const safeTitle = HtmlSanitizer.stripAllTags(title);
-  
+
   // Sanitize content (allow HTML)
   const safeContent = HtmlSanitizer.clean(content, richTextAllowed);
-  
+
   await db.posts.create({
     title: safeTitle,
-    content: safeContent
+    content: safeContent,
   });
 }
 ```
@@ -613,10 +678,10 @@ import HtmlSanitizer from '@designofadecade/server/sanitizer';
 function createEmailPreview(htmlContent: string, maxLength: number = 200) {
   // Strip all HTML for preview
   const plainText = HtmlSanitizer.stripAllTags(htmlContent);
-  
+
   // Truncate to preview length
   const preview = plainText.substring(0, maxLength);
-  
+
   return preview + (plainText.length > maxLength ? '...' : '');
 }
 
@@ -633,13 +698,10 @@ import HtmlSanitizer from '@designofadecade/server/sanitizer';
 function highlightSearchTerm(content: string, term: string) {
   // First sanitize for display
   const safe = HtmlSanitizer.sanitizeForHtml(content);
-  
+
   // Then add highlight tags (safe because original is escaped)
-  const highlighted = safe.replace(
-    new RegExp(term, 'gi'),
-    match => `<mark>${match}</mark>`
-  );
-  
+  const highlighted = safe.replace(new RegExp(term, 'gi'), (match) => `<mark>${match}</mark>`);
+
   return highlighted;
 }
 ```

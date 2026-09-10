@@ -57,11 +57,11 @@ class UserRoutes extends Routes {
     this.addRoute('/users', 'GET', this.listUsers);
     this.addRoute('/users/:id', 'GET', this.getUser);
   }
-  
+
   async listUsers(req) {
     return { status: 200, body: { users: [] } };
   }
-  
+
   async getUser(req) {
     return { status: 200, body: { id: req.params.id } };
   }
@@ -85,7 +85,7 @@ class ChatEvents extends Events {
     super(manager);
     this.addEvent('chat:message', this.handleMessage);
   }
-  
+
   async handleMessage(msg) {
     this.manager.broadcast('chat:message', msg.payload);
   }
@@ -95,7 +95,7 @@ class ChatEvents extends Events {
 const wss = new WebSocketServer({ port: 8080 });
 const events = new EventsManager({
   registerWebSocketServer: wss,
-  initEvents: [ChatEvents]
+  initEvents: [ChatEvents],
 });
 ```
 
@@ -148,20 +148,17 @@ const context = new AppContext(db, config);
 // HTTP server
 const router = new Router({
   context,
-  initRoutes: [UserRoutes, PostRoutes]
+  initRoutes: [UserRoutes, PostRoutes],
 });
 
-const httpServer = new Server(
-  { port: 3000 },
-  router.nodeJSRequest.bind(router)
-);
+const httpServer = new Server({ port: 3000 }, router.nodeJSRequest.bind(router));
 
 // WebSocket server
 const wss = new WebSocketServer({ port: 8080 });
 
 const eventsManager = new EventsManager({
   registerWebSocketServer: wss,
-  initEvents: [ChatEvents, NotificationEvents]
+  initEvents: [ChatEvents, NotificationEvents],
 });
 
 // Graceful shutdown
@@ -181,7 +178,7 @@ import Local from '@designofadecade/server/local';
 
 // Define routes
 const router = new Router({
-  initRoutes: [ApiRoutes]
+  initRoutes: [ApiRoutes],
 });
 
 // Lambda handler
@@ -202,12 +199,14 @@ if (process.env.NODE_ENV === 'development') {
 ## Key Features
 
 ### 🚀 Performance
+
 - Route caching for fast lookups
 - Efficient WebSocket broadcasting
 - Configurable request timeouts
 - Body size limits (1MB default)
 
 ### 🔒 Security
+
 - XSS prevention with HtmlSanitizer
 - Directory traversal protection
 - Sensitive data redaction in logs
@@ -215,6 +214,7 @@ if (process.env.NODE_ENV === 'development') {
 - URL validation in sanitizer
 
 ### 📊 Observability
+
 - CloudWatch-compatible structured logging
 - Error codes for monitoring
 - Source tracking for debugging
@@ -222,6 +222,7 @@ if (process.env.NODE_ENV === 'development') {
 - Performance metrics
 
 ### 🔄 Flexibility
+
 - AWS Lambda compatible
 - Node.js HTTP server support
 - URLPattern-based routing
@@ -229,6 +230,7 @@ if (process.env.NODE_ENV === 'development') {
 - Custom context injection
 
 ### ⚡ Developer Experience
+
 - TypeScript first
 - Comprehensive documentation
 - Local development utilities
@@ -325,7 +327,7 @@ try {
 logger.error('Database connection failed', {
   code: 'DB_CONNECTION_ERROR',
   source: 'UserService.getUser',
-  error
+  error,
 });
 ```
 
@@ -383,11 +385,11 @@ class UserRoutes extends Routes {
     super(router);
     this.addRoute('/users/:id', 'GET', this.getUser);
   }
-  
+
   async getUser(req) {
     return {
       status: 200,
-      body: { id: req.params.id }
+      body: { id: req.params.id },
     };
   }
 }
@@ -409,7 +411,7 @@ class ChatEvents extends Events {
     super(manager);
     this.addEvent('chat:message', this.handleMessage);
   }
-  
+
   async handleMessage(msg) {
     this.manager.broadcast('chat:message', msg.payload);
   }

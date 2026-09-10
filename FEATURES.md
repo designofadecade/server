@@ -15,6 +15,7 @@ Performance benchmarking has been added using Vitest's built-in benchmarking cap
   - [Events.bench.ts](src/events/Events.bench.ts) - Event system performance
 
 - **NPM scripts** to run benchmarks:
+
   ```bash
   npm run bench          # Run all benchmarks once
   npm run bench:watch    # Run benchmarks in watch mode
@@ -39,16 +40,17 @@ import { bench, describe } from 'vitest';
 import MyComponent from './MyComponent.js';
 
 describe('MyComponent Performance', () => {
-    bench('operation name', () => {
-        // Code to benchmark
-        const result = MyComponent.doSomething();
-    });
+  bench('operation name', () => {
+    // Code to benchmark
+    const result = MyComponent.doSomething();
+  });
 });
 ```
 
 ### What Gets Measured
 
 Benchmarks measure:
+
 - **Operations per second** - How many times the code can run per second
 - **Average time** - Average execution time per operation
 - **Standard deviation** - Consistency of performance
@@ -80,39 +82,39 @@ import { OpenApiGenerator, generateSwaggerUI } from '@designofadecade/server';
 
 // Create generator
 const apiDocs = new OpenApiGenerator({
-    info: {
-        title: 'My API',
-        version: '1.0.0',
-        description: 'API documentation'
-    }
+  info: {
+    title: 'My API',
+    version: '1.0.0',
+    description: 'API documentation',
+  },
 });
 
 // Add routes
 apiDocs.addRoute({
-    path: '/api/users',
-    method: 'GET',
-    summary: 'Get all users',
-    responses: {
-        '200': { description: 'Success' }
-    }
+  path: '/api/users',
+  method: 'GET',
+  summary: 'Get all users',
+  responses: {
+    '200': { description: 'Success' },
+  },
 });
 
 // Serve documentation
 router.get('/api/docs', async () => {
-    const html = generateSwaggerUI('/api/docs/openapi.json');
-    return {
-        status: 200,
-        headers: { 'Content-Type': 'text/html' },
-        body: html
-    };
+  const html = generateSwaggerUI('/api/docs/openapi.json');
+  return {
+    status: 200,
+    headers: { 'Content-Type': 'text/html' },
+    body: html,
+  };
 });
 
 router.get('/api/docs/openapi.json', async () => {
-    return {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-        body: apiDocs.toJSON()
-    };
+  return {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+    body: apiDocs.toJSON(),
+  };
 });
 ```
 
@@ -144,7 +146,7 @@ Git hooks have been configured using Husky and lint-staged to ensure code qualit
 When you commit, the following automatically runs on **staged TypeScript files**:
 
 1. **Prettier** - Formats code
-2. **ESLint** - Checks and fixes linting issues  
+2. **ESLint** - Checks and fixes linting issues
 3. **Vitest** - Runs tests related to changed files
 
 ### Configuration
@@ -154,11 +156,7 @@ In `package.json`:
 ```json
 {
   "lint-staged": {
-    "*.ts": [
-      "prettier --write",
-      "eslint --fix",
-      "vitest related --run"
-    ]
+    "*.ts": ["prettier --write", "eslint --fix", "vitest related --run"]
   }
 }
 ```
@@ -250,24 +248,28 @@ class UserRoutes extends Routes {
 Automatically protects against exposing:
 
 1. **Database credentials**
+
    ```typescript
    // ERROR: "Connection failed: postgresql://admin:MyP@ssw0rd@prod-db:5432/app"
    // CLIENT SEES: "Database error" ✅
    ```
 
 2. **AWS credentials & ARNs**
+
    ```typescript
    // ERROR: "AccessDenied for arn:aws:iam::123456789012:user/service"
    // CLIENT SEES: "Service error" ✅
    ```
 
 3. **File system paths**
+
    ```typescript
    // ERROR: "ENOENT: /var/app/secrets/.env"
    // CLIENT SEES: "File error" ✅
    ```
 
 4. **SQL schema details**
+
    ```typescript
    // ERROR: "column 'internal_secret_field' does not exist"
    // CLIENT SEES: "Database query failed" ✅
@@ -282,6 +284,7 @@ Automatically protects against exposing:
 ### Safe Error Classes
 
 These error types are considered safe and their messages are exposed:
+
 - `ValidationError` - Input validation failures
 - `ConflictError` - Resource conflicts (e.g., duplicate emails)
 - `NotFoundError` - Resource not found
@@ -305,6 +308,7 @@ All others are considered unsafe and hidden behind `defaultMessage`.
 ### Migration Path
 
 **Before (Unsafe):**
+
 ```typescript
 } catch (error) {
   logger.error('Error:', error);
@@ -314,6 +318,7 @@ All others are considered unsafe and hidden behind `defaultMessage`.
 ```
 
 **After (Secure):**
+
 ```typescript
 } catch (error) {
   return RouteError.fromError(error, {
@@ -328,6 +333,7 @@ All others are considered unsafe and hidden behind `defaultMessage`.
 ## Summary
 
 All features are:
+
 - ✅ **Fully implemented** with comprehensive test coverage
 - ✅ **Documented** with usage examples and best practices
 - ✅ **Production-ready** and backward compatible
@@ -346,6 +352,7 @@ npm install
 ```
 
 This will:
+
 1. Install all dependencies including development tools
 2. Set up Husky git hooks via the `prepare` script
 3. Configure the pre-commit hook
@@ -361,6 +368,7 @@ npm test
 ```
 
 Results:
+
 - ✅ **19 test files** passed
 - ✅ **558 tests** total (556 passed, 2 skipped)
 - ✅ **10 new tests** for OpenAPI generator
@@ -371,12 +379,14 @@ Results:
 ## Quick Reference
 
 ### Performance Benchmarks
+
 ```bash
 npm run bench          # Run benchmarks
 npm run bench:watch    # Watch mode
 ```
 
 ### API Documentation
+
 ```typescript
 import { OpenApiGenerator, generateSwaggerUI } from '@designofadecade/server';
 ```
@@ -384,6 +394,7 @@ import { OpenApiGenerator, generateSwaggerUI } from '@designofadecade/server';
 See [docs/api-documentation.md](docs/api-documentation.md) for full documentation.
 
 ### Git Hooks
+
 ```bash
 git commit            # Runs hooks automatically
 git commit --no-verify # Skip hooks (emergency only)
@@ -397,12 +408,14 @@ See [.husky/README.md](.husky/README.md) for full documentation.
 ## Next Steps
 
 ### For Performance Benchmarks
+
 1. Add benchmarks for your own components
 2. Run benchmarks before optimization
 3. Run after optimization to measure improvements
 4. Add to CI/CD to track performance over time
 
 ### For OpenAPI Documentation
+
 1. Document all your API endpoints
 2. Define reusable schemas for your data models
 3. Add authentication requirements
@@ -410,6 +423,7 @@ See [.husky/README.md](.husky/README.md) for full documentation.
 5. Keep documentation updated as APIs change
 
 ### For Pre-commit Hooks
+
 1. Hooks run automatically - no action needed
 2. Fix issues when commits are blocked
 3. Consider adding more hooks (commit-msg, pre-push)
@@ -420,17 +434,20 @@ See [.husky/README.md](.husky/README.md) for full documentation.
 ## Benefits
 
 ✅ **Performance Benchmarks**
+
 - Identify performance bottlenecks
 - Measure optimization impact
 - Prevent performance regressions
 
 ✅ **OpenAPI Documentation**
+
 - Self-documenting APIs
 - Interactive testing with Swagger UI
 - Client SDK generation
 - Better developer experience
 
 ✅ **Pre-commit Hooks**
+
 - Catch issues before they reach the repository
 - Consistent code formatting
 - Reduced code review time
@@ -441,6 +458,7 @@ See [.husky/README.md](.husky/README.md) for full documentation.
 ## Support
 
 For questions or issues:
+
 - Check the README files in respective directories
 - Review test files for usage examples
 - Open an issue on GitHub

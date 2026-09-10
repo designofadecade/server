@@ -127,6 +127,7 @@ npm publish --access public
 The GitHub Actions workflow will automatically publish when you:
 
 1. Update version and push tags:
+
    ```bash
    npm version patch  # Or minor/major
    git push --follow-tags

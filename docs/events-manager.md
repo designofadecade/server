@@ -24,17 +24,17 @@ import WebSocketServer from '@designofadecade/server/websocket';
 class ChatEvents extends Events {
   constructor(manager: EventsManager) {
     super(manager);
-    
+
     this.addEvent('chat:message', this.handleMessage);
     this.addEvent('chat:typing', this.handleTyping);
   }
-  
+
   async handleMessage(msg) {
     console.log('Message:', msg.payload);
     // Broadcast to all clients
     this.manager.broadcast('chat:message', msg.payload);
   }
-  
+
   async handleTyping(msg) {
     this.manager.broadcast('chat:typing', msg.payload);
   }
@@ -46,7 +46,7 @@ const wss = new WebSocketServer({ port: 8080 });
 // Create events manager
 const eventsManager = new EventsManager({
   registerWebSocketServer: wss,
-  initEvents: [ChatEvents]
+  initEvents: [ChatEvents],
 });
 ```
 
@@ -59,14 +59,16 @@ new EventsManager(options?: EventsManagerOptions)
 ```
 
 **Options:**
+
 - `registerWebSocketServer` (WebSocketServer, optional) - WebSocket server to integrate with
 - `initEvents` (Array, optional) - Array of Events classes to register
 
 **Example:**
+
 ```typescript
 const eventsManager = new EventsManager({
   registerWebSocketServer: wss,
-  initEvents: [UserEvents, ChatEvents, NotificationEvents]
+  initEvents: [UserEvents, ChatEvents, NotificationEvents],
 });
 ```
 
@@ -81,14 +83,17 @@ registerEvents(events: EventRegistration[]): void
 ```
 
 **Parameters:**
+
 - `events` - Array of event registration objects
   - `type` (string) - Event type identifier
   - `handler` (function) - Async function to handle the event
 
 **Throws:**
+
 - `Error` - If events is not an array
 
 **Example:**
+
 ```typescript
 eventsManager.registerEvents([
   {
@@ -96,15 +101,15 @@ eventsManager.registerEvents([
     handler: async (msg) => {
       console.log('Ping received');
       eventsManager.broadcast('pong', {});
-    }
+    },
   },
   {
     type: 'user:update',
     handler: async (msg) => {
       await updateUser(msg.payload);
       eventsManager.broadcast('user:updated', msg.payload);
-    }
-  }
+    },
+  },
 ]);
 ```
 
@@ -117,25 +122,28 @@ broadcast(type: string, message: any): void
 ```
 
 **Parameters:**
+
 - `type` (string) - Message type identifier
 - `message` (any) - Message payload (will be serialized)
 
 **Throws:**
+
 - `Error` - If type is not a string
 
 **Example:**
+
 ```typescript
 // Broadcast notification
 eventsManager.broadcast('notification', {
   title: 'New Message',
-  body: 'You have a new message from John'
+  body: 'You have a new message from John',
 });
 
 // Broadcast data update
 eventsManager.broadcast('data:update', {
   entity: 'users',
   action: 'created',
-  data: newUser
+  data: newUser,
 });
 ```
 
@@ -148,6 +156,7 @@ close(): void
 ```
 
 **Example:**
+
 ```typescript
 // Cleanup on shutdown
 process.on('SIGTERM', () => {
@@ -166,7 +175,7 @@ Base class for organizing event handlers.
 class MyEvents extends Events {
   constructor(manager: EventsManager) {
     super(manager);
-    
+
     // Register event handlers
     this.addEvent('event:type', this.handler);
   }
@@ -184,6 +193,7 @@ protected manager: EventsManager
 Reference to the EventsManager instance.
 
 **Example:**
+
 ```typescript
 class UserEvents extends Events {
   async handleLogin(msg) {
@@ -215,20 +225,22 @@ addEvent(
 ```
 
 **Parameters:**
+
 - `type` (string) - Event type identifier
 - `handler` (function) - Function to handle the event
 
 **Example:**
+
 ```typescript
 class ChatEvents extends Events {
   constructor(manager: EventsManager) {
     super(manager);
-    
+
     this.addEvent('chat:message', this.handleMessage);
     this.addEvent('chat:join', this.handleJoin);
     this.addEvent('chat:leave', this.handleLeave);
   }
-  
+
   async handleMessage(msg) {
     // Handle message
   }
@@ -241,9 +253,9 @@ Events work with parsed messages from WebSocketServer:
 
 ```typescript
 interface ParsedMessage {
-  id?: string;      // Optional message ID
-  type: string;     // Event type
-  payload: any;     // Message data
+  id?: string; // Optional message ID
+  type: string; // Event type
+  payload: any; // Message data
 }
 ```
 
@@ -257,7 +269,7 @@ Use namespaces to organize related events:
 class UserEvents extends Events {
   constructor(manager: EventsManager) {
     super(manager);
-    
+
     this.addEvent('user:login', this.handleLogin);
     this.addEvent('user:logout', this.handleLogout);
     this.addEvent('user:update', this.handleUpdate);
@@ -267,7 +279,7 @@ class UserEvents extends Events {
 class ChatEvents extends Events {
   constructor(manager: EventsManager) {
     super(manager);
-    
+
     this.addEvent('chat:message', this.handleMessage);
     this.addEvent('chat:typing', this.handleTyping);
     this.addEvent('chat:read', this.handleRead);
@@ -285,17 +297,17 @@ eventsManager.broadcast('notification', data);
 class ChatEvents extends Events {
   async handleMessage(msg) {
     const { roomId, text, userId } = msg.payload;
-    
+
     // Store message
     await db.messages.create({ roomId, text, userId });
-    
+
     // Broadcast to all clients
     // (clients filter by room on their end)
     this.manager.broadcast('chat:message', {
       roomId,
       text,
       userId,
-      timestamp: Date.now()
+      timestamp: Date.now(),
     });
   }
 }
@@ -307,17 +319,17 @@ class ChatEvents extends Events {
 class SafeEvents extends Events {
   constructor(manager: EventsManager) {
     super(manager);
-    
+
     this.addEvent('process:data', async (msg) => {
       try {
         await this.processData(msg.payload);
       } catch (error) {
         console.error('Processing failed:', error);
-        
+
         // Notify client of error
         this.manager.broadcast('error', {
           type: 'process:data',
-          error: error.message
+          error: error.message,
         });
       }
     });
@@ -341,22 +353,25 @@ All errors include `source` field (e.g., `EventsManager.broadcast`).
 ## Best Practices
 
 1. **Organize by Feature:** Group related events in separate classes
+
    ```typescript
-   class UserEvents extends Events { }
-   class ChatEvents extends Events { }
-   class NotificationEvents extends Events { }
+   class UserEvents extends Events {}
+   class ChatEvents extends Events {}
+   class NotificationEvents extends Events {}
    ```
 
 2. **Use Namespaces:** Prevent type collisions with namespaces
+
    ```typescript
    // Good
-   'user:login', 'chat:message', 'notification:new'
-   
+   ('user:login', 'chat:message', 'notification:new');
+
    // Bad
-   'login', 'message', 'new'
+   ('login', 'message', 'new');
    ```
 
 3. **Handle Errors:** Always catch and handle errors in event handlers
+
    ```typescript
    this.addEvent('risky:operation', async (msg) => {
      try {
@@ -368,12 +383,13 @@ All errors include `source` field (e.g., `EventsManager.broadcast`).
    ```
 
 4. **Validation:** Validate message payloads
+
    ```typescript
    async handleMessage(msg) {
      if (!msg.payload.text || typeof msg.payload.text !== 'string') {
        return; // Ignore invalid messages
      }
-     
+
      // Process valid message
      this.manager.broadcast('chat:message', msg.payload);
    }
@@ -384,7 +400,7 @@ All errors include `source` field (e.g., `EventsManager.broadcast`).
    async handleSave(msg) {
      // Save to database
      const result = await db.save(msg.payload);
-     
+
      // Broadcast confirmation
      this.manager.broadcast('saved', { id: result.id });
    }
@@ -401,72 +417,72 @@ import Events from '@designofadecade/server/events/Events';
 class ChatEvents extends Events {
   constructor(manager: EventsManager) {
     super(manager);
-    
+
     this.addEvent('chat:join', this.handleJoin);
     this.addEvent('chat:leave', this.handleLeave);
     this.addEvent('chat:message', this.handleMessage);
     this.addEvent('chat:typing', this.handleTyping);
   }
-  
+
   async handleJoin(msg) {
     const { roomId, username } = msg.payload;
-    
+
     // Track user in room
     await rooms.addUser(roomId, username);
-    
+
     // Notify others
     this.manager.broadcast('chat:user-joined', {
       roomId,
       username,
-      timestamp: Date.now()
+      timestamp: Date.now(),
     });
   }
-  
+
   async handleLeave(msg) {
     const { roomId, username } = msg.payload;
-    
+
     await rooms.removeUser(roomId, username);
-    
+
     this.manager.broadcast('chat:user-left', {
       roomId,
       username,
-      timestamp: Date.now()
+      timestamp: Date.now(),
     });
   }
-  
+
   async handleMessage(msg) {
     const { roomId, username, text } = msg.payload;
-    
+
     // Validate
     if (!text || text.length > 500) {
       return;
     }
-    
+
     // Save message
     const message = await db.messages.create({
       roomId,
       username,
       text,
-      createdAt: new Date()
+      createdAt: new Date(),
     });
-    
+
     // Broadcast to all
     this.manager.broadcast('chat:message', {
       id: message.id,
       roomId,
       username,
       text,
-      timestamp: message.createdAt
+      timestamp: message.createdAt,
     });
   }
-  
+
   async handleTyping(msg) {
     const { roomId, username } = msg.payload;
-    
+
     // Broadcast typing indicator (no persistence)
     this.manager.broadcast('chat:typing', {
       roomId,
-      username
+      username,
     });
   }
 }
@@ -478,50 +494,50 @@ class ChatEvents extends Events {
 class DocumentEvents extends Events {
   constructor(manager: EventsManager) {
     super(manager);
-    
+
     this.addEvent('doc:open', this.handleOpen);
     this.addEvent('doc:edit', this.handleEdit);
     this.addEvent('doc:cursor', this.handleCursor);
     this.addEvent('doc:close', this.handleClose);
   }
-  
+
   async handleOpen(msg) {
     const { docId, userId } = msg.payload;
-    
+
     // Track document viewer
     await documents.addViewer(docId, userId);
-    
+
     // Broadcast viewer list
     const viewers = await documents.getViewers(docId);
     this.manager.broadcast('doc:viewers', {
       docId,
-      viewers
+      viewers,
     });
   }
-  
+
   async handleEdit(msg) {
     const { docId, userId, changes } = msg.payload;
-    
+
     // Apply changes
     await documents.applyChanges(docId, changes);
-    
+
     // Broadcast to other viewers
     this.manager.broadcast('doc:changes', {
       docId,
       userId,
       changes,
-      timestamp: Date.now()
+      timestamp: Date.now(),
     });
   }
-  
+
   async handleCursor(msg) {
     const { docId, userId, position } = msg.payload;
-    
+
     // Broadcast cursor position (no persistence)
     this.manager.broadcast('doc:cursor', {
       docId,
       userId,
-      position
+      position,
     });
   }
 }
@@ -533,52 +549,52 @@ class DocumentEvents extends Events {
 class GameEvents extends Events {
   constructor(manager: EventsManager) {
     super(manager);
-    
+
     this.addEvent('game:join', this.handleJoin);
     this.addEvent('game:move', this.handleMove);
     this.addEvent('game:action', this.handleAction);
     this.addEvent('game:leave', this.handleLeave);
   }
-  
+
   async handleJoin(msg) {
     const { gameId, playerId, playerName } = msg.payload;
-    
+
     // Add player to game
     const game = await games.addPlayer(gameId, playerId, playerName);
-    
+
     // Broadcast game state
     this.manager.broadcast('game:state', {
       gameId,
       players: game.players,
-      status: game.status
+      status: game.status,
     });
-    
+
     // Start game if ready
     if (game.players.length === game.maxPlayers) {
       await games.start(gameId);
       this.manager.broadcast('game:started', { gameId });
     }
   }
-  
+
   async handleMove(msg) {
     const { gameId, playerId, move } = msg.payload;
-    
+
     // Validate and apply move
     const game = await games.applyMove(gameId, playerId, move);
-    
+
     // Broadcast updated state
     this.manager.broadcast('game:moved', {
       gameId,
       playerId,
       move,
-      state: game.state
+      state: game.state,
     });
-    
+
     // Check for game over
     if (game.isOver) {
       this.manager.broadcast('game:over', {
         gameId,
-        winner: game.winner
+        winner: game.winner,
       });
     }
   }
@@ -597,17 +613,17 @@ class ApiRoutes extends Routes {
   constructor(router: Router, eventsManager: EventsManager) {
     super(router);
     this.eventsManager = eventsManager;
-    
+
     this.addRoute('/api/notify', 'POST', this.notify);
   }
-  
+
   async notify(req) {
     // HTTP endpoint triggers WebSocket broadcast
     this.eventsManager.broadcast('notification', req.body);
-    
+
     return {
       status: 200,
-      body: { sent: true }
+      body: { sent: true },
     };
   }
 }
@@ -621,7 +637,7 @@ database.on('change', (change) => {
   eventsManager.broadcast('db:change', {
     collection: change.collection,
     operation: change.op,
-    documentId: change.documentKey._id
+    documentId: change.documentKey._id,
   });
 });
 ```

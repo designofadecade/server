@@ -125,10 +125,10 @@ describe('FeatureName', () => {
   it('should do something specific', () => {
     // Arrange
     const input = 'test';
-    
+
     // Act
     const result = someFunction(input);
-    
+
     // Assert
     expect(result).toBe('expected');
   });

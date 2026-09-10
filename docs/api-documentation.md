@@ -20,96 +20,96 @@ import Router from '@designofadecade/server';
 
 // Create OpenAPI generator
 const apiDocs = new OpenApiGenerator({
-    info: {
-        title: 'My API',
-        version: '1.0.0',
-        description: 'API documentation for my application',
-        contact: {
-            name: 'API Support',
-            email: 'support@example.com'
-        }
+  info: {
+    title: 'My API',
+    version: '1.0.0',
+    description: 'API documentation for my application',
+    contact: {
+      name: 'API Support',
+      email: 'support@example.com',
     },
-    servers: [
-        { url: 'http://localhost:3000', description: 'Development' },
-        { url: 'https://api.example.com', description: 'Production' }
-    ],
-    tags: [
-        { name: 'users', description: 'User management' },
-        { name: 'posts', description: 'Post management' }
-    ]
+  },
+  servers: [
+    { url: 'http://localhost:3000', description: 'Development' },
+    { url: 'https://api.example.com', description: 'Production' },
+  ],
+  tags: [
+    { name: 'users', description: 'User management' },
+    { name: 'posts', description: 'Post management' },
+  ],
 });
 
 // Document your routes
 apiDocs.addRoute({
-    path: '/api/users',
-    method: 'GET',
-    summary: 'Get all users',
-    description: 'Retrieves a list of all users in the system',
-    tags: ['users'],
-    parameters: [
-        {
-            name: 'page',
-            in: 'query',
-            schema: { type: 'integer', default: 1 },
-            description: 'Page number'
-        }
-    ],
-    responses: {
-        '200': {
-            description: 'Successful response',
-            content: {
-                'application/json': {
-                    schema: {
-                        type: 'array',
-                        items: { $ref: '#/components/schemas/User' }
-                    }
-                }
-            }
-        }
-    }
+  path: '/api/users',
+  method: 'GET',
+  summary: 'Get all users',
+  description: 'Retrieves a list of all users in the system',
+  tags: ['users'],
+  parameters: [
+    {
+      name: 'page',
+      in: 'query',
+      schema: { type: 'integer', default: 1 },
+      description: 'Page number',
+    },
+  ],
+  responses: {
+    '200': {
+      description: 'Successful response',
+      content: {
+        'application/json': {
+          schema: {
+            type: 'array',
+            items: { $ref: '#/components/schemas/User' },
+          },
+        },
+      },
+    },
+  },
 });
 
 apiDocs.addRoute({
-    path: '/api/users/:id',
-    method: 'GET',
-    summary: 'Get user by ID',
-    tags: ['users'],
-    parameters: [
-        {
-            name: 'id',
-            in: 'path',
-            required: true,
-            schema: { type: 'string' },
-            description: 'User ID'
-        }
-    ],
-    responses: {
-        '200': {
-            description: 'Successful response',
-            content: {
-                'application/json': {
-                    schema: { $ref: '#/components/schemas/User' }
-                }
-            }
+  path: '/api/users/:id',
+  method: 'GET',
+  summary: 'Get user by ID',
+  tags: ['users'],
+  parameters: [
+    {
+      name: 'id',
+      in: 'path',
+      required: true,
+      schema: { type: 'string' },
+      description: 'User ID',
+    },
+  ],
+  responses: {
+    '200': {
+      description: 'Successful response',
+      content: {
+        'application/json': {
+          schema: { $ref: '#/components/schemas/User' },
         },
-        '404': {
-            description: 'User not found'
-        }
-    }
+      },
+    },
+    '404': {
+      description: 'User not found',
+    },
+  },
 });
 
 // Add schemas
 apiDocs.config.components = {
-    schemas: {
-        User: {
-            type: 'object',
-            properties: {
-                id: { type: 'string' },
-                name: { type: 'string' },
-                email: { type: 'string', format: 'email' }
-            }
-        }
-    }
+  schemas: {
+    User: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        name: { type: 'string' },
+        email: { type: 'string', format: 'email' },
+      },
+    },
+  },
 };
 ```
 
@@ -121,27 +121,28 @@ const router = new Router();
 
 // Serve OpenAPI spec as JSON
 router.get('/api/docs/openapi.json', async () => {
-    return {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-        body: apiDocs.toJSON()
-    };
+  return {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+    body: apiDocs.toJSON(),
+  };
 });
 
 // Serve Swagger UI
 router.get('/api/docs', async () => {
-    const html = generateSwaggerUI('/api/docs/openapi.json');
-    return {
-        status: 200,
-        headers: { 'Content-Type': 'text/html' },
-        body: html
-    };
+  const html = generateSwaggerUI('/api/docs/openapi.json');
+  return {
+    status: 200,
+    headers: { 'Content-Type': 'text/html' },
+    body: html,
+  };
 });
 ```
 
 ### 4. Access Documentation
 
 Open your browser and navigate to:
+
 - Swagger UI: `http://localhost:3000/api/docs`
 - OpenAPI JSON: `http://localhost:3000/api/docs/openapi.json`
 
@@ -151,24 +152,24 @@ Open your browser and navigate to:
 
 ```typescript
 apiDocs.config.components = {
-    securitySchemes: {
-        bearerAuth: {
-            type: 'http',
-            scheme: 'bearer',
-            bearerFormat: 'JWT'
-        }
-    }
+  securitySchemes: {
+    bearerAuth: {
+      type: 'http',
+      scheme: 'bearer',
+      bearerFormat: 'JWT',
+    },
+  },
 };
 
 apiDocs.addRoute({
-    path: '/api/protected',
-    method: 'GET',
-    summary: 'Protected endpoint',
-    security: [{ bearerAuth: [] }],
-    responses: {
-        '200': { description: 'Success' },
-        '401': { description: 'Unauthorized' }
-    }
+  path: '/api/protected',
+  method: 'GET',
+  summary: 'Protected endpoint',
+  security: [{ bearerAuth: [] }],
+  responses: {
+    '200': { description: 'Success' },
+    '401': { description: 'Unauthorized' },
+  },
 });
 ```
 
@@ -176,35 +177,35 @@ apiDocs.addRoute({
 
 ```typescript
 apiDocs.addRoute({
-    path: '/api/users',
-    method: 'POST',
-    summary: 'Create new user',
-    tags: ['users'],
-    requestBody: {
-        required: true,
-        content: {
-            'application/json': {
-                schema: {
-                    type: 'object',
-                    required: ['name', 'email'],
-                    properties: {
-                        name: { type: 'string' },
-                        email: { type: 'string', format: 'email' }
-                    }
-                }
-            }
-        }
+  path: '/api/users',
+  method: 'POST',
+  summary: 'Create new user',
+  tags: ['users'],
+  requestBody: {
+    required: true,
+    content: {
+      'application/json': {
+        schema: {
+          type: 'object',
+          required: ['name', 'email'],
+          properties: {
+            name: { type: 'string' },
+            email: { type: 'string', format: 'email' },
+          },
+        },
+      },
     },
-    responses: {
-        '201': {
-            description: 'User created',
-            content: {
-                'application/json': {
-                    schema: { $ref: '#/components/schemas/User' }
-                }
-            }
-        }
-    }
+  },
+  responses: {
+    '201': {
+      description: 'User created',
+      content: {
+        'application/json': {
+          schema: { $ref: '#/components/schemas/User' },
+        },
+      },
+    },
+  },
 });
 ```
 
@@ -248,6 +249,7 @@ writeFileSync('docs/openapi.yaml', generator.toYAML());
 ```
 
 Add to package.json:
+
 ```json
 {
   "scripts": {

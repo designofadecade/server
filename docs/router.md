@@ -23,40 +23,40 @@ import Routes from '@designofadecade/server/router/Routes';
 class UserRoutes extends Routes {
   constructor(router: Router) {
     super(router);
-    
+
     // Add routes
     this.addRoute('/users', 'GET', this.listUsers);
     this.addRoute('/users/:id', 'GET', this.getUser);
     this.addRoute('/users', 'POST', this.createUser);
   }
-  
+
   async listUsers(req: RouterRequest): Promise<RouterResponse> {
     return {
       status: 200,
-      body: { users: [] }
+      body: { users: [] },
     };
   }
-  
+
   async getUser(req: RouterRequest): Promise<RouterResponse> {
     const { id } = req.params;
     return {
       status: 200,
-      body: { id, name: 'John Doe' }
+      body: { id, name: 'John Doe' },
     };
   }
-  
+
   async createUser(req: RouterRequest): Promise<RouterResponse> {
     const userData = req.body;
     return {
       status: 201,
-      body: { id: '123', ...userData }
+      body: { id: '123', ...userData },
     };
   }
 }
 
 // Initialize router
 const router = new Router({
-  initRoutes: [UserRoutes]
+  initRoutes: [UserRoutes],
 });
 ```
 
@@ -71,17 +71,19 @@ new Router(options?: RouterOptions)
 ```
 
 **Options:**
+
 - `context` (Context, optional) - Application context passed to routes
 - `initRoutes` (Array, optional) - Array of Routes classes to register
 - `bearerToken` (string, optional) - Token for bearer authentication
 - `middleware` (Array, optional) - Global middleware functions
 
 **Example:**
+
 ```typescript
 const router = new Router({
   initRoutes: [UserRoutes, PostRoutes],
   bearerToken: 'secret-token',
-  middleware: [loggingMiddleware, authMiddleware]
+  middleware: [loggingMiddleware, authMiddleware],
 });
 ```
 
@@ -103,13 +105,11 @@ nodeJSRequest(
 ```
 
 **Example:**
+
 ```typescript
 import Server from '@designofadecade/server';
 
-const server = new Server(
-  { port: 3000 },
-  router.nodeJSRequest.bind(router)
-);
+const server = new Server({ port: 3000 }, router.nodeJSRequest.bind(router));
 ```
 
 ##### CORS
@@ -146,6 +146,7 @@ lambdaEvent(event: LambdaHttpEvent): Promise<LambdaHttpResponse>
 `@types/aws-lambda` directly, so a conventionally typed handler needs no cast:
 
 **Example:**
+
 ```typescript
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 
@@ -171,6 +172,7 @@ decodeJwt(token: string): Record<string, unknown> | null
 ```
 
 **Example:**
+
 ```typescript
 const decoded = router.decodeJwt(request.headers.authorization);
 if (decoded) {
@@ -193,10 +195,11 @@ static basePath: string = ''
 Prefix for all routes in the class.
 
 **Example:**
+
 ```typescript
 class ApiRoutes extends Routes {
   static basePath = '/api';
-  
+
   constructor(router: Router) {
     super(router);
     // /api/users
@@ -214,6 +217,7 @@ static register: Array<typeof Routes> = []
 Nested route classes to automatically register.
 
 **Example:**
+
 ```typescript
 class ApiRoutes extends Routes {
   static basePath = '/api';
@@ -235,12 +239,14 @@ addRoute(
 ```
 
 **Parameters:**
+
 - `path` - Route path (supports URLPattern syntax)
 - `methods` - HTTP method(s): GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS
 - `handler` - Async function to handle the request
 - `middleware` (optional) - Route-specific middleware
 
 **Example:**
+
 ```typescript
 // Single method
 this.addRoute('/users', 'GET', this.getUsers);
@@ -256,15 +262,15 @@ this.addRoute('/admin', 'GET', this.admin, [authMiddleware]);
 
 ```typescript
 interface RouterRequest {
-  path: string;              // Request path
-  method: string;            // HTTP method
-  body: unknown;             // Parsed request body
+  path: string; // Request path
+  method: string; // HTTP method
+  body: unknown; // Parsed request body
   cookies: Record<string, string>;
-  params: Record<string, string>;  // URL parameters
-  query: Record<string, string>;   // Query parameters
+  params: Record<string, string>; // URL parameters
+  query: Record<string, string>; // Query parameters
   headers: Record<string, string | string[] | undefined>;
-  authorizer?: unknown;      // JWT decoded payload
-  lambdaOptions?: unknown;   // Lambda-specific options
+  authorizer?: unknown; // JWT decoded payload
+  lambdaOptions?: unknown; // Lambda-specific options
 }
 ```
 
@@ -272,9 +278,9 @@ interface RouterRequest {
 
 ```typescript
 interface RouterResponse {
-  status?: number;           // HTTP status code (default: 200)
+  status?: number; // HTTP status code (default: 200)
   headers?: Record<string, string>;
-  body?: unknown;            // Response body (auto-serialized)
+  body?: unknown; // Response body (auto-serialized)
   isBase64Encoded?: boolean; // For binary responses
 }
 ```
@@ -319,13 +325,13 @@ const authMiddleware = async (req: RouterRequest) => {
     // Return response to short-circuit
     return {
       status: 401,
-      body: { error: 'Unauthorized' }
+      body: { error: 'Unauthorized' },
     };
   }
 };
 
 const router = new Router({
-  middleware: [loggingMiddleware, authMiddleware]
+  middleware: [loggingMiddleware, authMiddleware],
 });
 ```
 
@@ -349,7 +355,7 @@ this.addRoute('/admin/users', 'GET', this.getUsers, [adminOnly]);
 
 ```typescript
 const router = new Router({
-  bearerToken: process.env.API_TOKEN
+  bearerToken: process.env.API_TOKEN,
 });
 ```
 
@@ -405,10 +411,10 @@ class ProtectedRoutes extends Routes {
     // JWT is automatically decoded and available as authorizer
     const userId = req.authorizer?.sub;
     const userEmail = req.authorizer?.email;
-    
+
     return {
       status: 200,
-      body: { userId, userEmail }
+      body: { userId, userEmail },
     };
   }
 }
@@ -430,12 +436,15 @@ const context: AppContext = { database: db, cache: redis };
 
 const router = new Router({
   context,
-  initRoutes: [UserRoutes]
+  initRoutes: [UserRoutes],
 });
 
 // Narrow the context in the constructor and handlers read it without a cast.
 class UserRoutes extends Routes {
-  constructor(router: Router, private ctx?: AppContext) {
+  constructor(
+    router: Router,
+    private ctx?: AppContext
+  ) {
     super(router, ctx);
   }
 
@@ -474,11 +483,11 @@ import RouteError from '@designofadecade/server/router/RouteError';
 async getUser(req: RouterRequest): Promise<RouterResponse> {
   try {
     const user = await database.getUser(req.params.id);
-    
+
     if (!user) {
       throw new NotFoundError('User not found');
     }
-    
+
     return { status: 200, body: user };
   } catch (error) {
     // Recommended: Use fromError() for automatic security and logging
@@ -492,6 +501,7 @@ async getUser(req: RouterRequest): Promise<RouterResponse> {
 ```
 
 **Key Features of `fromError()`:**
+
 - ✅ Automatically distinguishes safe vs unsafe errors
 - ✅ Prevents leaking credentials, paths, and sensitive data
 - ✅ Logs full error details internally
@@ -502,6 +512,7 @@ See [RouteError documentation](./route-error.md) for comprehensive security feat
 ### Error Codes
 
 All router errors include codes for monitoring:
+
 - `ROUTER_ERROR` - General routing errors
 - `ROUTER_JWT_DECODE_ERROR` - JWT decoding failures
 - `ROUTER_HANDLER_ERROR` - Handler execution errors
@@ -511,6 +522,7 @@ All router errors include codes for monitoring:
 ### Route Caching
 
 The router implements intelligent caching:
+
 - Static routes cached indefinitely
 - Dynamic routes cached up to 1000 entries (LRU)
 - Cache automatically pruned when full
@@ -523,6 +535,7 @@ The router implements intelligent caching:
 ## Best Practices
 
 1. **Route Organization:** Group related routes in separate classes
+
    ```typescript
    class UserRoutes extends Routes {}
    class PostRoutes extends Routes {}
@@ -532,11 +545,13 @@ The router implements intelligent caching:
    ```
 
 2. **Middleware Order:** Place authentication before business logic
+
    ```typescript
-   middleware: [loggingMiddleware, authMiddleware, rateLimitMiddleware]
+   middleware: [loggingMiddleware, authMiddleware, rateLimitMiddleware];
    ```
 
 3. **Error Handling:** Use RouteError.fromError() for secure error handling
+
    ```typescript
    try {
      const resource = await getResource(id);
@@ -544,12 +559,13 @@ The router implements intelligent caching:
    } catch (error) {
      return RouteError.fromError(error, {
        defaultMessage: 'Error retrieving resource',
-       context: { resourceId: id }
+       context: { resourceId: id },
      });
    }
    ```
 
 4. **Context Usage:** Keep context immutable and lightweight
+
    ```typescript
    class AppContext extends Context {
      constructor(
@@ -565,7 +581,7 @@ The router implements intelligent caching:
    ```typescript
    // Good
    return { status: 200, body: { data: users } };
-   
+
    // Bad - functions not serializable
    return { status: 200, body: { process: () => {} } };
    ```
@@ -577,36 +593,36 @@ The router implements intelligent caching:
 ```typescript
 class ProductRoutes extends Routes {
   static basePath = '/api/products';
-  
+
   constructor(router: Router) {
     super(router);
-    
+
     this.addRoute('', 'GET', this.list);
     this.addRoute('/:id', 'GET', this.get);
     this.addRoute('', 'POST', this.create);
     this.addRoute('/:id', 'PUT', this.update);
     this.addRoute('/:id', 'DELETE', this.delete);
   }
-  
+
   async list(req: RouterRequest): Promise<RouterResponse> {
     const page = parseInt(req.query.page || '1', 10);
     const limit = parseInt(req.query.limit || '10', 10);
-    
+
     const products = await this.getProducts(page, limit);
-    
+
     return {
       status: 200,
-      body: { products, page, limit }
+      body: { products, page, limit },
     };
   }
-  
+
   async create(req: RouterRequest): Promise<RouterResponse> {
     const product = await this.createProduct(req.body);
-    
+
     return {
       status: 201,
-      headers: { 'Location': `/api/products/${product.id}` },
-      body: product
+      headers: { Location: `/api/products/${product.id}` },
+      body: product,
     };
   }
 }

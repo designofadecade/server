@@ -18,13 +18,10 @@ import Server from '@designofadecade/server';
 import Server from '@designofadecade/server';
 
 // Create server with request handler
-const server = new Server(
-  { port: 3000, host: '0.0.0.0' },
-  (req, res) => {
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('Hello World');
-  }
-);
+const server = new Server({ port: 3000, host: '0.0.0.0' }, (req, res) => {
+  res.writeHead(200, { 'Content-Type': 'text/plain' });
+  res.end('Hello World');
+});
 
 // Server starts automatically on instantiation
 ```
@@ -75,6 +72,7 @@ Gracefully closes the server and stops accepting new connections.
 **Returns:** Promise that resolves when server is closed or rejects on error
 
 **Example:**
+
 ```typescript
 await server.close();
 console.log('Server closed successfully');
@@ -85,23 +83,17 @@ console.log('Server closed successfully');
 ### Development Server
 
 ```typescript
-const devServer = new Server(
-  { port: 3000, host: 'localhost' },
-  (req, res) => {
-    res.end('Development mode');
-  }
-);
+const devServer = new Server({ port: 3000, host: 'localhost' }, (req, res) => {
+  res.end('Development mode');
+});
 ```
 
 ### Production Server
 
 ```typescript
-const prodServer = new Server(
-  { port: 8080, host: '0.0.0.0' },
-  (req, res) => {
-    // Your production request handler
-  }
-);
+const prodServer = new Server({ port: 8080, host: '0.0.0.0' }, (req, res) => {
+  // Your production request handler
+});
 ```
 
 ### Custom Port from Environment
@@ -147,13 +139,10 @@ import Server from '@designofadecade/server';
 import Router from '@designofadecade/server/router';
 
 const router = new Router({
-  initRoutes: [MyRoutes]
+  initRoutes: [MyRoutes],
 });
 
-const server = new Server(
-  { port: 3000 },
-  router.nodeJSRequest.bind(router)
-);
+const server = new Server({ port: 3000 }, router.nodeJSRequest.bind(router));
 ```
 
 ## Logging
@@ -177,7 +166,7 @@ All logs include `source` field for tracking (e.g., `Server.start`, `Server.clos
      process.exit(0);
    });
    ```
-4. **Host Binding:** 
+4. **Host Binding:**
    - Use `0.0.0.0` for production (accepts external connections)
    - Use `localhost` for development (local only)
 
@@ -189,10 +178,7 @@ interface ServerOptions {
   host?: string;
 }
 
-type RequestHandler = (
-  req: IncomingMessage, 
-  res: ServerResponse
-) => void;
+type RequestHandler = (req: IncomingMessage, res: ServerResponse) => void;
 ```
 
 ## Related Documentation
@@ -212,14 +198,14 @@ import { UserRoutes, PostRoutes } from './routes';
 
 // Initialize router
 const router = new Router({
-  initRoutes: [UserRoutes, PostRoutes]
+  initRoutes: [UserRoutes, PostRoutes],
 });
 
 // Create server
 const server = new Server(
   {
     port: parseInt(process.env.PORT || '3000', 10),
-    host: process.env.HOST || '0.0.0.0'
+    host: process.env.HOST || '0.0.0.0',
   },
   router.nodeJSRequest.bind(router)
 );

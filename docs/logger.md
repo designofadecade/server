@@ -30,14 +30,14 @@ logger.error('Something went wrong', { code: 'APP_ERROR' });
 
 ### Environment Variables
 
-| Variable | Description | Default | Example |
-|----------|-------------|---------|---------|
-| `LOG_LEVEL` | Log verbosity level | `INFO` | `ERROR`, `WARN`, `INFO`, `DEBUG` |
-| `ENVIRONMENT` or `STAGE` | Environment name | - | `dev`, `staging`, `production` |
-| `AWS_REQUEST_ID` | Lambda request ID | Auto-captured | - |
-| `_X_AMZN_TRACE_ID` | X-Ray trace ID | Auto-captured | - |
-| `AWS_LAMBDA_FUNCTION_NAME` | Function name | Auto-captured | - |
-| `AWS_LAMBDA_FUNCTION_VERSION` | Function version | Auto-captured | - |
+| Variable                      | Description         | Default       | Example                          |
+| ----------------------------- | ------------------- | ------------- | -------------------------------- |
+| `LOG_LEVEL`                   | Log verbosity level | `INFO`        | `ERROR`, `WARN`, `INFO`, `DEBUG` |
+| `ENVIRONMENT` or `STAGE`      | Environment name    | -             | `dev`, `staging`, `production`   |
+| `AWS_REQUEST_ID`              | Lambda request ID   | Auto-captured | -                                |
+| `_X_AMZN_TRACE_ID`            | X-Ray trace ID      | Auto-captured | -                                |
+| `AWS_LAMBDA_FUNCTION_NAME`    | Function name       | Auto-captured | -                                |
+| `AWS_LAMBDA_FUNCTION_VERSION` | Function version    | Auto-captured | -                                |
 
 ### Log Levels
 
@@ -61,21 +61,21 @@ import { logger } from '@designofadecade/server';
 logger.info('User registration completed', {
   source: 'UserController.register',
   userId: '12345',
-  email: 'user@example.com'
+  email: 'user@example.com',
 });
 
 // Warning logging
 logger.warn('API rate limit approaching', {
   source: 'RateLimiter.check',
   current: 95,
-  limit: 100
+  limit: 100,
 });
 
 // Error logging
 logger.error('Database connection failed', {
   source: 'DatabaseService.connect',
   database: 'users',
-  retry: 3
+  retry: 3,
 });
 
 // Debug logging (only shown when LOG_LEVEL=DEBUG)
@@ -83,7 +83,7 @@ logger.debug('Cache state', {
   source: 'CacheManager.get',
   key: 'user:123',
   hit: true,
-  ttl: 3600
+  ttl: 3600,
 });
 ```
 
@@ -99,12 +99,13 @@ try {
     error: err, // Automatically serialized with message, name, stack
     host: 'db.example.com',
     port: 5432,
-    retry: 3
+    retry: 3,
   });
 }
 ```
 
 **Common Error Codes for Alarms:**
+
 - `DB_CONNECTION_ERROR` - Database failures
 - `API_TIMEOUT_ERROR` - External API timeouts
 - `AUTH_FAILED` - Authentication failures
@@ -115,6 +116,7 @@ try {
 ### 3. Performance Tracking
 
 #### Manual Timing
+
 ```typescript
 const start = Date.now();
 const result = await processPayment(orderId);
@@ -124,11 +126,12 @@ logger.performance('processPayment', duration, {
   source: 'PaymentService.process',
   orderId,
   amount: result.amount,
-  gateway: 'stripe'
+  gateway: 'stripe',
 });
 ```
 
 #### Timer Helper
+
 ```typescript
 const timer = logger.startTimer();
 
@@ -137,13 +140,13 @@ try {
   timer.end('expensiveOperation', {
     source: 'DataProcessor.transform',
     recordCount: 1000,
-    success: true
+    success: true,
   });
 } catch (err) {
   timer.end('expensiveOperation', {
     source: 'DataProcessor.transform',
     success: false,
-    error: err
+    error: err,
   });
 }
 ```
@@ -157,18 +160,18 @@ export const handler = async (event: APIGatewayProxyEvent) => {
     source: 'ApiHandler.handler',
     method: event.httpMethod,
     path: event.path,
-    userAgent: event.headers['User-Agent']
+    userAgent: event.headers['User-Agent'],
   });
 
   const timer = logger.startTimer();
 
   try {
     const result = await processRequest(event);
-    
+
     timer.end('processRequest', {
       source: 'ApiHandler.handler',
       statusCode: 200,
-      path: event.path
+      path: event.path,
     });
 
     return result;
@@ -178,13 +181,13 @@ export const handler = async (event: APIGatewayProxyEvent) => {
       source: 'ApiHandler.handler',
       path: event.path,
       method: event.httpMethod,
-      error: err
+      error: err,
     });
 
     timer.end('processRequest', {
       source: 'ApiHandler.handler',
       statusCode: 500,
-      path: event.path
+      path: event.path,
     });
 
     throw err;
@@ -201,13 +204,14 @@ logger.info('User authentication', {
   username: 'john@example.com',
   password: 'secret123', // Automatically becomes [REDACTED]
   apiKey: 'sk_live_abc123', // Automatically becomes [REDACTED]
-  token: 'bearer_xyz789' // Automatically becomes [REDACTED]
+  token: 'bearer_xyz789', // Automatically becomes [REDACTED]
 });
 
 // Output: { ..., password: '[REDACTED]', apiKey: '[REDACTED]', token: '[REDACTED]' }
 ```
 
 **Automatically Redacted Fields:**
+
 - password, passwd, pwd
 - token, accessToken, refreshToken, bearerToken
 - apiKey, api_key
@@ -228,27 +232,27 @@ logger.info('Order placed', {
   customerId: 'CUST-67890',
   amount: 99.99,
   items: 3,
-  paymentMethod: 'credit_card'
+  paymentMethod: 'credit_card',
 });
 
 // Payment processing
 const paymentTimer = logger.startTimer();
 try {
   const payment = await processPayment(order);
-  
+
   paymentTimer.end('paymentProcessing', {
     source: 'PaymentService.process',
     orderId: order.id,
     amount: payment.amount,
     status: payment.status,
-    gateway: 'stripe'
+    gateway: 'stripe',
   });
 } catch (err) {
   logger.error('Payment failed', {
     code: 'PAYMENT_PROCESSING_ERROR',
     source: 'PaymentService.process',
     orderId: order.id,
-    error: err
+    error: err,
   });
 }
 ```
@@ -259,11 +263,11 @@ try {
 // First log after Lambda cold start automatically includes coldStart: true
 export const handler = async (event) => {
   logger.info('Lambda invocation started', {
-    source: 'Handler.main'
+    source: 'Handler.main',
   });
   // Output on first invocation: { ..., coldStart: true, ... }
   // Output on warm invocations: { ... } (no coldStart field)
-  
+
   // Your handler logic...
 };
 ```
@@ -275,7 +279,7 @@ export const handler = async (event) => {
 logger.info('External API call', {
   source: 'ExternalService.callApi',
   endpoint: 'https://api.example.com/data',
-  method: 'GET'
+  method: 'GET',
 });
 // Output includes: traceId: 'Root=1-67891234-abcdef...'
 ```
@@ -288,7 +292,7 @@ logger.info('Message published', {
   source: 'PublisherService.publish',
   topic: 'order-events',
   messageId: 'msg-123',
-  correlationId: event.correlationId
+  correlationId: event.correlationId,
 });
 
 // In consumer Lambda
@@ -296,7 +300,7 @@ logger.info('Message received', {
   source: 'ConsumerService.consume',
   topic: 'order-events',
   messageId: 'msg-123',
-  correlationId: message.correlationId
+  correlationId: message.correlationId,
 });
 ```
 
@@ -309,7 +313,7 @@ function validateOrder(order: Order) {
       code: 'VALIDATION_ERROR',
       source: 'OrderValidator.validate',
       field: 'customerId',
-      reason: 'Customer ID is required'
+      reason: 'Customer ID is required',
     });
     throw new ValidationError('customerId is required');
   }
@@ -323,6 +327,7 @@ function validateOrder(order: Order) {
 ### Creating Metric Filters
 
 **1. Error Rate by Code**
+
 ```
 Filter Pattern: { $.code = "DB_CONNECTION_ERROR" }
 Metric Name: DBConnectionErrors
@@ -330,6 +335,7 @@ Metric Namespace: YourApp/Errors
 ```
 
 **2. Slow Operations**
+
 ```
 Filter Pattern: { $.duration > 1000 }
 Metric Name: SlowOperations
@@ -337,6 +343,7 @@ Metric Namespace: YourApp/Performance
 ```
 
 **3. Cold Starts**
+
 ```
 Filter Pattern: { $.coldStart = true }
 Metric Name: ColdStarts
@@ -346,6 +353,7 @@ Metric Namespace: YourApp/Lambda
 ### CloudWatch Insights Queries
 
 **Find Specific Error Codes:**
+
 ```
 fields @timestamp, message, code, source, error.message
 | filter code = "DB_CONNECTION_ERROR"
@@ -354,6 +362,7 @@ fields @timestamp, message, code, source, error.message
 ```
 
 **Track Errors by Source:**
+
 ```
 fields @timestamp, message, source
 | filter level = "ERROR"
@@ -362,6 +371,7 @@ fields @timestamp, message, source
 ```
 
 **Monitor Cold Starts:**
+
 ```
 fields @timestamp, message, coldStart, duration
 | filter coldStart = true
@@ -369,6 +379,7 @@ fields @timestamp, message, coldStart, duration
 ```
 
 **Track Slow Operations:**
+
 ```
 fields @timestamp, message, duration, source
 | filter duration > 1000
@@ -377,6 +388,7 @@ fields @timestamp, message, duration, source
 ```
 
 **Trace Request Flow:**
+
 ```
 fields @timestamp, message, source, requestId
 | filter requestId = "abc-123-xyz"
@@ -384,10 +396,11 @@ fields @timestamp, message, source, requestId
 ```
 
 **Performance Statistics:**
+
 ```
 fields duration, source
 | filter ispresent(duration)
-| stats avg(duration) as avgDuration, 
+| stats avg(duration) as avgDuration,
         max(duration) as maxDuration,
         min(duration) as minDuration,
         count() as requestCount
@@ -398,6 +411,7 @@ fields duration, source
 ### Creating CloudWatch Alarms
 
 **1. Error Rate Alarm**
+
 ```yaml
 Metric: YourApp/Errors/DBConnectionErrors
 Statistic: Sum
@@ -408,6 +422,7 @@ EvaluationPeriods: 2
 ```
 
 **2. High Duration Alarm**
+
 ```yaml
 Metric: YourApp/Performance/SlowOperations
 Statistic: Sum
@@ -422,6 +437,7 @@ EvaluationPeriods: 2
 ## Security & Compliance
 
 ### PCI DSS Compliance
+
 ```typescript
 // Credit card data is automatically redacted
 logger.info('Payment processed', {
@@ -429,11 +445,12 @@ logger.info('Payment processed', {
   orderId: 'ORD-123',
   cardNumber: '4111111111111111', // [REDACTED]
   cvv: '123', // [REDACTED]
-  amount: 99.99
+  amount: 99.99,
 });
 ```
 
 ### GDPR Compliance
+
 ```typescript
 // Personal data protection
 logger.info('User data accessed', {
@@ -445,13 +462,14 @@ logger.info('User data accessed', {
 ```
 
 ### SOC 2 Compliance
+
 ```typescript
 // Credential protection
 logger.info('Service authenticated', {
   source: 'ExternalService.authenticate',
   service: 'stripe',
   apiKey: 'sk_live_abc123', // [REDACTED]
-  success: true
+  success: true,
 });
 ```
 
@@ -460,26 +478,27 @@ logger.info('Service authenticated', {
 ## Performance Tracking
 
 ### Operation Metrics
+
 ```typescript
 class DatabaseService {
   async query(sql: string) {
     const timer = logger.startTimer();
-    
+
     try {
       const result = await this.connection.query(sql);
-      
+
       timer.end('databaseQuery', {
         source: 'DatabaseService.query',
         rowCount: result.rows.length,
-        success: true
+        success: true,
       });
-      
+
       return result;
     } catch (err) {
       logger.error('Database query failed', {
         code: 'DB_QUERY_ERROR',
         source: 'DatabaseService.query',
-        error: err
+        error: err,
       });
       throw err;
     }
@@ -490,6 +509,7 @@ class DatabaseService {
 ### Lambda Performance Dashboard
 
 Track these metrics in CloudWatch:
+
 - Average duration by source
 - Cold start frequency
 - Error rates by code
@@ -503,17 +523,20 @@ Track these metrics in CloudWatch:
 ### Log Not Appearing in CloudWatch
 
 **Check LOG_LEVEL:**
+
 ```bash
 # Ensure LOG_LEVEL allows your log level
 export LOG_LEVEL=DEBUG
 ```
 
 **Verify Lambda Execution Role:**
+
 - Role must have `logs:CreateLogGroup`, `logs:CreateLogStream`, `logs:PutLogEvents`
 
 ### Sensitive Data Not Redacted
 
 Add custom sensitive keys:
+
 ```typescript
 // Extend Logger class if needed
 // The current implementation redacts common patterns automatically
@@ -537,6 +560,7 @@ logger.info('Processing data', {
 ### Performance Impact
 
 The logger is optimized for production:
+
 - Zero-cost log filtering (logs below level are skipped early)
 - Efficient sensitive data redaction
 - WeakSet for circular reference tracking (no memory leaks)
@@ -556,7 +580,7 @@ export class UserServiceLogger {
     logger.info(`User action: ${action}`, {
       source: `${this.source}.${action}`,
       userId,
-      ...metadata
+      ...metadata,
     });
   }
 
@@ -565,7 +589,7 @@ export class UserServiceLogger {
       code: `USER_${action.toUpperCase()}_ERROR`,
       source: `${this.source}.${action}`,
       userId,
-      error
+      error,
     });
   }
 }
@@ -575,13 +599,16 @@ export class UserServiceLogger {
 
 ```typescript
 export class RequestLogger {
-  constructor(private requestId: string, private userId?: string) {}
+  constructor(
+    private requestId: string,
+    private userId?: string
+  ) {}
 
   info(message: string, context?: LogContext) {
     logger.info(message, {
       requestId: this.requestId,
       userId: this.userId,
-      ...context
+      ...context,
     });
   }
 
@@ -591,7 +618,7 @@ export class RequestLogger {
       requestId: this.requestId,
       userId: this.userId,
       error,
-      ...context
+      ...context,
     });
   }
 }
@@ -621,6 +648,7 @@ reqLogger.info('Processing order', { orderId: '123' });
 ## Support
 
 For issues or questions:
+
 1. Check CloudWatch Logs for the actual log output
 2. Verify LOG_LEVEL environment variable
 3. Check Lambda execution role permissions

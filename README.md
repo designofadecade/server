@@ -60,7 +60,7 @@ import { Server } from '@designofadecade/server';
 // Create a new server instance
 const server = new Server({
   port: 3000,
-  hostname: 'localhost'
+  hostname: 'localhost',
 });
 
 // Start the server
@@ -73,29 +73,35 @@ console.log('Server running on http://localhost:3000');
 The server is composed of several modular components:
 
 ### Server Core
+
 - **Server**: Main HTTP/HTTPS server with WebSocket upgrade support
 - **Router**: URL pattern-based routing with request handlers
 - **Routes**: Route collection and management
 
 ### WebSocket Support
+
 - **WebSocketServer**: WebSocket connection management
 - **WebSocketMessageFormatter**: Message serialization/deserialization
 
 ### Middleware & Utilities
+
 - **RequestLogger**: HTTP request logging middleware
 - **StaticFileHandler**: Static file serving with caching
 - **HtmlSanitizer**: XSS protection for HTML content
 - **HtmlRenderer**: Server-side HTML rendering
 
 ### State & Events
+
 - **AppState**: Application-wide state management
 - **Events**: Event emitter with type-safe event handling
 - **EventsManager**: Event subscription and lifecycle management
 
 ### Storage
+
 - **Local**: Local file system utilities
 
 ### Integrations
+
 - **Slack**: Slack notifications integration
 - **ApiClient**: HTTP client for external APIs
 
@@ -115,7 +121,7 @@ router.addRoute({
   handler: async (req, res, params) => {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ userId: params.id }));
-  }
+  },
 });
 
 // Handle requests
@@ -131,7 +137,7 @@ const wsServer = new WebSocketServer({ port: 8080 });
 
 wsServer.on('connection', (ws) => {
   console.log('Client connected');
-  
+
   ws.on('message', (data) => {
     console.log('Received:', data);
     ws.send('Echo: ' + data);
@@ -146,7 +152,7 @@ import { StaticFileHandler } from '@designofadecade/server';
 
 const staticHandler = new StaticFileHandler({
   rootDir: './public',
-  cacheControl: 'public, max-age=3600'
+  cacheControl: 'public, max-age=3600',
 });
 
 await staticHandler.serve(request, response, '/assets/style.css');
@@ -182,11 +188,13 @@ Comprehensive documentation is available in the `/docs` directory:
 ## Development
 
 ### Install Dependencies
+
 ```bash
 npm install
 ```
 
 ### Run Tests
+
 ```bash
 npm test                 # Run tests once
 npm run test:watch      # Run tests in watch mode
@@ -195,12 +203,14 @@ npm run test:coverage   # Generate coverage report
 ```
 
 ### Build
+
 ```bash
 npm run build           # Build once
 npm run build:watch     # Build in watch mode
 ```
 
 ### Linting & Formatting
+
 ```bash
 npm run lint            # Run ESLint
 npm run format          # Format code with Prettier
@@ -293,6 +303,7 @@ Website: [designofadecade.com](https://designofadecade.com)
 ## Acknowledgments
 
 Built with:
+
 - [TypeScript](https://www.typescriptlang.org/) - Type-safe JavaScript
 - [Vitest](https://vitest.dev/) - Unit testing framework
 - [ws](https://github.com/websockets/ws) - WebSocket implementation

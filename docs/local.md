@@ -22,21 +22,23 @@ import Local from '@designofadecade/server/local';
 const lambdaHandler = async (event) => {
   return {
     statusCode: 200,
-    body: JSON.stringify({ message: 'Hello from Lambda!' })
+    body: JSON.stringify({ message: 'Hello from Lambda!' }),
   };
 };
 
 // Wrap for local development
 const localHandler = Local.LambdaProxyRouter(lambdaHandler, {
-  requestContext: { stage: 'dev' }
+  requestContext: { stage: 'dev' },
 });
 
 // Create HTTP server
-http.createServer((req, res) => {
-  localHandler.request(req, res);
-}).listen(3000, () => {
-  console.log('Local Lambda server listening on port 3000');
-});
+http
+  .createServer((req, res) => {
+    localHandler.request(req, res);
+  })
+  .listen(3000, () => {
+    console.log('Local Lambda server listening on port 3000');
+  });
 ```
 
 ## API Reference
@@ -53,6 +55,7 @@ static LambdaProxyRouter(
 Creates a router that wraps AWS Lambda handlers for local development.
 
 **Parameters:**
+
 - `LambdaHandler` (function) - AWS Lambda handler function
 - `options` (object, optional)
   - `requestContext` (object) - Additional requestContext fields
@@ -61,29 +64,30 @@ Creates a router that wraps AWS Lambda handlers for local development.
 **Returns:** Object with `request` method for handling HTTP requests
 
 **Example:**
+
 ```typescript
 const handler = Local.LambdaProxyRouter(
   async (event) => {
     const body = JSON.parse(event.body || '{}');
-    
+
     return {
       statusCode: 200,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         path: event.rawPath,
         method: event.requestContext.http.method,
-        data: body
-      })
+        data: body,
+      }),
     };
   },
   {
     requestContext: {
       stage: 'local',
-      accountId: '123456789'
+      accountId: '123456789',
     },
     event: {
-      version: '2.0'
-    }
+      version: '2.0',
+    },
   }
 );
 ```
@@ -94,34 +98,34 @@ The utility converts HTTP requests to AWS Lambda HTTP API (v2.0) format:
 
 ```typescript
 interface LambdaEvent {
-  version: string;                          // Always '2.0'
-  routeKey: string;                         // "<METHOD> <path>"
-  rawPath: string;                          // Request path
-  rawQueryString: string;                   // Encoded query string
+  version: string; // Always '2.0'
+  routeKey: string; // "<METHOD> <path>"
+  rawPath: string; // Request path
+  rawQueryString: string; // Encoded query string
   headers: Record<string, string | undefined>; // Repeated headers joined with ', '
   queryStringParameters: Record<string, string>;
-  cookies: string[];                        // ["name=value", ...], as API Gateway sends
+  cookies: string[]; // ["name=value", ...], as API Gateway sends
   requestContext: {
     accountId: string;
     apiId: string;
     domainName: string;
     domainPrefix: string;
     http: {
-      method: string;                       // HTTP method
-      path: string;                         // Request path
+      method: string; // HTTP method
+      path: string; // Request path
       protocol: string;
       sourceIp: string;
       userAgent: string;
     };
     requestId: string;
     routeKey: string;
-    stage: string;                          // '$default' unless overridden
+    stage: string; // '$default' unless overridden
     time: string;
     timeEpoch: number;
-    authorizer: unknown;                    // Authorization data
+    authorizer: unknown; // Authorization data
     // ...additional fields from options
   };
-  body?: string;                            // Omitted when there is no body
+  body?: string; // Omitted when there is no body
   isBase64Encoded: boolean;
   // ...additional fields from options
 }
@@ -147,11 +151,11 @@ Your Lambda handler should return:
 
 ```typescript
 interface LambdaResponse {
-  statusCode: number;                       // HTTP status code
-  headers?: Record<string, string>;         // Response headers
-  cookies?: string[];                       // Set-Cookie headers
-  body?: string;                            // Response body
-  isBase64Encoded?: boolean;                // For binary responses
+  statusCode: number; // HTTP status code
+  headers?: Record<string, string>; // Response headers
+  cookies?: string[]; // Set-Cookie headers
+  body?: string; // Response body
+  isBase64Encoded?: boolean; // For binary responses
 }
 ```
 
@@ -164,7 +168,7 @@ import Local from '@designofadecade/server/local';
 // Lambda handler with routing
 const handler = async (event: any) => {
   const { method, path } = event.requestContext.http;
-  
+
   // Route based on path and method
   if (path === '/users' && method === 'GET') {
     return {
@@ -173,12 +177,12 @@ const handler = async (event: any) => {
       body: JSON.stringify({
         users: [
           { id: 1, name: 'John' },
-          { id: 2, name: 'Jane' }
-        ]
-      })
+          { id: 2, name: 'Jane' },
+        ],
+      }),
     };
   }
-  
+
   if (path.startsWith('/users/') && method === 'GET') {
     const id = path.split('/')[2];
     return {
@@ -186,11 +190,11 @@ const handler = async (event: any) => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         id,
-        name: 'John Doe'
-      })
+        name: 'John Doe',
+      }),
     };
   }
-  
+
   if (path === '/users' && method === 'POST') {
     const body = JSON.parse(event.body || '{}');
     return {
@@ -198,14 +202,14 @@ const handler = async (event: any) => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         id: Date.now(),
-        ...body
-      })
+        ...body,
+      }),
     };
   }
-  
+
   return {
     statusCode: 404,
-    body: JSON.stringify({ error: 'Not Found' })
+    body: JSON.stringify({ error: 'Not Found' }),
   };
 };
 
@@ -213,8 +217,8 @@ const handler = async (event: any) => {
 const localHandler = Local.LambdaProxyRouter(handler, {
   requestContext: {
     stage: 'local',
-    requestId: () => Math.random().toString(36)
-  }
+    requestId: () => Math.random().toString(36),
+  },
 });
 
 // Create server
@@ -239,7 +243,7 @@ import { UserRoutes, PostRoutes } from './routes';
 
 // Create router (works for both Lambda and HTTP)
 const router = new Router({
-  initRoutes: [UserRoutes, PostRoutes]
+  initRoutes: [UserRoutes, PostRoutes],
 });
 
 // For Lambda deployment
@@ -250,11 +254,11 @@ export const handler = async (event: any) => {
 // For local development
 if (process.env.NODE_ENV === 'development') {
   const localHandler = Local.LambdaProxyRouter(handler);
-  
+
   const server = http.createServer((req, res) => {
     localHandler.request(req, res);
   });
-  
+
   server.listen(3000, () => {
     console.log('Local server running on port 3000');
   });
@@ -270,8 +274,8 @@ const handler = Local.LambdaProxyRouter(lambdaHandler, {
   requestContext: {
     stage: 'dev',
     accountId: '123456789',
-    region: 'us-east-1'
-  }
+    region: 'us-east-1',
+  },
 });
 ```
 
@@ -284,11 +288,11 @@ const handler = Local.LambdaProxyRouter(lambdaHandler, {
       jwt: {
         claims: {
           sub: 'user-123',
-          email: 'user@example.com'
-        }
-      }
-    }
-  }
+          email: 'user@example.com',
+        },
+      },
+    },
+  },
 });
 ```
 
@@ -298,8 +302,8 @@ const handler = Local.LambdaProxyRouter(lambdaHandler, {
 const handler = Local.LambdaProxyRouter(lambdaHandler, {
   requestContext: {
     requestId: () => Math.random().toString(36).substring(7),
-    timeEpoch: () => Date.now()
-  }
+    timeEpoch: () => Date.now(),
+  },
 });
 ```
 
@@ -315,16 +319,16 @@ describe('Lambda Handler', () => {
     const event = {
       rawPath: '/users',
       requestContext: {
-        http: { method: 'GET', path: '/users' }
+        http: { method: 'GET', path: '/users' },
       },
       headers: {},
       queryStringParameters: {},
       cookies: {},
-      body: null
+      body: null,
     };
-    
+
     const response = await handler(event);
-    
+
     expect(response.statusCode).toBe(200);
     expect(JSON.parse(response.body)).toHaveProperty('users');
   });
@@ -334,6 +338,7 @@ describe('Lambda Handler', () => {
 ## Best Practices
 
 1. **Environment Detection:** Only use Local in development
+
    ```typescript
    if (process.env.NODE_ENV === 'development') {
      // Local development setup
@@ -343,16 +348,18 @@ describe('Lambda Handler', () => {
    ```
 
 2. **Request Context:** Match production Lambda context structure
+
    ```typescript
    const handler = Local.LambdaProxyRouter(lambdaHandler, {
      requestContext: {
        stage: process.env.STAGE || 'dev',
        // Match your actual Lambda configuration
-     }
+     },
    });
    ```
 
 3. **Use Router:** Prefer Router class for complex applications
+
    ```typescript
    // Better for complex apps
    const router = new Router({ initRoutes: [Routes] });

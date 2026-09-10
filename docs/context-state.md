@@ -52,12 +52,15 @@ const context: AppContext = { database: db, redis, config };
 // Pass to router
 const router = new Router({
   context,
-  initRoutes: [UserRoutes, PostRoutes]
+  initRoutes: [UserRoutes, PostRoutes],
 });
 
 // Narrow the context in your route class constructor
 class UserRoutes extends Routes {
-  constructor(router: Router, private ctx?: AppContext) {
+  constructor(
+    router: Router,
+    private ctx?: AppContext
+  ) {
     super(router, ctx);
   }
 
@@ -66,7 +69,7 @@ class UserRoutes extends Routes {
 
     return {
       status: 200,
-      body: user
+      body: user,
     };
   }
 }
@@ -82,7 +85,7 @@ the stub against the real shape:
 const context: AppContext = {
   database: { users: { findById: async () => ({ id: '1' }) } } as Database,
   redis: fakeRedis,
-  config: { assetsBucket: 'test-bucket' } as Config
+  config: { assetsBucket: 'test-bucket' } as Config,
 };
 
 const routes = new UserRoutes(router, context);
@@ -126,6 +129,7 @@ protected constructor()
 The constructor is protected - Context cannot be instantiated directly and must be extended.
 
 **Throws:**
+
 - `TypeError` - If attempting to instantiate Context directly
 
 #### Methods
@@ -141,6 +145,7 @@ Optional method to validate context state. Override in derived classes.
 **Returns:** `boolean` - True if context is valid
 
 **Example:**
+
 ```typescript
 class AppContext extends Context {
   protected validate(): boolean {
@@ -158,6 +163,7 @@ protected async initialize(): Promise<void>
 Optional async initialization method. Override to set up resources.
 
 **Example:**
+
 ```typescript
 class AppContext extends Context {
   protected async initialize(): Promise<void> {
@@ -176,6 +182,7 @@ protected async dispose(): Promise<void>
 Optional cleanup method. Override to release resources.
 
 **Example:**
+
 ```typescript
 class AppContext extends Context {
   protected async dispose(): Promise<void> {
@@ -214,36 +221,32 @@ class AppContext extends Context {
   ) {
     super();
   }
-  
+
   protected validate(): boolean {
-    return (
-      this.database !== null &&
-      this.config.apiUrl !== '' &&
-      this.services !== null
-    );
+    return this.database !== null && this.config.apiUrl !== '' && this.services !== null;
   }
-  
+
   protected async initialize(): Promise<void> {
     // Connect to database
     await this.database.connect();
-    
+
     // Initialize cache
     if (this.config.cacheEnabled) {
       await this.cache.connect();
     }
-    
+
     // Initialize services
     await this.services.emailService.init();
-    
+
     this.logger.info('Context initialized');
   }
-  
+
   protected async dispose(): Promise<void> {
     // Cleanup in reverse order
     await this.services.emailService.shutdown();
     await this.cache.disconnect();
     await this.database.disconnect();
-    
+
     this.logger.info('Context disposed');
   }
 }
@@ -277,7 +280,7 @@ import AppState from '@designofadecade/server/state';
 // Get singleton instance
 const state = AppState.getInstance({
   env: 'production',
-  rootPath: '/app'
+  rootPath: '/app',
 });
 
 // Store values
@@ -315,6 +318,7 @@ static getInstance(config?: {
 Gets or creates the singleton instance.
 
 **Parameters:**
+
 - `config` (object, optional)
   - `env` (string) - Environment mode. Default: `'development'`
   - `rootPath` (string) - Application root path. Default: `'/'`
@@ -322,11 +326,12 @@ Gets or creates the singleton instance.
 **Returns:** `AppState` - The singleton instance
 
 **Example:**
+
 ```typescript
 // First call creates instance
 const state = AppState.getInstance({
   env: 'production',
-  rootPath: '/api'
+  rootPath: '/api',
 });
 
 // Subsequent calls return same instance
@@ -346,6 +351,7 @@ Get the current environment.
 **Returns:** `string` - Environment mode ('development', 'production', etc.)
 
 **Example:**
+
 ```typescript
 const state = AppState.getInstance({ env: 'production' });
 console.log(state.env); // 'production'
@@ -366,6 +372,7 @@ Get the application root path.
 **Returns:** `string` - Root path
 
 **Example:**
+
 ```typescript
 const state = AppState.getInstance({ rootPath: '/api/v1' });
 console.log(state.rootPath); // '/api/v1'
@@ -382,11 +389,13 @@ get(key: string): any
 Get a value from state.
 
 **Parameters:**
+
 - `key` (string) - The key to retrieve
 
 **Returns:** `any` - The stored value or `undefined`
 
 **Example:**
+
 ```typescript
 const value = state.get('myKey');
 if (value) {
@@ -403,17 +412,16 @@ set(key: string, value: any): AppState
 Set a value in state.
 
 **Parameters:**
+
 - `key` (string) - The key to set
 - `value` (any) - The value to store
 
 **Returns:** `AppState` - Returns this for method chaining
 
 **Example:**
+
 ```typescript
-state
-  .set('apiUrl', 'https://api.example.com')
-  .set('timeout', 30000)
-  .set('retries', 3);
+state.set('apiUrl', 'https://api.example.com').set('timeout', 30000).set('retries', 3);
 ```
 
 ##### has()
@@ -425,11 +433,13 @@ has(key: string): boolean
 Check if a key exists in state.
 
 **Parameters:**
+
 - `key` (string) - The key to check
 
 **Returns:** `boolean` - True if key exists
 
 **Example:**
+
 ```typescript
 if (state.has('apiKey')) {
   const key = state.get('apiKey');
@@ -447,11 +457,13 @@ remove(key: string): AppState
 Remove a key from state.
 
 **Parameters:**
+
 - `key` (string) - The key to remove
 
 **Returns:** `AppState` - Returns this for method chaining
 
 **Example:**
+
 ```typescript
 state.remove('tempData');
 state.remove('cache').remove('session');
@@ -468,6 +480,7 @@ Clear all dynamic state. Does not clear env and rootPath.
 **Returns:** `AppState` - Returns this for method chaining
 
 **Example:**
+
 ```typescript
 // Clear all state on tests cleanup
 afterEach(() => {
@@ -485,7 +498,7 @@ import AppState from '@designofadecade/server/state';
 // Initialize on app startup
 const state = AppState.getInstance({
   env: process.env.NODE_ENV || 'development',
-  rootPath: process.env.BASE_PATH || '/'
+  rootPath: process.env.BASE_PATH || '/',
 });
 
 // Load configuration
@@ -501,7 +514,7 @@ function getDatabaseConfig() {
   const state = AppState.getInstance();
   return {
     url: state.get('database.url'),
-    pool: state.get('database.pool')
+    pool: state.get('database.pool'),
   };
 }
 ```
@@ -555,11 +568,11 @@ function trackError() {
 function getMetrics() {
   const state = AppState.getInstance();
   const uptime = Date.now() - state.get('metrics.startTime');
-  
+
   return {
     uptime,
     requests: state.get('metrics.requestCount'),
-    errors: state.get('metrics.errorCount')
+    errors: state.get('metrics.errorCount'),
   };
 }
 ```
@@ -573,21 +586,21 @@ const state = AppState.getInstance();
 function cacheData(key: string, data: any, ttl: number) {
   state.set(`cache.${key}`, {
     data,
-    expiresAt: Date.now() + ttl
+    expiresAt: Date.now() + ttl,
   });
 }
 
 // Retrieve cached data
 function getCachedData(key: string): any {
   const cached = state.get(`cache.${key}`);
-  
+
   if (!cached) return null;
-  
+
   if (Date.now() > cached.expiresAt) {
     state.remove(`cache.${key}`);
     return null;
   }
-  
+
   return cached.data;
 }
 
@@ -606,19 +619,19 @@ describe('My Tests', () => {
     // Initialize clean state
     const state = AppState.getInstance();
     state.clear();
-    
+
     // Set test configuration
     state
       .set('env', 'test')
       .set('database.url', 'mongodb://localhost:27017/test')
       .set('features.test', true);
   });
-  
+
   afterEach(() => {
     // Clean up
     AppState.getInstance().clear();
   });
-  
+
   it('should use test configuration', () => {
     const state = AppState.getInstance();
     expect(state.env).toBe('test');
@@ -632,6 +645,7 @@ describe('My Tests', () => {
 ### Context
 
 1. **Immutable Resources:** Make context properties readonly
+
    ```typescript
    interface AppContext extends ContextLike {
      readonly db: Database;
@@ -642,9 +656,13 @@ describe('My Tests', () => {
 2. **Type Safety:** Narrow the context in the route constructor rather than
    casting `this.context` in each handler — a cast silently survives a context
    change, a typed parameter does not.
+
    ```typescript
    class UserRoutes extends Routes {
-     constructor(router: Router, private ctx?: AppContext) {
+     constructor(
+       router: Router,
+       private ctx?: AppContext
+     ) {
        super(router, ctx);
      }
 
@@ -655,11 +673,12 @@ describe('My Tests', () => {
    ```
 
 3. **Lifecycle Management:** Use initialize/dispose for setup/cleanup
+
    ```typescript
    protected async initialize() {
      await this.database.connect();
    }
-   
+
    protected async dispose() {
      await this.database.disconnect();
    }
@@ -675,6 +694,7 @@ describe('My Tests', () => {
 ### AppState
 
 1. **Namespace Keys:** Use dot notation for organization
+
    ```typescript
    state.set('database.url', url);
    state.set('database.pool', 10);
@@ -682,21 +702,23 @@ describe('My Tests', () => {
    ```
 
 2. **Singleton Pattern:** Always use getInstance()
+
    ```typescript
    // Good
    const state = AppState.getInstance();
-   
+
    // Bad - trying to use new (won't work)
    const state = new AppState();
    ```
 
 3. **Configuration Loading:** Load all config at startup
+
    ```typescript
    function loadConfig() {
      const state = AppState.getInstance({
-       env: process.env.NODE_ENV
+       env: process.env.NODE_ENV,
      });
-     
+
      // Load all configuration
      state.set('config', loadConfigFile());
    }

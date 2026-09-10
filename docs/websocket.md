@@ -20,7 +20,7 @@ import WebSocketServer from '@designofadecade/server/websocket';
 // Create WebSocket server
 const wss = new WebSocketServer({
   port: 8080,
-  host: '0.0.0.0'
+  host: '0.0.0.0',
 });
 
 // Handle incoming messages
@@ -44,6 +44,7 @@ new WebSocketServer(options?: WebSocketServerOptions)
 ```
 
 **Options:**
+
 - `port` (number, optional) - Port number (1-65535). Default: `8080`
 - `host` (string, optional) - Host to bind to. Default: `'0.0.0.0'`
 - `maxPayload` (number, optional) - Largest accepted frame in bytes. Default: `1048576` (1 MiB)
@@ -54,10 +55,12 @@ new WebSocketServer(options?: WebSocketServerOptions)
   `allowedOrigins` check
 
 **Throws:**
+
 - `Error` - If port is invalid (not between 1-65535)
 - `Error` - If `maxPayload` is not greater than 0
 
 **Example:**
+
 ```typescript
 const wss = new WebSocketServer({ port: 8080, host: 'localhost' });
 
@@ -76,7 +79,7 @@ const wss = new WebSocketServer({
 ```
 
 > **Why `allowedOrigins` matters.** Browsers do not apply the same-origin policy to
-> WebSockets, and they *do* send cookies with the upgrade request. Without an origin
+> WebSockets, and they _do_ send cookies with the upgrade request. Without an origin
 > check, any website a user visits can open an authenticated socket to your server on
 > their behalf and read whatever it publishes — cross-site WebSocket hijacking. Set
 > `allowedOrigins` for any server that browsers connect to.
@@ -97,6 +100,7 @@ Returns the number of currently connected clients.
 **Returns:** `number` - Connected client count
 
 **Example:**
+
 ```typescript
 console.log(`Active connections: ${wss.clientCount}`);
 ```
@@ -112,22 +116,24 @@ broadcast(type: string, message: any): void
 Broadcast a message to all connected clients.
 
 **Parameters:**
+
 - `type` (string) - Message type identifier
 - `message` (any) - Message payload (will be serialized)
 
 **Example:**
+
 ```typescript
 // Send notification to all clients
 wss.broadcast('notification', {
   title: 'System Update',
-  body: 'Server will restart in 5 minutes'
+  body: 'Server will restart in 5 minutes',
 });
 
 // Send data update
 wss.broadcast('data:update', {
   entity: 'users',
   action: 'created',
-  data: newUser
+  data: newUser,
 });
 ```
 
@@ -142,6 +148,7 @@ Gracefully close the WebSocket server and disconnect all clients.
 **Returns:** Promise that resolves when server is closed
 
 **Example:**
+
 ```typescript
 // Graceful shutdown
 process.on('SIGTERM', async () => {
@@ -177,6 +184,7 @@ wss.on('message', (parsed: ParsedMessage) => {
 ```
 
 **ParsedMessage Format:**
+
 ```typescript
 {
   id?: string;      // Optional message ID
@@ -186,6 +194,7 @@ wss.on('message', (parsed: ParsedMessage) => {
 ```
 
 **Example:**
+
 ```typescript
 wss.on('message', (parsed) => {
   switch (parsed.type) {
@@ -217,6 +226,7 @@ All WebSocket messages use a standardized JSON format managed by `WebSocketMessa
 ### Incoming Messages
 
 Clients should send messages in the same format. The server automatically:
+
 - Parses incoming JSON messages
 - Validates message structure
 - Emits parsed messages via the 'message' event
@@ -274,7 +284,7 @@ const wss = new WebSocketServer({ port: 8080 });
 // Create events manager
 const eventsManager = new EventsManager({
   registerWebSocketServer: wss,
-  initEvents: [ChatEvents, NotificationEvents]
+  initEvents: [ChatEvents, NotificationEvents],
 });
 
 // EventsManager automatically handles messages and broadcasting
@@ -356,12 +366,12 @@ wss.on('message', (parsed) => {
   if (!allowedTypes.includes(parsed.type)) {
     return; // Ignore invalid types
   }
-  
+
   // Validate payload structure
   if (!parsed.payload || typeof parsed.payload !== 'object') {
     return;
   }
-  
+
   // Process valid message
   handleMessage(parsed);
 });
@@ -370,6 +380,7 @@ wss.on('message', (parsed) => {
 ## Best Practices
 
 1. **Connection Limits:** Monitor `clientCount` and implement limits
+
    ```typescript
    if (wss.clientCount > MAX_CONNECTIONS) {
      // Reject new connections or scale horizontally
@@ -377,6 +388,7 @@ wss.on('message', (parsed) => {
    ```
 
 2. **Graceful Shutdown:** Always close WebSocket server on process termination
+
    ```typescript
    process.on('SIGTERM', async () => {
      await wss.close();
@@ -384,12 +396,14 @@ wss.on('message', (parsed) => {
    ```
 
 3. **Message Types:** Use namespaced message types
+
    ```typescript
    // Good: chat:message, user:typing, notification:new
    // Bad: message, typing, notification
    ```
 
 4. **Error Recovery:** Handle client disconnections gracefully
+
    ```typescript
    wss.on('message', async (parsed) => {
      try {
@@ -431,29 +445,29 @@ wss.on('message', (parsed) => {
     case 'chat:join':
       sessions.set(parsed.payload.userId, {
         username: parsed.payload.username,
-        joinedAt: Date.now()
+        joinedAt: Date.now(),
       });
-      
+
       // Notify others
       wss.broadcast('user:joined', {
-        username: parsed.payload.username
+        username: parsed.payload.username,
       });
       break;
-      
+
     case 'chat:message':
       // Broadcast message to all
       wss.broadcast('chat:message', {
         username: parsed.payload.username,
         text: parsed.payload.text,
-        timestamp: Date.now()
+        timestamp: Date.now(),
       });
       break;
-      
+
     case 'chat:leave':
       sessions.delete(parsed.payload.userId);
-      
+
       wss.broadcast('user:left', {
-        username: parsed.payload.username
+        username: parsed.payload.username,
       });
       break;
   }
@@ -473,7 +487,7 @@ database.on('change', (change) => {
   wss.broadcast('db:update', {
     collection: change.collection,
     operation: change.op,
-    data: change.data
+    data: change.data,
   });
 });
 
@@ -482,7 +496,7 @@ function sendNotification(title: string, body: string) {
   wss.broadcast('notification', {
     title,
     body,
-    timestamp: Date.now()
+    timestamp: Date.now(),
   });
 }
 ```
@@ -495,15 +509,15 @@ const wss = new WebSocketServer({ port: 8080 });
 // Monitor connection count
 setInterval(() => {
   console.log(`Active connections: ${wss.clientCount}`);
-  
+
   if (wss.clientCount === 0) {
     console.log('No active connections');
   }
-  
+
   // Broadcast health check
   wss.broadcast('health:check', {
     timestamp: Date.now(),
-    clients: wss.clientCount
+    clients: wss.clientCount,
   });
 }, 30000);
 ```
@@ -516,21 +530,23 @@ const ws = new WebSocket('ws://localhost:8080');
 
 ws.onopen = () => {
   console.log('Connected to WebSocket server');
-  
+
   // Send a message
-  ws.send(JSON.stringify({
-    type: 'chat:message',
-    payload: {
-      username: 'John',
-      text: 'Hello, everyone!'
-    }
-  }));
+  ws.send(
+    JSON.stringify({
+      type: 'chat:message',
+      payload: {
+        username: 'John',
+        text: 'Hello, everyone!',
+      },
+    })
+  );
 };
 
 ws.onmessage = (event) => {
   const message = JSON.parse(event.data);
   console.log('Received:', message.type, message.payload);
-  
+
   // Handle connection confirmation
   if (message.type === 'ws:connected') {
     console.log('Connection confirmed');

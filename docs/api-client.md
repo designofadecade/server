@@ -29,11 +29,11 @@ const user = await client.get('/users/123');
 
 const newUser = await client.post('/users', {
   name: 'John Doe',
-  email: 'john@example.com'
+  email: 'john@example.com',
 });
 
 const updated = await client.put('/users/123', {
-  name: 'Jane Doe'
+  name: 'Jane Doe',
 });
 
 await client.delete('/users/123');
@@ -48,6 +48,7 @@ new ApiClient(baseUrl: string, options?: ApiClientOptions)
 ```
 
 **Parameters:**
+
 - `baseUrl` (string) - Base URL for all requests
 - `options` (object, optional)
   - `timeout` (number) - Request timeout in milliseconds. Default: `30000`
@@ -55,11 +56,12 @@ new ApiClient(baseUrl: string, options?: ApiClientOptions)
   - `retryDelay` (number) - Delay between retries in milliseconds. Default: `1000`
 
 **Example:**
+
 ```typescript
 const client = new ApiClient('https://api.example.com', {
-  timeout: 10000,      // 10 seconds
-  retryAttempts: 3,    // Retry failed requests 3 times
-  retryDelay: 2000     // Wait 2 seconds between retries
+  timeout: 10000, // 10 seconds
+  retryAttempts: 3, // Retry failed requests 3 times
+  retryDelay: 2000, // Wait 2 seconds between retries
 });
 ```
 
@@ -72,11 +74,13 @@ get(path: string, params?: Record<string, any>, options?: RequestOptions): Promi
 ```
 
 **Parameters:**
+
 - `path` (string) - Request path (relative to base URL)
 - `params` (object, optional) - Query parameters
 - `options` (object, optional) - Request options
 
 **Example:**
+
 ```typescript
 // Simple GET
 const users = await client.get('/users');
@@ -85,14 +89,18 @@ const users = await client.get('/users');
 const results = await client.get('/search', {
   q: 'javascript',
   page: 1,
-  limit: 10
+  limit: 10,
 });
 // Requests: /search?q=javascript&page=1&limit=10
 
 // With custom headers
-const data = await client.get('/data', {}, {
-  headers: { 'Accept-Language': 'en-US' }
-});
+const data = await client.get(
+  '/data',
+  {},
+  {
+    headers: { 'Accept-Language': 'en-US' },
+  }
+);
 ```
 
 #### post()
@@ -102,17 +110,19 @@ post(path: string, data?: any, options?: RequestOptions): Promise<ApiResponse>
 ```
 
 **Parameters:**
+
 - `path` (string) - Request path
 - `data` (any, optional) - Request body (auto-serialized to JSON)
 - `options` (object, optional) - Request options
 
 **Example:**
+
 ```typescript
 // Create resource
 const newUser = await client.post('/users', {
   name: 'John Doe',
   email: 'john@example.com',
-  age: 30
+  age: 30,
 });
 
 // Empty body
@@ -120,7 +130,7 @@ const result = await client.post('/trigger');
 
 // Custom content type
 const response = await client.post('/upload', formData, {
-  headers: { 'Content-Type': 'multipart/form-data' }
+  headers: { 'Content-Type': 'multipart/form-data' },
 });
 ```
 
@@ -131,16 +141,18 @@ put(path: string, data?: any, options?: RequestOptions): Promise<ApiResponse>
 ```
 
 **Parameters:**
+
 - `path` (string) - Request path
 - `data` (any, optional) - Request body
 - `options` (object, optional) - Request options
 
 **Example:**
+
 ```typescript
 // Update resource
 const updated = await client.put('/users/123', {
   name: 'Jane Doe',
-  email: 'jane@example.com'
+  email: 'jane@example.com',
 });
 ```
 
@@ -151,15 +163,17 @@ patch(path: string, data?: any, options?: RequestOptions): Promise<ApiResponse>
 ```
 
 **Parameters:**
+
 - `path` (string) - Request path
 - `data` (any, optional) - Request body (partial update)
 - `options` (object, optional) - Request options
 
 **Example:**
+
 ```typescript
 // Partial update
 const updated = await client.patch('/users/123', {
-  email: 'newemail@example.com'
+  email: 'newemail@example.com',
 });
 ```
 
@@ -170,17 +184,19 @@ delete(path: string, options?: RequestOptions): Promise<ApiResponse>
 ```
 
 **Parameters:**
+
 - `path` (string) - Request path
 - `options` (object, optional) - Request options
 
 **Example:**
+
 ```typescript
 // Delete resource
 await client.delete('/users/123');
 
 // Delete with query params
 await client.delete('/users/123', {
-  headers: { 'X-Reason': 'User requested deletion' }
+  headers: { 'X-Reason': 'User requested deletion' },
 });
 ```
 
@@ -195,10 +211,12 @@ setAuthToken(token: string, type?: string): void
 Set authentication token for all requests.
 
 **Parameters:**
+
 - `token` (string) - Authentication token
 - `type` (string, optional) - Token type. Default: `'Bearer'`
 
 **Example:**
+
 ```typescript
 // Bearer token (default)
 client.setAuthToken('your-jwt-token');
@@ -222,6 +240,7 @@ clearAuthToken(): void
 Remove authentication token.
 
 **Example:**
+
 ```typescript
 // User logout
 client.clearAuthToken();
@@ -238,11 +257,12 @@ setDefaultHeaders(headers: Record<string, string>): void
 Set default headers for all requests.
 
 **Example:**
+
 ```typescript
 client.setDefaultHeaders({
   'Accept-Language': 'en-US',
   'X-App-Version': '1.0.0',
-  'X-Device-ID': deviceId
+  'X-Device-ID': deviceId,
 });
 ```
 
@@ -257,6 +277,7 @@ addRequestInterceptor(interceptor: RequestInterceptor): void
 Add a function to modify requests before they're sent.
 
 **Example:**
+
 ```typescript
 // Add timestamp to all requests
 client.addRequestInterceptor((config) => {
@@ -264,8 +285,8 @@ client.addRequestInterceptor((config) => {
     ...config,
     headers: {
       ...config.headers,
-      'X-Request-Time': Date.now().toString()
-    }
+      'X-Request-Time': Date.now().toString(),
+    },
   };
 });
 
@@ -276,8 +297,8 @@ client.addRequestInterceptor(async (config) => {
     ...config,
     headers: {
       ...config.headers,
-      'X-Request-ID': requestId
-    }
+      'X-Request-ID': requestId,
+    },
   };
 });
 ```
@@ -291,13 +312,14 @@ addResponseInterceptor(interceptor: ResponseInterceptor): void
 Add a function to transform responses.
 
 **Example:**
+
 ```typescript
 // Transform data format
 client.addResponseInterceptor((response) => {
   if (response.ok && response.data) {
     return {
       ...response,
-      data: transformData(response.data)
+      data: transformData(response.data),
     };
   }
   return response;
@@ -317,16 +339,17 @@ client.addResponseInterceptor((response) => {
 
 ```typescript
 interface ApiResponse {
-  ok: boolean;                    // true if status 200-299
-  status: number | null;          // HTTP status code
-  statusText: string;             // HTTP status text
-  data: any;                      // Response body (parsed JSON)
-  error: string | null;           // Error message if failed
+  ok: boolean; // true if status 200-299
+  status: number | null; // HTTP status code
+  statusText: string; // HTTP status text
+  data: any; // Response body (parsed JSON)
+  error: string | null; // Error message if failed
   headers: Record<string, string>; // Response headers
 }
 ```
 
 **Example Response:**
+
 ```typescript
 // Successful response
 {
@@ -389,11 +412,11 @@ switch (response.status) {
 ```typescript
 try {
   const response = await client.post('/users', userData);
-  
+
   if (!response.ok) {
     throw new Error(`API error: ${response.error}`);
   }
-  
+
   return response.data;
 } catch (error) {
   console.error('Request failed:', error);
@@ -408,7 +431,7 @@ Automatic retry for failed requests:
 ```typescript
 const client = new ApiClient('https://api.example.com', {
   retryAttempts: 3,
-  retryDelay: 1000
+  retryDelay: 1000,
 });
 
 // Will retry up to 3 times on failure
@@ -416,6 +439,7 @@ const data = await client.get('/unreliable-endpoint');
 ```
 
 **Retry Strategy:**
+
 - Retries on network errors
 - Retries on 5xx server errors
 - Does not retry on 4xx client errors
@@ -425,7 +449,7 @@ const data = await client.get('/unreliable-endpoint');
 
 ```typescript
 const client = new ApiClient('https://api.example.com', {
-  timeout: 5000 // 5 seconds
+  timeout: 5000, // 5 seconds
 });
 
 const response = await client.get('/slow-endpoint');
@@ -438,15 +462,17 @@ if (response.error === 'Request timeout') {
 ## Best Practices
 
 1. **Reuse Client Instances:** Create once, reuse across app
+
    ```typescript
    // Good - single instance
    export const apiClient = new ApiClient('https://api.example.com');
-   
+
    // Bad - new instance per request
    const client = new ApiClient('https://api.example.com');
    ```
 
 2. **Error Handling:** Always check response.ok
+
    ```typescript
    const response = await client.get('/data');
    if (!response.ok) {
@@ -457,6 +483,7 @@ if (response.error === 'Request timeout') {
    ```
 
 3. **Authentication:** Set token once after login
+
    ```typescript
    async function login(credentials) {
      const response = await client.post('/auth/login', credentials);
@@ -467,14 +494,15 @@ if (response.error === 'Request timeout') {
    ```
 
 4. **Request Interceptors:** Use for cross-cutting concerns
+
    ```typescript
    // Add to all requests
    client.addRequestInterceptor((config) => ({
      ...config,
      headers: {
        ...config.headers,
-       'X-Client-Version': APP_VERSION
-     }
+       'X-Client-Version': APP_VERSION,
+     },
    }));
    ```
 
@@ -485,7 +513,7 @@ if (response.error === 'Request timeout') {
        // Transform snake_case to camelCase
        return {
          ...response,
-         data: transformKeys(response.data)
+         data: transformKeys(response.data),
        };
      }
      return response;
@@ -501,66 +529,66 @@ import ApiClient from '@designofadecade/server/client';
 
 class UserApiClient {
   private client: ApiClient;
-  
+
   constructor(baseUrl: string, apiKey: string) {
     this.client = new ApiClient(baseUrl, {
       timeout: 10000,
-      retryAttempts: 2
+      retryAttempts: 2,
     });
-    
+
     this.client.setAuthToken(apiKey, 'Bearer');
   }
-  
+
   async getUsers(page: number = 1, limit: number = 10) {
     const response = await this.client.get('/users', { page, limit });
-    
+
     if (!response.ok) {
       throw new Error(`Failed to fetch users: ${response.error}`);
     }
-    
+
     return response.data;
   }
-  
+
   async getUser(id: string) {
     const response = await this.client.get(`/users/${id}`);
-    
+
     if (!response.ok) {
       if (response.status === 404) {
         return null;
       }
       throw new Error(`Failed to fetch user: ${response.error}`);
     }
-    
+
     return response.data;
   }
-  
+
   async createUser(userData: any) {
     const response = await this.client.post('/users', userData);
-    
+
     if (!response.ok) {
       throw new Error(`Failed to create user: ${response.error}`);
     }
-    
+
     return response.data;
   }
-  
+
   async updateUser(id: string, updates: any) {
     const response = await this.client.patch(`/users/${id}`, updates);
-    
+
     if (!response.ok) {
       throw new Error(`Failed to update user: ${response.error}`);
     }
-    
+
     return response.data;
   }
-  
+
   async deleteUser(id: string) {
     const response = await this.client.delete(`/users/${id}`);
-    
+
     if (!response.ok) {
       throw new Error(`Failed to delete user: ${response.error}`);
     }
-    
+
     return true;
   }
 }
@@ -607,19 +635,19 @@ client.addResponseInterceptor(async (response) => {
     const refreshResponse = await fetch('https://api.example.com/auth/refresh', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ refreshToken })
+      body: JSON.stringify({ refreshToken }),
     });
-    
+
     if (refreshResponse.ok) {
       const { accessToken: newToken } = await refreshResponse.json();
       client.setAuthToken(newToken);
       accessToken = newToken;
-      
+
       // Retry original request
       // (Implementation depends on storing original request details)
     }
   }
-  
+
   return response;
 });
 ```

@@ -60,7 +60,7 @@ const router = new Router({
 ```
 
 **Not affected: AWS Lambda behind API Gateway.** `lambdaEvent()` passes through
-`event.requestContext.authorizer`, which the gateway populates *after* it has
+`event.requestContext.authorizer`, which the gateway populates _after_ it has
 validated the token. If your `.authorizer` hits are on the Lambda event rather
 than on `request.authorizer` from `nodeJSRequest`, there is nothing to do.
 
@@ -112,7 +112,7 @@ new WebSocketServer({ port: 8080, maxPayload: 8 * 1024 * 1024 });
 ```
 
 While you are here, set an origin allowlist. Browsers do not apply the
-same-origin policy to WebSockets and *do* send cookies with the upgrade, so
+same-origin policy to WebSockets and _do_ send cookies with the upgrade, so
 without one, any site a user visits can open an authenticated socket on their
 behalf:
 
@@ -176,7 +176,7 @@ via `engines`, so this only matters if your `@types/node` is older.
 
 Worth doing in this order, because each step rules out a class of problem:
 
-1. **Baseline first.** Record `tsc --noEmit` errors and test results *before*
+1. **Baseline first.** Record `tsc --noEmit` errors and test results _before_
    upgrading. Projects often carry pre-existing failures, and without a baseline
    you cannot tell them apart from the ones you just introduced.
 2. **Diff the type errors**, do not just read them.

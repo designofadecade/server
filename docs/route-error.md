@@ -7,6 +7,7 @@ Standardized error response utility for creating secure and consistent API error
 The `RouteError` class provides intelligent error handling with security built-in through the `fromError()` method.
 
 The `fromError()` method automatically:
+
 - ✅ Distinguishes between safe (ValidationError) and unsafe (system) errors
 - ✅ Prevents leaking sensitive data (credentials, paths, ARNs)
 - ✅ Logs full error details internally for debugging
@@ -61,10 +62,12 @@ static fromError(
 #### Parameters
 
 **error** (unknown)
+
 - The error to handle - can be Error, string, or any object
 - Will be safely processed regardless of type
 
 **options** (FromErrorOptions)
+
 - `defaultMessage` (string, required) - Message shown for unsafe errors
 - `status` (number, optional) - HTTP status code (default: 500)
 - `error` (string, optional) - Error type/category (default: derived from status)
@@ -74,8 +77,7 @@ static fromError(
 #### Returns
 
 `RouteErrorResponse` — a `RouterResponse` whose `status` and `headers` are
-guaranteed present, because `fromError` always resolves a status (defaulting to
-500) and always sets a JSON content type:
+guaranteed present, because `fromError` always resolves a status (defaulting to 500) and always sets a JSON content type:
 
 - `status` (number) - HTTP status code
 - `headers` (Record<string, string>) - JSON content type header
@@ -125,7 +127,7 @@ try {
 } catch (error) {
   return RouteError.fromError(error, {
     defaultMessage: 'Operation failed',
-    status: 500
+    status: 500,
   });
 }
 ```
@@ -191,7 +193,7 @@ try {
     defaultMessage: 'Payment processing failed',
     status: 402,
     safeErrorClasses: ['PaymentError'], // Add to safe list
-    context: { orderId: '12345' }
+    context: { orderId: '12345' },
   });
 }
 ```
@@ -227,30 +229,35 @@ throw new ConflictError('EMAIL_TAKEN', 'Email already exists');
 The `fromError()` method automatically prevents exposure of:
 
 1. **Database Credentials**
+
    ```typescript
    // ERROR: "Connection failed: postgresql://admin:MyP@ssw0rd@prod-db:5432/app"
    // CLIENT SEES: "Database error"
    ```
 
 2. **AWS Credentials & ARNs**
+
    ```typescript
    // ERROR: "AccessDenied for arn:aws:iam::123456789012:user/service-account"
    // CLIENT SEES: "Service error"
    ```
 
 3. **File System Paths**
+
    ```typescript
    // ERROR: "ENOENT: no such file or directory '/var/app/secrets/.env'"
    // CLIENT SEES: "File operation failed"
    ```
 
 4. **SQL Schema Details**
+
    ```typescript
    // ERROR: "column 'internal_secret_field' does not exist in table 'users'"
    // CLIENT SEES: "Database query failed"
    ```
 
 5. **API Keys & Tokens**
+
    ```typescript
    // ERROR: "Invalid API key: sk_live_EXAMPLE123456789"
    // CLIENT SEES: "API error"
@@ -263,6 +270,7 @@ The `fromError()` method automatically prevents exposure of:
 ### Defense in Depth
 
 Unlike traditional error handling that relies on `NODE_ENV`, `fromError()` provides security by default:
+
 - Safe errors always show messages (dev AND prod)
 - Unsafe errors never show messages (dev AND prod)
 - Works correctly regardless of environment configuration
@@ -312,7 +320,7 @@ try {
   await operation();
 } catch (error) {
   return RouteError.fromError(error, {
-    defaultMessage: 'Operation failed'
+    defaultMessage: 'Operation failed',
   });
 }
 
@@ -331,12 +339,12 @@ try {
 ```typescript
 // ✅ Good - Tells user what failed
 return RouteError.fromError(error, {
-  defaultMessage: 'Error creating user account'
+  defaultMessage: 'Error creating user account',
 });
 
 // ❌ Bad - Too generic
 return RouteError.fromError(error, {
-  defaultMessage: 'An error occurred'
+  defaultMessage: 'An error occurred',
 });
 ```
 
@@ -349,8 +357,8 @@ return RouteError.fromError(error, {
     userId: request.user.id,
     orderId: order.id,
     amount: payment.amount,
-    provider: 'stripe'
-  }
+    provider: 'stripe',
+  },
 });
 
 // Logs will include all context for debugging
@@ -362,18 +370,18 @@ return RouteError.fromError(error, {
 // Validation errors
 return RouteError.fromError(error, {
   defaultMessage: 'Invalid input',
-  status: 400  // Bad Request
+  status: 400, // Bad Request
 });
 
 // Not found
 return RouteError.fromError(error, {
   defaultMessage: 'Resource not found',
-  status: 404  // Not Found
+  status: 404, // Not Found
 });
 
 // Server errors (default)
 return RouteError.fromError(error, {
-  defaultMessage: 'Server error'
+  defaultMessage: 'Server error',
   // status: 500 (default)
 });
 ```
@@ -400,7 +408,7 @@ throw new OrderError('ORDER_CANCELLED', 'Order was cancelled by user');
 // Handle with fromError
 return RouteError.fromError(error, {
   defaultMessage: 'Order processing failed',
-  safeErrorClasses: ['DomainError', 'OrderError', 'PaymentError']
+  safeErrorClasses: ['DomainError', 'OrderError', 'PaymentError'],
 });
 ```
 
@@ -435,7 +443,7 @@ class UserRoutes extends Routes {
 ```typescript
 class ValidationError extends Error {
   fields: Record<string, string>;
-  
+
   constructor(fields: Record<string, string>) {
     super(Object.values(fields).join(', '));
     this.name = 'ValidationError';
@@ -453,7 +461,7 @@ try {
 } catch (error) {
   return RouteError.fromError(error, {
     defaultMessage: 'Validation failed',
-    status: 400
+    status: 400,
   });
 }
 ```
@@ -472,8 +480,8 @@ try {
     status: 500,
     context: {
       operation: 'getUserById',
-      userId: id
-    }
+      userId: id,
+    },
   });
 }
 ```
@@ -485,7 +493,7 @@ try {
   const response = await stripe.charges.create({
     amount: 1000,
     currency: 'usd',
-    source: 'tok_visa'
+    source: 'tok_visa',
   });
   return { status: 200, body: response };
 } catch (error) {
@@ -496,8 +504,8 @@ try {
     status: 402,
     context: {
       provider: 'stripe',
-      amount: 1000
-    }
+      amount: 1000,
+    },
   });
 }
 ```
@@ -507,23 +515,25 @@ try {
 ### From create() to fromError()
 
 **Before:**
+
 ```typescript
 try {
   const result = await operation();
   return { status: 200, body: result };
 } catch (error) {
   logger.error('Operation failed:', error);
-  
+
   if (error.name === 'ValidationError') {
     return RouteError.create(400, 'Validation Failed', error.message);
   }
-  
+
   // ⚠️ Risk: What if error.message contains sensitive data?
   return RouteError.create(500, 'Server Error', 'Operation failed');
 }
 ```
 
 **After:**
+
 ```typescript
 try {
   const result = await operation();
@@ -533,12 +543,13 @@ try {
   return RouteError.fromError(error, {
     defaultMessage: 'Operation failed',
     status: 400,
-    context: { operation: 'operationName' }
+    context: { operation: 'operationName' },
   });
 }
 ```
 
 Benefits:
+
 - No manual logging needed
 - No manual safe/unsafe error checking
 - No risk of exposing sensitive data

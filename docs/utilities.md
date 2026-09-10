@@ -25,12 +25,12 @@ import Routes from '@designofadecade/server/router/Routes';
 class StaticRoutes extends Routes {
   constructor(router: Router) {
     super(router);
-    
+
     // Serve static files from public directory
     const handler = new StaticFileHandler('./public', {
-      cacheControl: 'public, max-age=3600'
+      cacheControl: 'public, max-age=3600',
     });
-    
+
     this.addRoute('/static/*', 'GET', async (req) => {
       return await handler.serve(req.path.replace('/static', ''));
     });
@@ -49,11 +49,13 @@ new StaticFileHandler(baseDir: string, options?: {
 ```
 
 **Parameters:**
+
 - `baseDir` (string) - Base directory to serve files from (absolute path)
 - `options` (object, optional)
   - `cacheControl` (string) - Cache-Control header value. Default: `'public, max-age=3600'`
 
 **Throws:**
+
 - `Error` - If baseDir is not a valid string
 
 #### serve()
@@ -65,11 +67,13 @@ async serve(requestPath: string): Promise<ServeResponse>
 Serve a static file.
 
 **Parameters:**
+
 - `requestPath` (string) - Requested file path
 
 **Returns:** Promise resolving to response object
 
 **Example:**
+
 ```typescript
 const handler = new StaticFileHandler('/var/www/public');
 
@@ -114,22 +118,22 @@ import StaticFileHandler from '@designofadecade/server/router/StaticFileHandler'
 
 class AppRoutes extends Routes {
   private staticHandler: StaticFileHandler;
-  
+
   constructor(router: Router) {
     super(router);
-    
+
     // Serve static assets
     this.staticHandler = new StaticFileHandler('./public', {
-      cacheControl: 'public, max-age=31536000, immutable'
+      cacheControl: 'public, max-age=31536000, immutable',
     });
-    
+
     // API routes
     this.addRoute('/api/users', 'GET', this.getUsers);
-    
+
     // Static files (must be last)
     this.addRoute('/*', 'GET', this.serveStatic);
   }
-  
+
   async serveStatic(req: RouterRequest): Promise<RouterResponse> {
     return await this.staticHandler.serve(req.path);
   }
@@ -168,6 +172,7 @@ new RouteError(message: string, statusCode?: number)
 ```
 
 **Parameters:**
+
 - `message` (string) - Error message
 - `statusCode` (number, optional) - HTTP status code. Default: `500`
 
@@ -177,27 +182,27 @@ new RouteError(message: string, statusCode?: number)
 class UserRoutes extends Routes {
   async getUser(req: RouterRequest): Promise<RouterResponse> {
     const user = await db.users.findById(req.params.id);
-    
+
     if (!user) {
       throw new RouteError('User not found', 404);
     }
-    
+
     return {
       status: 200,
-      body: user
+      body: user,
     };
   }
-  
+
   async createUser(req: RouterRequest): Promise<RouterResponse> {
     if (!req.body.email) {
       throw new RouteError('Email is required', 400);
     }
-    
+
     const user = await db.users.create(req.body);
-    
+
     return {
       status: 201,
-      body: user
+      body: user,
     };
   }
 }
@@ -220,7 +225,8 @@ import HtmlRenderer from '@designofadecade/server/utils/HtmlRenderer';
 ```typescript
 import HtmlRenderer from '@designofadecade/server/utils/HtmlRenderer';
 
-const html = HtmlRenderer.render(`
+const html = HtmlRenderer.render(
+  `
   <html>
     <head>
       <title>{{title}}</title>
@@ -230,11 +236,13 @@ const html = HtmlRenderer.render(`
       <p>{{message}}</p>
     </body>
   </html>
-`, {
-  title: 'My Page',
-  heading: 'Welcome!',
-  message: 'Hello, World!'
-});
+`,
+  {
+    title: 'My Page',
+    heading: 'Welcome!',
+    message: 'Hello, World!',
+  }
+);
 ```
 
 ### API Reference
@@ -252,7 +260,7 @@ markup or break out of an attribute:
 
 ```typescript
 HtmlRenderer.render('<p>{{comment}}</p>', {
-  comment: '<img src=x onerror=alert(1)>'
+  comment: '<img src=x onerror=alert(1)>',
 });
 // '<p>&lt;img src=x onerror=alert(1)&gt;</p>'
 ```
@@ -272,12 +280,13 @@ introduce a block:
 ```typescript
 HtmlRenderer.render('{{#each items}}{{name}}{{/each}}', {
   secret: 'S3CRET',
-  items: [{ name: '{{secret}}' }]
+  items: [{ name: '{{secret}}' }],
 });
 // '{{secret}}' - not 'S3CRET'
 ```
 
 **Parameters:**
+
 - `template` (string) - HTML template with `{{key}}` placeholders
 - `data` (object) - Data to inject into template
 
@@ -288,7 +297,8 @@ HtmlRenderer.render('{{#each items}}{{name}}{{/each}}', {
 ```typescript
 class PageRoutes extends Routes {
   async home(req: RouterRequest): Promise<RouterResponse> {
-    const html = HtmlRenderer.render(`
+    const html = HtmlRenderer.render(
+      `
       <!DOCTYPE html>
       <html>
         <head>
@@ -299,16 +309,18 @@ class PageRoutes extends Routes {
           <p>Last login: {{lastLogin}}</p>
         </body>
       </html>
-    `, {
-      title: 'Dashboard',
-      username: req.authorizer?.name || 'Guest',
-      lastLogin: new Date().toLocaleString()
-    });
-    
+    `,
+      {
+        title: 'Dashboard',
+        username: req.authorizer?.name || 'Guest',
+        lastLogin: new Date().toLocaleString(),
+      }
+    );
+
     return {
       status: 200,
       headers: { 'Content-Type': 'text/html' },
-      body: html
+      body: html,
     };
   }
 }
@@ -334,7 +346,7 @@ import RequestLogger from '@designofadecade/server/middleware';
 const requestLogger = new RequestLogger({
   method: 'POST',
   path: '/api/users',
-  requestId: '123-456'
+  requestId: '123-456',
 });
 
 requestLogger.info('Processing user creation');
@@ -350,6 +362,7 @@ new RequestLogger(requestContext: Record<string, any>)
 ```
 
 **Parameters:**
+
 - `requestContext` (object) - Context information (method, path, requestId, etc.)
 
 #### Methods
@@ -370,18 +383,18 @@ class UserRoutes extends Routes {
       method: req.method,
       path: req.path,
       requestId: req.headers['x-request-id'],
-      userId: req.authorizer?.sub
+      userId: req.authorizer?.sub,
     });
-    
+
     logger.info('Creating user');
-    
+
     try {
       const user = await db.users.create(req.body);
       logger.info('User created', { userId: user.id });
-      
+
       return {
         status: 201,
-        body: user
+        body: user,
       };
     } catch (error: any) {
       logger.error('Failed to create user', { error: error.message });
@@ -420,15 +433,17 @@ await Slack.sendMessage({
   channel: '#deployments',
   username: 'Deploy Bot',
   icon_emoji: ':rocket:',
-  attachments: [{
-    color: 'good',
-    title: 'Production Deploy',
-    text: 'Version 1.2.3 deployed successfully',
-    fields: [
-      { title: 'Environment', value: 'Production', short: true },
-      { title: 'Version', value: '1.2.3', short: true }
-    ]
-  }]
+  attachments: [
+    {
+      color: 'good',
+      title: 'Production Deploy',
+      text: 'Version 1.2.3 deployed successfully',
+      fields: [
+        { title: 'Environment', value: 'Production', short: true },
+        { title: 'Version', value: '1.2.3', short: true },
+      ],
+    },
+  ],
 });
 ```
 
@@ -447,6 +462,7 @@ static async sendNotification(
 Send simple text notification.
 
 **Parameters:**
+
 - `webhookUrl` (string) - Slack webhook URL
 - `message` (string) - Message text
 - `options` (object, optional) - Additional Slack message options
@@ -481,15 +497,17 @@ try {
     channel: '#errors',
     username: 'Error Bot',
     icon_emoji: ':warning:',
-    attachments: [{
-      color: 'danger',
-      title: 'Processing Error',
-      text: error.message,
-      fields: [
-        { title: 'Environment', value: process.env.NODE_ENV, short: true },
-        { title: 'Timestamp', value: new Date().toISOString(), short: true }
-      ]
-    }]
+    attachments: [
+      {
+        color: 'danger',
+        title: 'Processing Error',
+        text: error.message,
+        fields: [
+          { title: 'Environment', value: process.env.NODE_ENV, short: true },
+          { title: 'Timestamp', value: new Date().toISOString(), short: true },
+        ],
+      },
+    ],
   });
 }
 ```
@@ -500,7 +518,7 @@ try {
 const deployInfo = {
   version: '1.2.3',
   environment: 'production',
-  deployedBy: 'john@example.com'
+  deployedBy: 'john@example.com',
 };
 
 await Slack.sendMessage({
@@ -509,17 +527,19 @@ await Slack.sendMessage({
   channel: '#deployments',
   username: 'Deploy Bot',
   icon_emoji: ':rocket:',
-  attachments: [{
-    color: 'good',
-    title: 'Deployment Successful',
-    fields: [
-      { title: 'Version', value: deployInfo.version, short: true },
-      { title: 'Environment', value: deployInfo.environment, short: true },
-      { title: 'Deployed By', value: deployInfo.deployedBy, short: false }
-    ],
-    footer: 'CI/CD Pipeline',
-    ts: Math.floor(Date.now() / 1000)
-  }]
+  attachments: [
+    {
+      color: 'good',
+      title: 'Deployment Successful',
+      fields: [
+        { title: 'Version', value: deployInfo.version, short: true },
+        { title: 'Environment', value: deployInfo.environment, short: true },
+        { title: 'Deployed By', value: deployInfo.deployedBy, short: false },
+      ],
+      footer: 'CI/CD Pipeline',
+      ts: Math.floor(Date.now() / 1000),
+    },
+  ],
 });
 ```
 
@@ -535,16 +555,18 @@ if (metrics.cpuUsage > 80) {
     channel: '#monitoring',
     username: 'Monitoring Bot',
     icon_emoji: ':chart_with_upwards_trend:',
-    attachments: [{
-      color: 'warning',
-      title: 'Performance Alert',
-      text: `CPU usage is at ${metrics.cpuUsage}%`,
-      fields: [
-        { title: 'CPU', value: `${metrics.cpuUsage}%`, short: true },
-        { title: 'Memory', value: `${metrics.memoryUsage}%`, short: true },
-        { title: 'Server', value: metrics.serverName, short: false }
-      ]
-    }]
+    attachments: [
+      {
+        color: 'warning',
+        title: 'Performance Alert',
+        text: `CPU usage is at ${metrics.cpuUsage}%`,
+        fields: [
+          { title: 'CPU', value: `${metrics.cpuUsage}%`, short: true },
+          { title: 'Memory', value: `${metrics.memoryUsage}%`, short: true },
+          { title: 'Server', value: metrics.serverName, short: false },
+        ],
+      },
+    ],
   });
 }
 ```
@@ -554,10 +576,11 @@ if (metrics.cpuUsage > 80) {
 ### StaticFileHandler
 
 1. **Long Cache Times:** Use long cache for static assets with versioned filenames
+
    ```typescript
    // assets/app.v123.js
    new StaticFileHandler('./public', {
-     cacheControl: 'public, max-age=31536000, immutable'
+     cacheControl: 'public, max-age=31536000, immutable',
    });
    ```
 
@@ -565,7 +588,7 @@ if (metrics.cpuUsage > 80) {
    ```typescript
    // Good
    new StaticFileHandler('./public');
-   
+
    // Bad - exposes source code
    new StaticFileHandler('./');
    ```
@@ -583,6 +606,7 @@ if (metrics.cpuUsage > 80) {
 ### Slack
 
 1. **Environment Variables:** Store webhook URL securely
+
    ```typescript
    const webhookUrl = process.env.SLACK_WEBHOOK_URL;
    if (!webhookUrl) {
