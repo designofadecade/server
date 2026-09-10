@@ -8,6 +8,10 @@ import HtmlRenderer from './HtmlRenderer.ts';
  * each — quadratic. Requiring the condition to start with a non-space makes the
  * two disjoint, so a failed match backtracks in constant time per step.
  *
+ * A condition also cannot contain braces, which bounds each scan at the next
+ * `{` rather than at end of input — without that, a repeated `{{#if` gave many
+ * start positions that each rescanned the whole template.
+ *
  * HtmlRenderer has no input cap, so this is bounded only by template size.
  */
 describe('HtmlRenderer ReDoS resistance', () => {
@@ -27,6 +31,33 @@ describe('HtmlRenderer ReDoS resistance', () => {
   it('handles an unterminated {{#if}}/{{else}} with a long whitespace run', () => {
     const template = '{{{{#if ' + ' '.repeat(50_000) + '{{else}}';
     expect(timed(() => HtmlRenderer.render(template, {}))).toBeLessThan(BUDGET_MS);
+  });
+
+  /**
+   * The first attempt at this fix only stopped the condition from starting with
+   * whitespace, which fixed a single long run but not the general case: with
+   * `{{#if` repeated, every occurrence is a start position whose condition scan
+   * still ran to end of input. Excluding braces from the condition bounds each
+   * scan at the next `{`, which is what makes it linear.
+   */
+  it('handles many repeated unterminated {{#if}} openings', () => {
+    const template = '{{{{#if !'.repeat(32_000);
+    expect(timed(() => HtmlRenderer.render(template, {}))).toBeLessThan(BUDGET_MS);
+  });
+
+  it('handles many {{#if}} openings with no matching close', () => {
+    const template = '{{#if a}}'.repeat(32_000);
+    expect(timed(() => HtmlRenderer.render(template, { a: 1 }))).toBeLessThan(BUDGET_MS);
+  });
+
+  it('handles many {{#if}}/{{else}} openings with no matching close', () => {
+    const template = '{{#if a}}x{{else}}'.repeat(32_000);
+    expect(timed(() => HtmlRenderer.render(template, { a: 1 }))).toBeLessThan(BUDGET_MS);
+  });
+
+  it('handles many repeated unterminated {{#each}} openings', () => {
+    const template = '{{#each a}}'.repeat(32_000);
+    expect(timed(() => HtmlRenderer.render(template, { a: [] }))).toBeLessThan(BUDGET_MS);
   });
 
   /**
