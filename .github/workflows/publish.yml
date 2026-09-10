@@ -7,36 +7,40 @@ on:
   release:
     types: [published]
 
+permissions:
+  contents: read
+
 jobs:
   publish-npm:
     runs-on: ubuntu-latest
     permissions:
+      # Creating the GitHub Release.
       contents: write
-      packages: write
+      # Trusted Publishing (OIDC) and npm provenance attestations.
       id-token: write
     steps:
-      - uses: actions/checkout@v4
-      
+      - uses: actions/checkout@v7
+
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
-          
+
       - name: Install dependencies
         run: npm ci
-      
+
       - name: Run tests
         run: npm test
-        
+
       - name: Build
         run: npm run build
-      
+
       - name: Publish to npm (Trusted Publishing)
         run: npm publish --provenance --access public
-      
+
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v3
         if: startsWith(github.ref, 'refs/tags/v')
         with:
           generate_release_notes: true
