@@ -1,4 +1,5 @@
 import { IncomingMessage, ServerResponse } from 'http';
+import { isIP } from 'node:net';
 import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { logger } from '../logger/Logger.js';
 import RouteError from './RouteError.js';
@@ -183,6 +184,11 @@ export interface RouterOptions {
    * Lambda endpoint (CloudFront in front of the endpoint = 1). Each one
    * appends the address it saw, so the client is that many entries before the
    * last. Default `0`. Has no effect on a plain server or an Event Function.
+   *
+   * Only safe when the endpoint cannot be reached except through those
+   * proxies (for CloudFront: `IamAuth` on the endpoint, with invoke permission
+   * granted only to your distribution). If clients can call the endpoint
+   * directly they choose the entry this reads.
    */
   trustedProxies?: number;
 }
@@ -547,7 +553,13 @@ export default class Router {
         .split(',')
         .map((value) => value.trim())
         .filter(Boolean);
-      return hops[hops.length - 1 - this.#trustedProxies] ?? '';
+      const candidate = hops[hops.length - 1 - this.#trustedProxies] ?? '';
+      // With trustedProxies > 0 the chosen entry was written by a proxy only
+      // if every request really passes through it; a direct call to the
+      // endpoint makes it client text. Accepting only a literal IP keeps that
+      // case from smuggling arbitrary strings (or log-forging characters)
+      // into clientIp.
+      return isIP(candidate) ? candidate : '';
     }
     return req.socket?.remoteAddress ?? '';
   }

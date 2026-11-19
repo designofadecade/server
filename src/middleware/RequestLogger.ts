@@ -50,9 +50,10 @@ interface ResponseObject {
   [key: string]: any;
 }
 
+// A raw API Gateway event never has a top-level `method` (format 2.0 nests it
+// under requestContext.http, format 1.0 calls it httpMethod).
 const isRouterRequest = (value: RequestEvent | LoggableRequest): value is LoggableRequest =>
-  typeof (value as LoggableRequest).method === 'string' &&
-  ('clientIp' in value || 'requestId' in value);
+  typeof (value as LoggableRequest).method === 'string';
 
 function requestFields(request: RequestEvent | LoggableRequest) {
   const userAgent = request.headers?.['user-agent'];

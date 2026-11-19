@@ -207,6 +207,70 @@ describe('WebFunction over real sockets', () => {
   });
 });
 
+describe('Server lifecycle over real sockets', () => {
+  beforeEach(() => {
+    vi.stubEnv(ENV, '');
+    vi.spyOn(logger, 'info').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it('resolves a repeat close() without re-closing or logging an error', async () => {
+    const error = vi.spyOn(logger, 'error').mockImplementation(() => {});
+    const server = new Server({ port: await freePort(), host: '127.0.0.1' }, (_q, r) => r.end());
+    await server.ready;
+
+    await server.close();
+    await expect(server.close()).resolves.toBeUndefined();
+
+    expect(error).not.toHaveBeenCalled();
+  });
+
+  it('shares one close between concurrent callers', async () => {
+    const server = new Server({ port: await freePort(), host: '127.0.0.1' }, (_q, r) => r.end());
+    await server.ready;
+
+    const first = server.close();
+    expect(server.close()).toBe(first);
+    await first;
+  });
+
+  it('waits for startup when closed before listening (SIGTERM during init)', async () => {
+    const error = vi.spyOn(logger, 'error').mockImplementation(() => {});
+    const server = new Server({ port: await freePort(), host: '127.0.0.1' }, (_q, r) => r.end());
+
+    await expect(server.close()).resolves.toBeUndefined();
+    await expect(server.ready).resolves.toBeUndefined();
+    expect(server.server).toBeNull();
+    expect(error).not.toHaveBeenCalled();
+  });
+
+  it('drops its SIGTERM listener when startup fails, and close() then resolves', async () => {
+    vi.spyOn(logger, 'error').mockImplementation(() => {});
+    const port = await freePort();
+    const holder = new Server({ port, host: '127.0.0.1' }, (_q, r) => r.end());
+    await holder.ready;
+    const before = process.listenerCount('SIGTERM');
+
+    try {
+      const failed = new Server({ port, host: '127.0.0.1', handleSignals: true }, (_q, r) =>
+        r.end()
+      );
+      failed.on('error', () => {});
+      expect(process.listenerCount('SIGTERM')).toBe(before + 1);
+
+      await expect(failed.ready).rejects.toMatchObject({ code: 'EADDRINUSE' });
+      expect(process.listenerCount('SIGTERM')).toBe(before);
+      await expect(failed.close()).resolves.toBeUndefined();
+    } finally {
+      await holder.close();
+    }
+  });
+});
+
 describe('Server.parseEndpoint', () => {
   it.each([
     ['127.0.0.1:8080', { host: '127.0.0.1', port: 8080 }],

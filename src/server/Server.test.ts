@@ -315,7 +315,7 @@ describe('Server', () => {
       consoleSpy.mockRestore();
     });
 
-    it('should be callable multiple times', async () => {
+    it('should be callable multiple times, closing only once', async () => {
       const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
       mockHttpServer.close = vi.fn((callback) => {
@@ -327,7 +327,10 @@ describe('Server', () => {
       await server.close();
       await server.close();
 
-      expect(mockHttpServer.close).toHaveBeenCalledTimes(2);
+      // The second call finds the server already stopped and resolves without
+      // re-closing it, which Node would reject with ERR_SERVER_NOT_RUNNING.
+      expect(mockHttpServer.close).toHaveBeenCalledTimes(1);
+      expect(server.server).toBeNull();
 
       consoleSpy.mockRestore();
     });

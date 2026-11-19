@@ -115,6 +115,24 @@ describe('Router request identity', () => {
       expect((await nodeRequest(behindCdn, { 'x-forwarded-for': '1.1.1.1' })).clientIp).toBe('');
     });
 
+    it('accepts an IPv6 client address', async () => {
+      const body = await nodeRequest(router, { 'x-forwarded-for': '2001:db8::1' });
+      expect(body.clientIp).toBe('2001:db8::1');
+    });
+
+    /**
+     * With trustedProxies > 0, a request that bypasses the front door controls
+     * the entry read. It must still never yield arbitrary text.
+     */
+    it.each(['evil\u0001 FAKE', 'unknown', '203.0.113.5:443', '<script>'])(
+      'rejects a non-IP entry %j',
+      async (entry) => {
+        const behindCdn = new Router({ initRoutes: [Echo], webFunction: true, trustedProxies: 1 });
+        const body = await nodeRequest(behindCdn, { 'x-forwarded-for': `${entry}, 130.176.0.1` });
+        expect(body.clientIp).toBe('');
+      }
+    );
+
     it('uses lambda-web-request-id', async () => {
       const body = await nodeRequest(router, { 'lambda-web-request-id': 'a1b2-c3' });
       expect(body.requestId).toBe('a1b2-c3');

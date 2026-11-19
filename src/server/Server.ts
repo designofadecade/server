@@ -94,6 +94,7 @@ export default class Server extends EventEmitter {
   #requestHandler: (req: IncomingMessage, res: ServerResponse) => void;
   #signalHandler: (() => void) | null = null;
   #closing: Promise<void> | null = null;
+  #listening = false;
 
   /** Resolves once the server is listening; rejects if it fails to start. */
   readonly ready: Promise<void>;
@@ -178,7 +179,12 @@ export default class Server extends EventEmitter {
         });
       }
 
-      this.#rejectReady(error);
+      if (!this.#listening) {
+        // Startup failed: there is nothing left to drain, so stop holding a
+        // SIGTERM listener for a server that never came up.
+        this.#removeSignalHandler();
+        this.#rejectReady(error);
+      }
 
       if (this.#exitOnError) {
         process.exit(1);
@@ -197,6 +203,7 @@ export default class Server extends EventEmitter {
         port: this.#address.port,
         mode: webFunction ? 'web-function' : 'node',
       });
+      this.#listening = true;
       this.#resolveReady();
       this.emit('listening', this.address);
     });
@@ -206,20 +213,59 @@ export default class Server extends EventEmitter {
    * Stops accepting connections, lets in-flight requests finish for up to
    * `shutdownTimeoutMs`, then cuts whatever is left. Idle keep-alive sockets
    * are closed at once: they would otherwise hold `close()` open for the
-   * full keep-alive timeout while serving nothing. Safe to call repeatedly.
+   * full keep-alive timeout while serving nothing.
+   *
+   * Safe to call repeatedly and concurrently: calls during a close share it,
+   * and calls after it resolve at once. Called before the server is listening
+   * (a `SIGTERM` during startup), it waits for startup to finish or fail first.
    */
   close(): Promise<void> {
     if (this.#closing) return this.#closing;
 
-    if (this.#signalHandler) {
-      process.removeListener('SIGTERM', this.#signalHandler);
-      this.#signalHandler = null;
-    }
+    this.#removeSignalHandler();
 
     const server = this.#server;
     if (!server) return Promise.resolve();
 
-    const closing = new Promise<void>((resolve, reject) => {
+    // A failed start leaves nothing to close; a pending one is finished first,
+    // because `server.close()` on a server not yet listening rejects and
+    // leaves `ready` hanging for anyone awaiting it.
+    const started = this.#listening
+      ? Promise.resolve(true)
+      : this.ready.then(
+          () => true,
+          () => false
+        );
+
+    const closing = started.then((running) => {
+      if (!running) {
+        this.#server = null;
+        return;
+      }
+      return this.#closeListening(server);
+    });
+
+    // Cleared on settle, not inside the close callback: that callback can run
+    // synchronously, before `closing` has been assigned.
+    this.#closing = closing;
+    closing
+      .finally(() => {
+        if (this.#closing === closing) this.#closing = null;
+      })
+      .catch(() => {});
+
+    return closing;
+  }
+
+  #removeSignalHandler(): void {
+    if (this.#signalHandler) {
+      process.removeListener('SIGTERM', this.#signalHandler);
+      this.#signalHandler = null;
+    }
+  }
+
+  #closeListening(server: Http.Server): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
       const force = setTimeout(() => server.closeAllConnections?.(), this.#shutdownTimeoutMs);
       force.unref?.();
 
@@ -236,6 +282,10 @@ export default class Server extends EventEmitter {
           logger.info('HTTP Server closed', {
             source: 'Server.close',
           });
+          // Later close() calls see no server and resolve immediately,
+          // instead of re-closing a stopped server (ERR_SERVER_NOT_RUNNING).
+          this.#server = null;
+          this.#listening = false;
           this.emit('close');
           resolve();
         }
@@ -243,16 +293,5 @@ export default class Server extends EventEmitter {
 
       server.closeIdleConnections?.();
     });
-
-    // Cleared on settle, not inside the close callback: that callback can run
-    // synchronously, before `closing` has been assigned.
-    this.#closing = closing;
-    closing
-      .finally(() => {
-        if (this.#closing === closing) this.#closing = null;
-      })
-      .catch(() => {});
-
-    return closing;
   }
 }

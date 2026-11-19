@@ -513,6 +513,14 @@ describe('RequestLogger with a RouterRequest', () => {
     );
   });
 
+  it('treats a minimal { method, path, headers } object as a RouterRequest', () => {
+    createRequestLogger({ method: 'GET', path: '/x', headers: {} }).info('test');
+    expect(logger.info).toHaveBeenCalledWith(
+      'test',
+      expect.objectContaining({ method: 'GET', path: '/x', requestId: 'unknown' })
+    );
+  });
+
   it('reads the format 2.0 sourceIp from a raw event', () => {
     createRequestLogger({
       requestContext: {
