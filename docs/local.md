@@ -1,25 +1,33 @@
 # Local Development Utilities
 
-Utilities for running AWS Lambda handlers locally with Node.js HTTP server.
+Run an AWS Lambda **Event Function** handler locally behind a plain Node.js HTTP
+server.
 
 ## Overview
 
-The `Local` class provides utilities to run AWS Lambda handlers locally during development, automatically converting between HTTP requests and Lambda event format.
+`Local.EventFunctionProxy` wraps a handler written for API Gateway HTTP API
+(payload format 2.0) so ordinary HTTP requests drive it: each request is turned
+into a format 2.0 event, and the handler's result is turned back into an HTTP
+response.
+
+A **Web Function** needs none of this. It already is an HTTP server and runs
+locally as-is: `WebFunction.serve(router, { port: 3000 })`. See
+[Deployment Modes](./deployment-modes.md).
 
 ## Installation
 
 ```typescript
-import Local from '@designofadecade/server/local';
+import { Local } from '@designofadecade/server';
 ```
 
 ## Quick Start
 
 ```typescript
 import http from 'http';
-import Local from '@designofadecade/server/local';
+import { Local } from '@designofadecade/server';
 
-// Your Lambda handler
-const lambdaHandler = async (event) => {
+// Your Event Function handler
+const handler = async (event) => {
   return {
     statusCode: 200,
     body: JSON.stringify({ message: 'Hello from Lambda!' }),
@@ -27,7 +35,7 @@ const lambdaHandler = async (event) => {
 };
 
 // Wrap for local development
-const localHandler = Local.LambdaProxyRouter(lambdaHandler, {
+const localHandler = Local.EventFunctionProxy(handler, {
   requestContext: { stage: 'dev' },
 });
 
@@ -37,36 +45,37 @@ http
     localHandler.request(req, res);
   })
   .listen(3000, () => {
-    console.log('Local Lambda server listening on port 3000');
+    console.log('Local Event Function server listening on port 3000');
   });
 ```
 
 ## API Reference
 
-### LambdaProxyRouter()
+### EventFunctionProxy()
 
 ```typescript
-static LambdaProxyRouter(
-  LambdaHandler: (event: LambdaEvent) => Promise<LambdaResponse>,
-  options?: LambdaProxyRouterOptions
-): { request: (req: IncomingMessage, res: ServerResponse) => Promise<void> }
+static EventFunctionProxy(
+  eventFunctionHandler: (event: EventFunctionProxyEvent) => Promise<EventFunctionProxyResult | string>,
+  options?: { requestContext?: Record<string, unknown>; event?: Record<string, unknown> }
+): { request: (req: IncomingMessage, res: ServerResponse, requestOptions?) => Promise<void> }
 ```
 
-Creates a router that wraps AWS Lambda handlers for local development.
+Creates a proxy that wraps an Event Function handler for local development.
 
 **Parameters:**
 
-- `LambdaHandler` (function) - AWS Lambda handler function
+- `eventFunctionHandler` (function) - AWS Lambda handler function
 - `options` (object, optional)
-  - `requestContext` (object) - Additional requestContext fields
-  - `event` (object) - Additional event fields
+  - `requestContext` (object) - Additional `requestContext` fields merged into every event
+  - `event` (object) - Additional top-level event fields merged into every event
 
-**Returns:** Object with `request` method for handling HTTP requests
+**Returns:** Object with a `request` method for handling HTTP requests. `request`
+accepts the same `{ requestContext, event }` overrides per call.
 
 **Example:**
 
 ```typescript
-const handler = Local.LambdaProxyRouter(
+const handler = Local.EventFunctionProxy(
   async (event) => {
     const body = JSON.parse(event.body || '{}');
 
@@ -92,12 +101,12 @@ const handler = Local.LambdaProxyRouter(
 );
 ```
 
-## Lambda Event Format
+## Event Format
 
-The utility converts HTTP requests to AWS Lambda HTTP API (v2.0) format:
+The proxy converts HTTP requests to API Gateway HTTP API (format 2.0) events:
 
 ```typescript
-interface LambdaEvent {
+interface EventFunctionProxyEvent {
   version: string; // Always '2.0'
   routeKey: string; // "<METHOD> <path>"
   rawPath: string; // Request path
@@ -114,7 +123,7 @@ interface LambdaEvent {
       method: string; // HTTP method
       path: string; // Request path
       protocol: string;
-      sourceIp: string;
+      sourceIp: string; // The TCP peer address — never X-Forwarded-For
       userAgent: string;
     };
     requestId: string;
@@ -131,67 +140,67 @@ interface LambdaEvent {
 }
 ```
 
-The event carries every field AWS marks required on
-`APIGatewayProxyEventV2`, so a handler typed with `@types/aws-lambda` can be
-wrapped directly:
+The event carries every field AWS marks required on `APIGatewayProxyEventV2`,
+so a handler typed with `@types/aws-lambda` can be wrapped directly:
 
 ```typescript
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 
-const handler = async (event: APIGatewayProxyEventV2) => router.lambdaEvent(event);
-const local = Local.LambdaProxyRouter(handler);
+const handler = async (event: APIGatewayProxyEventV2) => router.eventFunction(event);
+const local = Local.EventFunctionProxy(handler);
 ```
 
-Fields the local server cannot know (`accountId`, `apiId`, `requestId`, …) get
-placeholder values. Override any of them with the `requestContext` option.
+Fields the local server cannot know (`accountId`, `apiId`, …) get placeholder
+values. Override any of them with the `requestContext` option.
 
-## Lambda Response Format
+### `sourceIp` and `requestId`
 
-Your Lambda handler should return:
+`requestContext.http.sourceIp` is the socket's remote address, which is what
+API Gateway reports for a deployed function. It is **not** read from
+`X-Forwarded-For`: that header is whatever the client chose to send, so a
+handler that rate-limits or authorizes on `sourceIp` would have been testable
+against a forged address locally and then behave differently deployed.
+
+Because it is the socket address, on a local machine it is usually `::1` or
+`::ffff:127.0.0.1` rather than `127.0.0.1`; tests that compare it should accept
+any loopback form or override it through the `requestContext` option.
+
+`requestContext.requestId` is a fresh UUID per request, as API Gateway's is
+unique per request.
+
+## Response Format
+
+Your handler should return:
 
 ```typescript
-interface LambdaResponse {
-  statusCode: number; // HTTP status code
-  headers?: Record<string, string>; // Response headers
+interface EventFunctionProxyResult {
+  statusCode?: number; // HTTP status code
+  headers?: Record<string, string | number | boolean>; // Response headers
   cookies?: string[]; // Set-Cookie headers
   body?: string; // Response body
   isBase64Encoded?: boolean; // For binary responses
 }
 ```
 
+As with API Gateway format 2.0, a return value with no `statusCode` (including
+a bare string) is sent as `200` with `content-type: application/json` and the
+value itself as the body.
+
 ## Complete Example
 
 ```typescript
 import http from 'http';
-import Local from '@designofadecade/server/local';
+import { Local } from '@designofadecade/server';
 
-// Lambda handler with routing
+// Event Function handler with routing
 const handler = async (event: any) => {
   const { method, path } = event.requestContext.http;
 
-  // Route based on path and method
   if (path === '/users' && method === 'GET') {
     return {
       statusCode: 200,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        users: [
-          { id: 1, name: 'John' },
-          { id: 2, name: 'Jane' },
-        ],
-      }),
-    };
-  }
-
-  if (path.startsWith('/users/') && method === 'GET') {
-    const id = path.split('/')[2];
-    return {
-      statusCode: 200,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        id,
-        name: 'John Doe',
-      }),
+      body: JSON.stringify({ users: [{ id: 1 }, { id: 2 }] }),
     };
   }
 
@@ -200,10 +209,7 @@ const handler = async (event: any) => {
     return {
       statusCode: 201,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        id: Date.now(),
-        ...body,
-      }),
+      body: JSON.stringify({ id: Date.now(), ...body }),
     };
   }
 
@@ -214,11 +220,8 @@ const handler = async (event: any) => {
 };
 
 // Wrap for local development
-const localHandler = Local.LambdaProxyRouter(handler, {
-  requestContext: {
-    stage: 'local',
-    requestId: () => Math.random().toString(36),
-  },
+const localHandler = Local.EventFunctionProxy(handler, {
+  requestContext: { stage: 'local' },
 });
 
 // Create server
@@ -228,32 +231,30 @@ const server = http.createServer((req, res) => {
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  console.log(`Lambda handler running locally on http://localhost:${PORT}`);
+  console.log(`Event Function handler running locally on http://localhost:${PORT}`);
 });
 ```
 
 ## With Router Integration
 
-The Local utility works seamlessly with the Router class:
-
 ```typescript
-import Local from '@designofadecade/server/local';
-import Router from '@designofadecade/server/router';
-import { UserRoutes, PostRoutes } from './routes';
+import http from 'http';
+import { Local, Router } from '@designofadecade/server';
+import { UserRoutes, PostRoutes } from './routes.js';
 
-// Create router (works for both Lambda and HTTP)
+// Create router (works in every deployment mode)
 const router = new Router({
   initRoutes: [UserRoutes, PostRoutes],
 });
 
-// For Lambda deployment
+// For Event Function deployment
 export const handler = async (event: any) => {
-  return await router.lambdaEvent(event);
+  return await router.eventFunction(event);
 };
 
 // For local development
 if (process.env.NODE_ENV === 'development') {
-  const localHandler = Local.LambdaProxyRouter(handler);
+  const localHandler = Local.EventFunctionProxy(handler);
 
   const server = http.createServer((req, res) => {
     localHandler.request(req, res);
@@ -265,16 +266,20 @@ if (process.env.NODE_ENV === 'development') {
 }
 ```
 
+If the routes are built on this package's `Router`, consider skipping the proxy
+entirely during development and running `WebFunction.serve(router, { port: 3000 })`.
+The handler above and the Web Function share every route; only the entry file
+differs.
+
 ## Request Context Examples
 
 ### Basic Context
 
 ```typescript
-const handler = Local.LambdaProxyRouter(lambdaHandler, {
+const handler = Local.EventFunctionProxy(lambdaHandler, {
   requestContext: {
     stage: 'dev',
     accountId: '123456789',
-    region: 'us-east-1',
   },
 });
 ```
@@ -282,7 +287,7 @@ const handler = Local.LambdaProxyRouter(lambdaHandler, {
 ### With Authorization
 
 ```typescript
-const handler = Local.LambdaProxyRouter(lambdaHandler, {
+const handler = Local.EventFunctionProxy(lambdaHandler, {
   requestContext: {
     authorizer: {
       jwt: {
@@ -296,34 +301,32 @@ const handler = Local.LambdaProxyRouter(lambdaHandler, {
 });
 ```
 
-### Dynamic Values
+### Per-request overrides
 
 ```typescript
-const handler = Local.LambdaProxyRouter(lambdaHandler, {
-  requestContext: {
-    requestId: () => Math.random().toString(36).substring(7),
-    timeEpoch: () => Date.now(),
-  },
+http.createServer((req, res) => {
+  localHandler.request(req, res, {
+    requestContext: { stage: req.headers['x-stage'] ?? '$default' },
+  });
 });
 ```
 
-## Testing Lambda Handlers
+## Testing Event Function Handlers
 
 ```typescript
-import Local from '@designofadecade/server/local';
 import { handler } from './lambda';
 
-describe('Lambda Handler', () => {
+describe('Event Function handler', () => {
   it('should handle GET requests', async () => {
-    // Create test event
     const event = {
       rawPath: '/users',
       requestContext: {
-        http: { method: 'GET', path: '/users' },
+        http: { method: 'GET', path: '/users', sourceIp: '127.0.0.1' },
+        requestId: 'test-1',
       },
       headers: {},
       queryStringParameters: {},
-      cookies: {},
+      cookies: [],
       body: null,
     };
 
@@ -337,53 +340,46 @@ describe('Lambda Handler', () => {
 
 ## Best Practices
 
-1. **Environment Detection:** Only use Local in development
+1. **Environment Detection:** Only use `Local` in development
 
    ```typescript
    if (process.env.NODE_ENV === 'development') {
-     // Local development setup
-     const localHandler = Local.LambdaProxyRouter(handler);
+     const localHandler = Local.EventFunctionProxy(handler);
      // ...
    }
    ```
 
-2. **Request Context:** Match production Lambda context structure
+2. **Request Context:** Match the production API Gateway stage
 
    ```typescript
-   const handler = Local.LambdaProxyRouter(lambdaHandler, {
-     requestContext: {
-       stage: process.env.STAGE || 'dev',
-       // Match your actual Lambda configuration
-     },
+   const handler = Local.EventFunctionProxy(lambdaHandler, {
+     requestContext: { stage: process.env.STAGE || 'dev' },
    });
    ```
 
-3. **Use Router:** Prefer Router class for complex applications
+3. **Use Router:** Prefer the `Router` class for anything beyond a toy handler
 
    ```typescript
-   // Better for complex apps
    const router = new Router({ initRoutes: [Routes] });
-   const handler = async (event) => router.lambdaEvent(event);
+   const handler = async (event) => router.eventFunction(event);
    ```
 
-4. **Hot Reload:** Use nodemon for development
+4. **Hot Reload:** Use `node --watch` or nodemon for development
    ```json
    {
      "scripts": {
-       "dev": "nodemon --exec node --loader ts-node/esm src/local.ts"
+       "dev": "node --watch --experimental-strip-types src/local.ts"
      }
    }
    ```
 
 ## Type Definitions
 
-```typescript
-interface LambdaProxyRouterOptions {
-  requestContext?: Record<string, unknown>;
-  event?: Record<string, unknown>;
-}
+`EventFunctionProxyEvent` and `EventFunctionProxyResult` are exported from the
+package root.
 
-interface LambdaEvent {
+```typescript
+interface EventFunctionProxyEvent {
   version: string;
   routeKey: string;
   rawPath: string;
@@ -416,9 +412,9 @@ interface LambdaEvent {
   [key: string]: unknown;
 }
 
-interface LambdaResponse {
-  statusCode: number;
-  headers?: Record<string, string>;
+interface EventFunctionProxyResult {
+  statusCode?: number;
+  headers?: Record<string, string | number | boolean>;
   cookies?: string[];
   body?: string;
   isBase64Encoded?: boolean;
@@ -428,51 +424,37 @@ interface LambdaResponse {
 ## Development Workflow
 
 ```typescript
-// lambda/handler.ts - Your Lambda handler
-import Router from '@designofadecade/server/router';
-import { AppRoutes } from './routes';
+// lambda/handler.ts - Your Event Function handler
+import { Router } from '@designofadecade/server';
+import { AppRoutes } from './routes.js';
 
-const router = new Router({
-  initRoutes: [AppRoutes]
-});
+const router = new Router({ initRoutes: [AppRoutes] });
 
 export const handler = async (event: any) => {
-  return await router.lambdaEvent(event);
+  return await router.eventFunction(event);
 };
 
 // local.ts - Local development server
 import http from 'http';
-import Local from '@designofadecade/server/local';
-import { handler } from './lambda/handler';
+import { Local } from '@designofadecade/server';
+import { handler } from './lambda/handler.js';
 
-const localHandler = Local.LambdaProxyRouter(handler, {
-  requestContext: {
-    stage: 'local',
-    accountId: '000000000000'
-  }
+const localHandler = Local.EventFunctionProxy(handler, {
+  requestContext: { stage: 'local', accountId: '000000000000' },
 });
 
 const server = http.createServer((req, res) => {
   localHandler.request(req, res);
 });
 
-const PORT = 3000;
-server.listen(PORT, () => {
-  console.log(`Lambda handler running on http://localhost:${PORT}`);
-  console.log('Press Ctrl+C to stop');
+server.listen(3000, () => {
+  console.log('Event Function handler running on http://localhost:3000');
 });
-
-// package.json
-{
-  "scripts": {
-    "dev": "node --loader ts-node/esm local.ts",
-    "dev:watch": "nodemon --exec 'node --loader ts-node/esm' local.ts"
-  }
-}
 ```
 
 ## Related Documentation
 
+- [Deployment Modes](./deployment-modes.md) - Web Function vs Event Function
 - [Router](./router.md) - Request routing
 - [Server](./server.md) - HTTP server
-- [Context](./context.md) - Application context
+- [Context & State](./context-state.md) - Application context

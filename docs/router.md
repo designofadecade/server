@@ -1,10 +1,10 @@
 # Router
 
-High-performance request router with URLPattern support, middleware, authentication, and both AWS Lambda and Node.js HTTP compatibility.
+High-performance request router with URLPattern support, middleware, authentication, and one set of routes for every deployment mode: AWS Lambda Web Functions, Lambda Event Functions (API Gateway HTTP API v2) and plain Node.js HTTP servers.
 
 ## Overview
 
-The `Router` class provides enterprise-grade request routing with automatic body parsing, caching, middleware support, and seamless integration with both serverless (AWS Lambda) and traditional HTTP servers.
+The `Router` class provides request routing with automatic body parsing, caching, middleware support, and the same handlers in all three [deployment modes](./deployment-modes.md). `nodeJSRequest` serves a Web Function or a plain server; `eventFunction` serves an API Gateway event.
 
 ## Installation
 
@@ -72,10 +72,26 @@ new Router(options?: RouterOptions)
 
 **Options:**
 
-- `context` (Context, optional) - Application context passed to routes
+- `context` (ContextLike, optional) - Application context passed to routes
 - `initRoutes` (Array, optional) - Array of Routes classes to register
 - `bearerToken` (string, optional) - Token for bearer authentication
 - `middleware` (Array, optional) - Global middleware functions
+- `jwt` (JwtOptions, optional) - JWT verification for the Node.js path; see [JWT Support](#jwt-support)
+- `webFunction` (boolean, optional) - Treat Node requests as arriving through a
+  Lambda Web Function endpoint: read `clientIp` from `X-Forwarded-For` and
+  `requestId` from `lambda-web-request-id`. Default: `true` when
+  `AWS_LAMBDA_HTTP_ENDPOINT` is set, `false` otherwise. Never force it on for a
+  server clients reach directly; those headers are only trustworthy because
+  Lambda strips and rewrites them.
+- `trustedProxies` (integer, optional) - Web Function only. The number of
+  proxies you control between the client and the Lambda endpoint (CloudFront in
+  front of the endpoint = `1`). Each appends its own entry to `X-Forwarded-For`,
+  so the client is that many entries before the last. Default: `0`. No effect on
+  a plain server or an Event Function. Throws if negative or not an integer.
+  **Only safe when the endpoint cannot be reached except through those
+  proxies** (CloudFront: `IamAuth` on the endpoint, invoke permission granted
+  only to your distribution). If clients can call the endpoint directly, they
+  choose the entry this reads.
 
 **Example:**
 
@@ -84,6 +100,7 @@ const router = new Router({
   initRoutes: [UserRoutes, PostRoutes],
   bearerToken: 'secret-token',
   middleware: [loggingMiddleware, authMiddleware],
+  trustedProxies: 1, // CloudFront fronts the Web Function endpoint
 });
 ```
 
@@ -91,7 +108,8 @@ const router = new Router({
 
 #### nodeJSRequest()
 
-Handle Node.js HTTP requests.
+Handle Node.js HTTP requests: a plain server, or a Lambda Web Function (which
+is a plain HTTP/1.1 server Lambda starts for you).
 
 ```typescript
 nodeJSRequest(
@@ -99,17 +117,28 @@ nodeJSRequest(
   res: ServerResponse,
   options?: {
     cors?: boolean | string[];
-    lambdaOptions?: Record<string, unknown>;
+    proxyOptions?: Record<string, unknown>;
   }
 ): Promise<void>
 ```
 
+`proxyOptions` is passed through untouched as `request.proxyOptions`; it exists
+for transport shims such as `Local.EventFunctionProxy` and is not needed by
+ordinary applications.
+
+Request bodies are capped at 1 MB; larger bodies are rejected before a route
+runs.
+
 **Example:**
 
 ```typescript
-import Server from '@designofadecade/server';
+import { Router, Server, WebFunction } from '@designofadecade/server';
 
-const server = new Server({ port: 3000 }, router.nodeJSRequest.bind(router));
+// Explicit
+const server = new Server({ port: 3000 }, (req, res) => router.nodeJSRequest(req, res));
+
+// Or the one-liner that also runs as a Lambda Web Function
+const server = WebFunction.serve(router, { port: 3000 });
 ```
 
 ##### CORS
@@ -134,15 +163,16 @@ Never reflect an arbitrary `Origin` alongside
 make authenticated cross-origin calls as the signed-in user and read the
 response.
 
-#### lambdaEvent()
+#### eventFunction()
 
-Handle AWS Lambda events (API Gateway HTTP format).
+Handle an API Gateway HTTP API (payload format 2.0) event: the Lambda **Event
+Function** model. Called `lambdaEvent()` before 11.0.
 
 ```typescript
-lambdaEvent(event: LambdaHttpEvent): Promise<LambdaHttpResponse>
+eventFunction(event: EventFunctionEvent): Promise<EventFunctionResult>
 ```
 
-`LambdaHttpEvent` is structural and accepts `APIGatewayProxyEventV2` from
+`EventFunctionEvent` is structural and accepts `APIGatewayProxyEventV2` from
 `@types/aws-lambda` directly, so a conventionally typed handler needs no cast:
 
 **Example:**
@@ -152,7 +182,7 @@ import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 
 // AWS Lambda handler
 export const handler = async (event: APIGatewayProxyEventV2) => {
-  return await router.lambdaEvent(event);
+  return await router.eventFunction(event);
 };
 ```
 
@@ -160,25 +190,13 @@ export const handler = async (event: APIGatewayProxyEventV2) => {
 what API Gateway actually sends. Parameters with no value are dropped before
 handlers see them, so `request.query` remains `Record<string, string>`.
 
-Both `LambdaHttpEvent` and `LambdaHttpResponse` are exported from the package
-root if you need to name them.
+`request.clientIp` is `requestContext.http.sourceIp` and `request.requestId`
+is `requestContext.requestId`, both set by API Gateway. Response cookies set
+through an array-valued `set-cookie` header are lifted into the format 2.0
+`cookies` field.
 
-#### decodeJwt()
-
-Decode JWT token from Authorization header.
-
-```typescript
-decodeJwt(token: string): Record<string, unknown> | null
-```
-
-**Example:**
-
-```typescript
-const decoded = router.decodeJwt(request.headers.authorization);
-if (decoded) {
-  console.log('User ID:', decoded.sub);
-}
-```
+Both `EventFunctionEvent` and `EventFunctionResult` are exported from the
+package root if you need to name them.
 
 ## Routes Class
 
@@ -269,17 +287,56 @@ interface RouterRequest {
   params: Record<string, string>; // URL parameters
   query: Record<string, string>; // Query parameters
   headers: Record<string, string | string[] | undefined>;
-  authorizer?: unknown; // JWT decoded payload
-  lambdaOptions?: unknown; // Lambda-specific options
+  clientIp: string; // Caller's address; '' when unknown
+  requestId: string; // Correlation id for logs
+  authorizer?: unknown; // Verified JWT claims / API Gateway authorizer
+  proxyOptions?: unknown; // Transport options from a proxy such as Local.EventFunctionProxy
 }
 ```
+
+### `clientIp`
+
+Populated from a source the caller cannot forge in the current mode:
+
+| Mode              | Source                                                                                  |
+| ----------------- | --------------------------------------------------------------------------------------- |
+| Event Function    | `requestContext.http.sourceIp`, set by API Gateway                                      |
+| Web Function      | The **last** `X-Forwarded-For` entry (Lambda appends it), minus `trustedProxies` hops   |
+| Plain Node server | `socket.remoteAddress`; `X-Forwarded-For` is never read, because nothing vouches for it |
+
+Reading the first `X-Forwarded-For` value, the common idiom, hands the client
+the choice of its own IP. The router never does that. If a reverse proxy you
+control sits in front of a plain server, terminate it at the proxy and pass the
+address in a header you validate yourself.
+
+In Web Function mode the selected entry is accepted only if it is a literal
+IPv4 or IPv6 address (`net.isIP`); otherwise `clientIp` is `''`. This matters
+with `trustedProxies > 0`: that setting is **only safe when nothing can reach
+the endpoint except your proxies** (for CloudFront, `IamAuth` on the endpoint
+with invoke permission granted only to the distribution). On a directly
+reachable endpoint the entry one hop back is client text, and the IP check is
+the last line of defence against it carrying something other than an address.
+
+An empty `AWS_LAMBDA_HTTP_ENDPOINT` counts as unset: `webFunction` defaults to
+`false` and the socket address is used.
+
+### `requestId`
+
+API Gateway's `requestId` in Event Function mode; Lambda's
+`lambda-web-request-id` in Web Function mode (Lambda strips any client-sent
+`lambda-web-*` header before adding its own, so it cannot be forged); a fresh
+UUID on a plain server. Hand the `RouterRequest` to `createRequestLogger` and it
+is attached to every log line.
+
+Code that builds `RouterRequest` objects by hand (unit tests, custom
+transports) must supply both fields; they are required.
 
 ## Response Object
 
 ```typescript
 interface RouterResponse {
   status?: number; // HTTP status code (default: 200)
-  headers?: Record<string, string>;
+  headers?: Record<string, string | string[]>; // An array repeats the header (set-cookie)
   body?: unknown; // Response body (auto-serialized)
   isBase64Encoded?: boolean; // For binary responses
 }
@@ -529,8 +586,8 @@ The router implements intelligent caching:
 
 ### Body Size Limits
 
-- Maximum body size: 1MB
-- Configurable via `Router.#MAX_BODY_SIZE`
+- Maximum request body on the Node path (`nodeJSRequest`, so plain server and Web Function): 1 MB. Larger bodies are rejected. Not currently configurable.
+- JWT claims are exposed only after verification: configure `jwt` (see `RouterOptions`); there is no decode-without-verify helper.
 
 ## Best Practices
 
@@ -630,7 +687,9 @@ class ProductRoutes extends Routes {
 
 ## Related Documentation
 
-- [Server](./server.md) - HTTP server
-- [Context](./context.md) - Application context
+- [Deployment Modes](./deployment-modes.md) - Web Function vs Event Function vs plain server
+- [Server](./server.md) - HTTP server and `WebFunction.serve`
+- [Local Development](./local.md) - Running Event Function handlers locally
+- [Context & State](./context-state.md) - Application context
 - [Logger](./logger.md) - Structured logging
 - [RouteError](./route-error.md) - Custom errors

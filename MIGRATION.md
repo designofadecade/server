@@ -5,6 +5,223 @@ change, see [CHANGELOG.md](./CHANGELOG.md).
 
 ---
 
+## Upgrading from 10.x to 11.0
+
+11.0 adds AWS Lambda **Web Function** support (the function is a real HTTP
+server) and renames everything that was called "Lambda" after the model it
+actually implements, the Lambda **Event Function** (API Gateway HTTP API v2).
+The renames are mechanical; the behavioural changes are the client IP and
+request id, which are now taken only from sources the caller cannot forge.
+
+Work through the greps. Nothing returned means that item does not apply.
+
+### 1. `router.lambdaEvent()` -> `router.eventFunction()`
+
+```bash
+grep -rn "lambdaEvent" --include="*.ts" --include="*.js" src packages | grep -v node_modules
+```
+
+Same behaviour, same signature, new name. There is no alias.
+
+```typescript
+// Before
+export const handler = (event: APIGatewayProxyEventV2) => router.lambdaEvent(event);
+
+// After
+export const handler = (event: APIGatewayProxyEventV2) => router.eventFunction(event);
+```
+
+### 2. `LambdaHttpEvent` / `LambdaHttpResponse` -> `EventFunctionEvent` / `EventFunctionResult`
+
+```bash
+grep -rn "LambdaHttpEvent\|LambdaHttpResponse" --include="*.ts" src packages | grep -v node_modules
+```
+
+```typescript
+// Before
+import type { LambdaHttpEvent, LambdaHttpResponse } from '@designofadecade/server';
+
+// After
+import type { EventFunctionEvent, EventFunctionResult } from '@designofadecade/server';
+```
+
+Most handlers are typed with `APIGatewayProxyEventV2` from `@types/aws-lambda`
+and never name these; they are unaffected.
+
+### 3. `Local.LambdaProxyRouter` -> `Local.EventFunctionProxy`
+
+```bash
+grep -rn "LambdaProxyRouter\|LambdaEvent\b\|LambdaResponse\b" --include="*.ts" --include="*.js" src packages | grep -v node_modules
+```
+
+The types it uses were renamed with it: `LambdaEvent` -> `EventFunctionProxyEvent`,
+`LambdaResponse` -> `EventFunctionProxyResult`.
+
+```typescript
+// Before
+const local = Local.LambdaProxyRouter(handler, { requestContext: { stage: 'dev' } });
+
+// After
+const local = Local.EventFunctionProxy(handler, { requestContext: { stage: 'dev' } });
+```
+
+**Behaviour change:** the synthesised `requestContext.http.sourceIp` is now the
+socket's remote address, as API Gateway reports it. It used to be the first
+`X-Forwarded-For` value, which the client controls. Local tests that forged an
+IP through that header must set it another way (the `requestContext` option
+overrides `http.sourceIp`). Note that a local socket address is usually `::1`
+or `::ffff:127.0.0.1`, not `127.0.0.1`; a test asserting the literal
+`127.0.0.1` will need to accept any loopback form or set the override.
+
+### 4. `lambdaOptions` -> `proxyOptions`
+
+```bash
+grep -rn "lambdaOptions" --include="*.ts" --include="*.js" src packages | grep -v node_modules
+```
+
+Both the `nodeJSRequest` option and the `RouterRequest` field were renamed.
+Ordinary applications never used either; only a transport shim does.
+
+```typescript
+// Before
+router.nodeJSRequest(req, res, { lambdaOptions: { requestContext } });
+const extra = request.lambdaOptions;
+
+// After
+router.nodeJSRequest(req, res, { proxyOptions: { requestContext } });
+const extra = request.proxyOptions;
+```
+
+### 5. `RouterRequest` gained two **required** fields: `clientIp` and `requestId`
+
+```bash
+grep -rn "RouterRequest = {\|: RouterRequest = \|as RouterRequest\|satisfies RouterRequest" --include="*.ts" src packages test tests | grep -v node_modules
+```
+
+Both are `string` and both are required, not optional. Code that constructs a
+`RouterRequest` literal by hand — unit tests that call a handler directly,
+custom transports, fixtures — fails to typecheck (TS2741, "Property 'clientIp'
+is missing") until it supplies them. Handlers and middleware that only _read_
+the request need no change and may start using the new fields.
+
+```typescript
+// Before
+const request: RouterRequest = {
+  path: '/x',
+  method: 'GET',
+  body: null,
+  cookies: {},
+  params: {},
+  query: {},
+  headers: {},
+};
+
+// After
+const request: RouterRequest = {
+  path: '/x',
+  method: 'GET',
+  body: null,
+  cookies: {},
+  params: {},
+  query: {},
+  headers: {},
+  clientIp: '127.0.0.1',
+  requestId: 'test-1',
+};
+```
+
+### 6. Client IP is no longer read from the first `X-Forwarded-For` value
+
+```bash
+grep -rn "x-forwarded-for\|X-Forwarded-For" --include="*.ts" --include="*.js" src packages | grep -v node_modules
+```
+
+If your middleware read the header itself, delete that code and use
+`request.clientIp`. It is `requestContext.http.sourceIp` in an Event Function,
+the **last** `X-Forwarded-For` entry (the one Lambda appends) in a Web
+Function, and the socket address on a plain server. If CloudFront fronts a Web
+Function endpoint, tell the router:
+
+```typescript
+const router = new Router({ initRoutes: [Routes], trustedProxies: 1 });
+```
+
+**Set `trustedProxies` above `0` only if the endpoint is unreachable except
+through those proxies** — for CloudFront, `IamAuth` on the Web Function
+endpoint with invoke permission granted only to your distribution. If a client
+can call the endpoint directly, the entry the router walks back to is text the
+client sent. The selected entry is also accepted only if it is a literal IP
+(`net.isIP`); anything else gives `clientIp: ''`.
+
+Anything that keyed rate limits, allowlists or audit logs on a client-supplied
+`X-Forwarded-For` value was spoofable; after this change those keys are stable
+and may differ from what the old code recorded.
+
+### 7. `RequestLogger` helpers take a `RouterRequest`
+
+```bash
+grep -rn "createRequestLogger\|logRequest\|logResponse" --include="*.ts" --include="*.js" src packages | grep -v node_modules
+```
+
+They still accept an API Gateway event, so existing calls compile. Prefer the
+`RouterRequest` now: it carries the trustworthy `clientIp` and `requestId`, and
+works identically in all three modes. `logResponse` accepts either `status`
+(a `RouterResponse`) or `statusCode` (an Event Function result). `logRequest`
+no longer throws when a body is not JSON.
+
+```typescript
+// Before (event-only)
+logRequest(event);
+logResponse(event, { statusCode: 200 }, ms);
+
+// After (either; RouterRequest preferred)
+logRequest(request);
+logResponse(request, response, ms);
+```
+
+### 8. Optional: adopt `WebFunction.serve`
+
+Not required, but the reason for the major. One file now runs locally and as a
+Lambda Web Function:
+
+```typescript
+// Before: a local dev server, plus a separate Event Function handler
+const server = new Server({ port: 3000 }, (req, res) => router.nodeJSRequest(req, res, { cors }));
+export const handler = (event) => router.eventFunction(event);
+
+// After: a Web Function. Same Router; drop the handler and the API Gateway.
+const server = WebFunction.serve(router, { port: 3000, cors });
+await server.ready;
+```
+
+Before switching a deployed function, read
+[docs/deployment-modes.md](./docs/deployment-modes.md): a Web Function
+environment serves many requests concurrently, so module-level per-request state
+that was safe in an Event Function is not safe any more.
+
+### 9. `Server` behaviour under Lambda
+
+```bash
+grep -rn "new Server(\|handleSignals\|SIGTERM" --include="*.ts" --include="*.js" src packages | grep -v node_modules
+```
+
+When `AWS_LAMBDA_HTTP_ENDPOINT` is set to a `host:port` value, `Server` binds
+to that address and ignores `port`/`host`, and installs a `SIGTERM` handler
+that calls `close()` (default `shutdownTimeoutMs` 800 ms). An empty variable
+counts as unset; a malformed one throws from the constructor. If you already
+handle `SIGTERM` yourself, either remove your handler or pass
+`handleSignals: false`; two handlers are harmless (`close()` is idempotent and
+concurrent calls share one promise) but one of them is redundant. Outside
+Lambda nothing changes unless you opt in with `handleSignals: true`.
+
+`close()` also changed in ways that only remove sharp edges: calling it before
+the server is listening now waits for startup, calling it after it has
+finished resolves immediately, and `server.server` is `null` after close.
+Code that called `close()` twice and swallowed `ERR_SERVER_NOT_RUNNING` can
+drop the catch.
+
+---
+
 ## Upgrading from 6.x to 10.x
 
 Six releases sit between 6.1.0 and 10.2.0, four of them breaking. This is the
@@ -59,9 +276,9 @@ const router = new Router({
 });
 ```
 
-**Not affected: AWS Lambda behind API Gateway.** `lambdaEvent()` passes through
-`event.requestContext.authorizer`, which the gateway populates _after_ it has
-validated the token. If your `.authorizer` hits are on the Lambda event rather
+**Not affected: AWS Lambda behind API Gateway.** `lambdaEvent()` (now
+`eventFunction()`) passes through `event.requestContext.authorizer`, which the
+gateway populates _after_ it has validated the token. If your `.authorizer` hits are on the Lambda event rather
 than on `request.authorizer` from `nodeJSRequest`, there is nothing to do.
 
 ### 3. `HtmlRenderer` escapes by default (8.0.0, softened in 10.2.0)

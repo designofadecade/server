@@ -1,16 +1,17 @@
 # Documentation Index
 
-Comprehensive documentation for @designofadecade/server - A modern TypeScript server framework with WebSocket support, routing, HTML sanitization, and AWS Lambda compatibility.
+Comprehensive documentation for @designofadecade/server - A modern TypeScript server framework with WebSocket support, routing, HTML sanitization, and the same routes running as an AWS Lambda Web Function, a Lambda Event Function (API Gateway HTTP API v2) or a plain Node HTTP server.
 
 ## Core Components
 
 ### Server & Routing
 
-- **[Server](./server.md)** - HTTP server wrapper with error handling and graceful shutdown
-- **[Router](./router.md)** - High-performance request router with URLPattern support, middleware, and Lambda compatibility
+- **[Deployment Modes](./deployment-modes.md)** - Web Function vs Event Function vs plain server: when to choose which, entry files, production checklist
+- **[Server](./server.md)** - HTTP server wrapper with error events, graceful shutdown and Lambda Web Function detection; `WebFunction.serve`
+- **[Router](./router.md)** - High-performance request router with URLPattern support, middleware, `clientIp`/`requestId`, and `eventFunction` for API Gateway events
 - **[Routes](./router.md#routes-class)** - Base class for organizing route definitions
 - **[RouteError](./route-error.md)** - Secure error handling with automatic sensitive data protection
-- **[Local Development](./local.md)** - Run AWS Lambda handlers locally with Node.js
+- **[Local Development](./local.md)** - Run Lambda Event Function handlers locally with Node.js
 
 ### WebSocket & Real-time
 
@@ -170,11 +171,34 @@ process.on('SIGTERM', async () => {
 });
 ```
 
-### AWS Lambda Application
+### AWS Lambda Web Function
+
+The function is a real HTTP server. The same file runs locally on `port` and,
+when Lambda sets `AWS_LAMBDA_HTTP_ENDPOINT`, binds there and drains on `SIGTERM`.
 
 ```typescript
-import Router from '@designofadecade/server/router';
-import Local from '@designofadecade/server/local';
+import { Router, WebFunction } from '@designofadecade/server';
+
+const router = new Router({
+  initRoutes: [ApiRoutes],
+  trustedProxies: 1, // CloudFront in front of the endpoint
+});
+
+const server = WebFunction.serve(router, { port: 3000, cors: ['https://app.example.com'] });
+server.on('error', (error) => {
+  console.error(error);
+  process.exit(1);
+});
+await server.ready;
+```
+
+### AWS Lambda Event Function
+
+The classic API Gateway HTTP API v2 model: one event per invocation.
+
+```typescript
+import http from 'http';
+import { Local, Router } from '@designofadecade/server';
 
 // Define routes
 const router = new Router({
@@ -183,18 +207,20 @@ const router = new Router({
 
 // Lambda handler
 export const handler = async (event: any) => {
-  return await router.lambdaEvent(event);
+  return await router.eventFunction(event);
 };
 
 // Local development
 if (process.env.NODE_ENV === 'development') {
-  const localHandler = Local.LambdaProxyRouter(handler);
+  const localHandler = Local.EventFunctionProxy(handler);
   const server = http.createServer((req, res) => {
     localHandler.request(req, res);
   });
   server.listen(3000);
 }
 ```
+
+Which one? See [Deployment Modes](./deployment-modes.md).
 
 ## Key Features
 
@@ -223,8 +249,9 @@ if (process.env.NODE_ENV === 'development') {
 
 ### 🔄 Flexibility
 
-- AWS Lambda compatible
+- AWS Lambda Web Functions (HTTP server) and Event Functions (API Gateway v2)
 - Node.js HTTP server support
+- Trustworthy `clientIp` and `requestId` in every mode
 - URLPattern-based routing
 - Middleware system
 - Custom context injection
@@ -267,6 +294,9 @@ SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
 
 # AWS (for Lambda deployment)
 AWS_REGION=us-east-1
+# Set by Lambda itself in a Web Function; Server binds here and ignores PORT/HOST.
+# Set it locally to exercise the Web Function code path.
+AWS_LAMBDA_HTTP_ENDPOINT=127.0.0.1:8080
 ```
 
 ### TypeScript Configuration

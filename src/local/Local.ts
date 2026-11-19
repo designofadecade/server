@@ -8,7 +8,7 @@
  * @example
  * // Wrap your Lambda handler for local development
  * import { handler } from './lambda/handler.js';
- * import Local from '@designofadecade/local';
+ * import { Local } from '@designofadecade/server';
  *
  * const localHandler = Local.EventFunctionProxy(handler, {
  *     requestContext: { stage: 'dev' }

@@ -6,16 +6,19 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.3+-blue.svg)](https://www.typescriptlang.org/)
 [![Build Status](https://github.com/designofadecade/server/workflows/Test/badge.svg)](https://github.com/designofadecade/server/actions)
 
-A modern, type-safe Node.js server framework with built-in WebSocket support, routing, static file handling, and middleware capabilities. Built with TypeScript for Node.js 24+.
+Type-safe ESM server framework for Node 24+. The same routes run as an **AWS Lambda Web Function** (the function is a real HTTP server), as a **Lambda Event Function** (API Gateway HTTP API v2) and on a plain Node HTTP server, with WebSockets, middleware, routing and HTML sanitization built in.
 
-> **Upgrading from an older major?** See [MIGRATION.md](./MIGRATION.md) for a
-> consolidated 6.x -> 10.x checklist, or [CHANGELOG.md](./CHANGELOG.md) for the
-> full history.
+> **Upgrading?** See [MIGRATION.md](./MIGRATION.md) for the 10.x -> 11.0 checklist
+> (renames: `lambdaEvent` -> `eventFunction`, `LambdaProxyRouter` ->
+> `EventFunctionProxy`) and the consolidated 6.x -> 10.x one, or
+> [CHANGELOG.md](./CHANGELOG.md) for the full history.
 
 ## Features
 
 - ✅ Full TypeScript support with comprehensive type definitions
 - ✅ ESM (ES Modules) compatible
+- ✅ **Three deployment modes, one router**: Lambda Web Function, Lambda Event Function, plain Node server — see [Deployment Modes](docs/deployment-modes.md)
+- ✅ Trustworthy `clientIp` and `requestId` on every request, in every mode
 - ✅ **Secure error handling** with automatic sensitive data protection
 - ✅ WebSocket server with message formatting and event handling
 - ✅ Flexible routing system with URL pattern matching
@@ -55,18 +58,31 @@ bun add @designofadecade/server
 ## Quick Start
 
 ```typescript
-import { Server } from '@designofadecade/server';
+import { Router, Routes, WebFunction, type RouterRequest } from '@designofadecade/server';
 
-// Create a new server instance
-const server = new Server({
-  port: 3000,
-  hostname: 'localhost',
-});
+class HelloRoutes extends Routes {
+  constructor(router: Router) {
+    super(router);
+    this.addRoute('/hello/:name', 'GET', this.hello);
+  }
 
-// Start the server
-await server.start();
-console.log('Server running on http://localhost:3000');
+  async hello(req: RouterRequest) {
+    return { status: 200, body: { hello: req.params.name, from: req.clientIp } };
+  }
+}
+
+const router = new Router({ initRoutes: [HelloRoutes] });
+
+// Locally: listens on port 3000.
+// As a Lambda Web Function: binds AWS_LAMBDA_HTTP_ENDPOINT and drains on SIGTERM.
+const server = WebFunction.serve(router, { port: 3000 });
+await server.ready;
+console.log(`Server running on http://localhost:${server.address.port}`);
 ```
+
+The same `router` serves a Lambda Event Function with
+`export const handler = (event) => router.eventFunction(event);`. Choosing
+between the two: [docs/deployment-modes.md](docs/deployment-modes.md).
 
 ## Architecture Overview
 
@@ -74,8 +90,9 @@ The server is composed of several modular components:
 
 ### Server Core
 
-- **Server**: Main HTTP/HTTPS server with WebSocket upgrade support
-- **Router**: URL pattern-based routing with request handlers
+- **Server**: HTTP server with error events, graceful shutdown and Lambda Web Function detection
+- **WebFunction**: `WebFunction.serve(router, options)` — one entry point for local and Lambda Web Function
+- **Router**: URL pattern-based routing; `nodeJSRequest` for HTTP, `eventFunction` for API Gateway events
 - **Routes**: Route collection and management
 
 ### WebSocket Support
@@ -96,9 +113,9 @@ The server is composed of several modular components:
 - **Events**: Event emitter with type-safe event handling
 - **EventsManager**: Event subscription and lifecycle management
 
-### Storage
+### Local development
 
-- **Local**: Local file system utilities
+- **Local**: `Local.EventFunctionProxy` runs a Lambda Event Function handler behind a local HTTP server
 
 ### Integrations
 
@@ -110,22 +127,28 @@ The server is composed of several modular components:
 ### Basic Routing
 
 ```typescript
-import { Router } from '@designofadecade/server';
+import { Router, Routes, type RouterRequest, type RouterResponse } from '@designofadecade/server';
 
-const router = new Router();
+class UserRoutes extends Routes {
+  static basePath = '/api';
 
-// Add routes
-router.addRoute({
-  pattern: '/api/users/:id',
-  method: 'GET',
-  handler: async (req, res, params) => {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ userId: params.id }));
-  },
-});
+  constructor(router: Router) {
+    super(router);
+    this.addRoute('/users/:id', 'GET', this.getUser);
+  }
 
-// Handle requests
-await router.route(request, response);
+  async getUser(req: RouterRequest): Promise<RouterResponse> {
+    return { status: 200, body: { userId: req.params.id } };
+  }
+}
+
+const router = new Router({ initRoutes: [UserRoutes] });
+
+// Plain Node server or Lambda Web Function
+await router.nodeJSRequest(req, res, { cors: ['https://app.example.com'] });
+
+// Lambda Event Function (API Gateway HTTP API v2)
+export const handler = (event) => router.eventFunction(event);
 ```
 
 ### WebSocket Communication
@@ -179,6 +202,7 @@ events.emit('user:login', { userId: 123, timestamp: Date.now() });
 
 Comprehensive documentation is available in the `/docs` directory:
 
+- **[Deployment Modes](docs/deployment-modes.md)** - Lambda Web Function vs Event Function vs plain server: decision table, entry files, production checklist
 - **[Logger Documentation](docs/logger.md)** - CloudWatch Logger with AWS Lambda integration, sensitive data redaction, and performance tracking
 - **[API Documentation](docs/api-documentation.md)** - OpenAPI/Swagger documentation generation guide
 - **[New Features](FEATURES.md)** - Performance benchmarks, pre-commit hooks, and recent additions
@@ -225,13 +249,13 @@ src/
 ├── context/            # Request context handling
 ├── docs/               # OpenAPI/Swagger documentation generators
 ├── events/             # Event system with pub/sub pattern
-├── local/              # Local storage utilities
+├── local/              # Local proxy for Lambda Event Function handlers
 ├── logger/             # Logging utilities with CloudWatch support
 ├── middleware/         # Request middleware (logging, etc.)
 ├── notifications/      # Notification integrations (Slack, etc.)
 ├── router/             # Routing system with URL pattern matching
 ├── sanitizer/          # HTML sanitization for XSS protection
-├── server/             # Core HTTP/HTTPS server implementation
+├── server/             # HTTP server and Lambda Web Function entry point
 ├── state/              # Application state management
 ├── types/              # TypeScript type definitions
 ├── utils/              # Utilities and helpers
@@ -242,8 +266,10 @@ src/
 
 Full API documentation is available in the [docs](docs/) directory:
 
-- **[Server](docs/server.md)** - Core server setup and configuration
+- **[Deployment Modes](docs/deployment-modes.md)** - Choosing and configuring a deployment mode
+- **[Server](docs/server.md)** - Core server setup, `WebFunction.serve`, shutdown
 - **[Router](docs/router.md)** - Routing and request handling
+- **[Local Development](docs/local.md)** - Running Event Function handlers locally
 - **[WebSocket](docs/websocket.md)** - WebSocket server and messaging
 - **[Logger](docs/logger.md)** - CloudWatch logging and performance tracking
 - **[Events Manager](docs/events-manager.md)** - Event system usage
@@ -258,6 +284,8 @@ This package includes built-in security features:
 - **HTML Sanitization** - XSS protection for user-generated content
 - **Type Safety** - Full TypeScript support for compile-time safety
 - **Input Validation** - URL pattern matching and parameter validation
+- **Unforgeable client identity** - `request.clientIp` never comes from a client-controlled `X-Forwarded-For` value, and `request.requestId` is only taken from Lambda's header in Web Function mode
+- **Verified JWTs** - `request.authorizer` is populated only from a token whose signature has been checked
 
 If you discover a security vulnerability, please send an email to info@designofadecade.com instead of using the issue tracker.
 

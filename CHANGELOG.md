@@ -7,6 +7,146 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [11.0.0] - 2026-11-19
+
+Adds the AWS Lambda **Web Function** deployment model and renames the existing
+Lambda surface after the model it implements, the Lambda **Event Function**.
+The same `Router` and routes now run in three places: as a Web Function (the
+function is a real HTTP/1.1 server), as an Event Function (one API Gateway
+HTTP API v2 event per invocation), and on a plain Node server. The upgrade
+checklist is in [MIGRATION.md](./MIGRATION.md#upgrading-from-10x-to-110);
+the reasoning for choosing a mode is in
+[docs/deployment-modes.md](./docs/deployment-modes.md).
+
+### Added
+
+- **`WebFunction.serve(router, options)`** — entry point for a Lambda Web
+  Function that is, unchanged, also a local or any-host Node server. Wires
+  `router.nodeJSRequest(req, res, { cors })` to a `Server` and returns it. A
+  last-resort catch stops a bug inside the router from becoming an unhandled
+  rejection that kills the environment and every concurrent request in it.
+  `WebFunctionOptions` extends `ServerOptions` with `cors`.
+- **`Server` runs as a Lambda Web Function.** When `AWS_LAMBDA_HTTP_ENDPOINT`
+  (`host:port`) is set it binds there, ignoring `port`/`host` — binding
+  anywhere else means Lambda never delivers a request and the function fails
+  its 10-second init check. An empty variable counts as unset (plain mode:
+  `port` applies, socket IP); a malformed one throws from the constructor
+  rather than guessing. New options: `handleSignals` (drain and close on
+  `SIGTERM`; default `true` in Web Function mode, `false` otherwise) and
+  `shutdownTimeoutMs` (default `800`, inside the one-second window Lambda allows
+  after `SIGTERM`). New `ready` promise (resolves on listen, rejects on failure,
+  never an unhandled rejection by itself), `address` getter,
+  `'listening'`/`'close'` events, `Server.isWebFunction()`,
+  `Server.parseEndpoint()` (accepts bracketed IPv6) and
+  `Server.WEB_FUNCTION_ENDPOINT_ENV`. Startup logs now include
+  `mode: 'web-function' | 'node'`.
+- **`RouterRequest.clientIp`** — the caller's address from a source the caller
+  cannot forge in the current mode (see Security). Empty string when unknown.
+- **`RouterRequest.requestId`** — API Gateway's `requestId` in an Event
+  Function, Lambda's `lambda-web-request-id` in a Web Function, a fresh UUID on
+  a plain server. Both new fields are **required** on the type.
+- **`RouterOptions.webFunction`** — whether `nodeJSRequest` reads the Lambda
+  Web Function headers. Defaults to `AWS_LAMBDA_HTTP_ENDPOINT` being set.
+- **`RouterOptions.trustedProxies`** — Web Function only: the number of proxies
+  you control in front of the endpoint (CloudFront = `1`); `clientIp` is taken
+  that many `X-Forwarded-For` entries before the last. Default `0`. Throws on a
+  negative or non-integer value. **Only safe when the endpoint cannot be reached
+  except through those proxies** (CloudFront: `IamAuth` on the endpoint, invoke
+  permission granted only to the distribution); on a directly reachable
+  endpoint the client chooses the entry it reads.
+- **`RequestLogger` accepts a `RouterRequest`.** `createRequestLogger`,
+  `logRequest` and `logResponse` take the router's request (preferred, works in
+  every mode) or an API Gateway event as before. Any object with a string
+  `method` is treated as a `RouterRequest`; API Gateway events have no top-level
+  `method`. `logResponse` reads `status` (a `RouterResponse`) as well as
+  `statusCode`.
+- **Exports from the package root:** `WebFunction`, `WebFunctionOptions`,
+  `ServerOptions`, `ServerAddress`, `JwtOptions`, `JwtHmacAlgorithm`.
+- **`docs/deployment-modes.md`** — why choose a Web Function over an Event
+  Function and when not to, a decision table, a minimal entry file for each of
+  the three modes using one `Router`, and a production checklist.
+
+### Changed — breaking
+
+Every item is a rename unless marked otherwise. There are no aliases.
+
+- `router.lambdaEvent()` -> **`router.eventFunction()`**.
+- `LambdaHttpEvent` -> **`EventFunctionEvent`**; `LambdaHttpResponse` ->
+  **`EventFunctionResult`**.
+- `Local.LambdaProxyRouter` -> **`Local.EventFunctionProxy`**; its `LambdaEvent`
+  / `LambdaResponse` types -> **`EventFunctionProxyEvent`** /
+  **`EventFunctionProxyResult`**.
+- `RouterRequest.lambdaOptions` -> **`proxyOptions`**, and the matching
+  `nodeJSRequest(req, res, { lambdaOptions })` option -> `{ proxyOptions }`.
+- **`RouterRequest` has two new REQUIRED fields**, `clientIp: string` and
+  `requestId: string`. Hand-built `RouterRequest` literals — consumer unit
+  tests that call a handler directly, fixtures, custom transports — fail to
+  typecheck until both are added. Handlers and middleware that only read the
+  request are unaffected.
+- **`Server` behaves differently when `AWS_LAMBDA_HTTP_ENDPOINT` is set:** it
+  binds there instead of `port`/`host` and handles `SIGTERM`. No change outside
+  Lambda. (behaviour)
+- **`Local.EventFunctionProxy` sets `requestContext.http.sourceIp` from the
+  socket**, not from the first `X-Forwarded-For` value. Locally that is usually
+  `::1` or `::ffff:127.0.0.1` rather than `127.0.0.1`. Tests that forged an
+  address through the header, or asserted the literal `127.0.0.1`, should use
+  the `requestContext` option instead. (behaviour, see Security)
+
+### Security
+
+- **Client IP is never taken from the first `X-Forwarded-For` value.** That
+  value is whatever the client sent; reading it — the common idiom — hands the
+  client the choice of its own address, and with it any rate limit, allowlist
+  or audit trail keyed on it. `clientIp` now comes from
+  `requestContext.http.sourceIp` in an Event Function (set by API Gateway);
+  from the **last** `X-Forwarded-For` entry in a Web Function, which Lambda
+  appends itself, moved back by `trustedProxies` when a front door you control
+  adds its own entry; and from the socket's remote address on a plain server,
+  where nothing vouches for the header at all.
+- **Web Function `clientIp` must be a literal IP address.** The selected
+  `X-Forwarded-For` entry is accepted only if `net.isIP` recognises it (IPv4 or
+  IPv6); otherwise `clientIp` is `''`. With `trustedProxies > 0` on an endpoint
+  that is also directly reachable, the chosen entry is client text; the check
+  keeps arbitrary strings and log-forging characters out of `clientIp` even in
+  that misconfiguration.
+- **`Local.EventFunctionProxy` no longer makes a spoofed IP look legitimate.**
+  Its synthesised `sourceIp` was the first `X-Forwarded-For` value, so a handler
+  that authorised on `sourceIp` could be exercised locally with a forged
+  address and then behave differently deployed. It is now the socket address,
+  as API Gateway reports it.
+- **`lambda-web-request-id` is trusted only in Web Function mode.** Lambda
+  strips any client-sent `lambda-web-*` header before adding its own, so there
+  the value is authentic. On a plain server a client could set it to anything,
+  including text crafted to forge log lines; a fresh UUID is used instead. The
+  accepted value is also shape-checked (`[A-Za-z0-9._:-]{1,128}`), so a
+  `webFunction: true` misconfiguration on a directly reachable server still
+  cannot inject arbitrary text into logs.
+- **`RequestLogger` reads `sourceIp` from API Gateway's request context**
+  (`http.sourceIp` for format 2.0, `identity.sourceIp` for 1.0) and never from
+  `X-Forwarded-For`.
+
+### Fixed
+
+- **`Server.close()` is safe to call concurrently, early, or late.** Calls made
+  while a close is in progress share the same promise, so a second call no
+  longer races the first on the underlying `http.Server`. A call after close
+  has finished resolves immediately (`server.server` is `null` once closed)
+  instead of failing with `ERR_SERVER_NOT_RUNNING`. A call before the server is
+  listening waits for startup to finish or fail, then closes; previously
+  `http.Server.close()` on a not-yet-listening server rejected and left `ready`
+  hanging. When startup fails, the `SIGTERM` listener is removed so a dead
+  server cannot keep the process alive. Idle keep-alive sockets are closed
+  immediately so a drain does not wait out the keep-alive timeout while serving
+  nothing.
+- **`logRequest` no longer throws on a non-JSON body.** A raw event body went
+  through a bare `JSON.parse`, so any plain-text or form body made the logging
+  call itself throw and take the request down with it. Non-JSON bodies are now
+  logged as strings.
+- **`logResponse` understands `RouterResponse`.** It read only `statusCode`, so
+  a `RouterResponse` (which uses `status`) was always logged as `undefined`
+  and never at `error` level. Both fields are read; a missing status defaults
+  to `200`, as the router does.
+
 ## [10.4.1] - 2026-09-10
 
 Package metadata only. No code, no type and no build-output changes; the

@@ -1,5 +1,9 @@
 # Deployment Checklist for @designofadecade/server
 
+> This page is about **publishing the package to npm**. For deploying an
+> application built with it — AWS Lambda Web Function, Lambda Event Function,
+> or a plain Node server — see [Deployment Modes](./deployment-modes.md).
+
 ## ✅ Completed Optimizations
 
 ### Package Configuration

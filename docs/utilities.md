@@ -330,24 +330,19 @@ class PageRoutes extends Routes {
 
 ## RequestLogger
 
-Request logging middleware with context tracking.
+Request-scoped logging helpers that attach method, path, client IP, request id
+and user agent to every line.
 
 ### Installation
 
 ```typescript
-import RequestLogger from '@designofadecade/server/middleware';
+import { createRequestLogger, logRequest, logResponse } from '@designofadecade/server';
 ```
 
 ### Quick Start
 
 ```typescript
-import RequestLogger from '@designofadecade/server/middleware';
-
-const requestLogger = new RequestLogger({
-  method: 'POST',
-  path: '/api/users',
-  requestId: '123-456',
-});
+const requestLogger = createRequestLogger(req); // req: RouterRequest
 
 requestLogger.info('Processing user creation');
 requestLogger.error('Validation failed', { errors });
@@ -355,38 +350,40 @@ requestLogger.error('Validation failed', { errors });
 
 ### API Reference
 
-#### Constructor
-
 ```typescript
-new RequestLogger(requestContext: Record<string, any>)
+createRequestLogger(request: RouterRequest | ApiGatewayEvent): {
+  info(message: string, context?: Record<string, any>): void;
+  error(message: string, context?: Record<string, any>): void;
+  warn(message: string, context?: Record<string, any>): void;
+  debug(message: string, context?: Record<string, any>): void;
+}
+
+logRequest(request: RouterRequest | ApiGatewayEvent): void;
+logResponse(request: RouterRequest | ApiGatewayEvent, response: { status?: number; statusCode?: number }, durationMs: number): void;
 ```
 
-**Parameters:**
+Pass the `RouterRequest` the router hands to middleware and handlers
+(preferred). It already carries `clientIp` and `requestId` from a source the
+caller cannot forge, in all three deployment modes. Any object with a string
+`method` property is treated as a `RouterRequest`; API Gateway events have no
+top-level `method`, so the two are told apart by that. A raw API Gateway event
+(format 2.0 or 1.0) is also accepted; its `sourceIp` is read from
+`requestContext.http.sourceIp` / `requestContext.identity.sourceIp`, never from
+`X-Forwarded-For`.
 
-- `requestContext` (object) - Context information (method, path, requestId, etc.)
-
-#### Methods
-
-```typescript
-info(message: string, context?: Record<string, any>): void
-error(message: string, context?: Record<string, any>): void
-warn(message: string, context?: Record<string, any>): void
-debug(message: string, context?: Record<string, any>): void
-```
+`logRequest` logs the body (parsed as JSON when it is JSON; left as a string
+otherwise, never thrown on), query and path parameters. `logResponse` accepts a
+`RouterResponse` (`status`) or an Event Function result (`statusCode`) and logs
+at `error` level for 4xx/5xx.
 
 ### Example
 
 ```typescript
 class UserRoutes extends Routes {
   async createUser(req: RouterRequest): Promise<RouterResponse> {
-    const logger = new RequestLogger({
-      method: req.method,
-      path: req.path,
-      requestId: req.headers['x-request-id'],
-      userId: req.authorizer?.sub,
-    });
+    const logger = createRequestLogger(req);
 
-    logger.info('Creating user');
+    logger.info('Creating user', { userId: req.authorizer?.sub });
 
     try {
       const user = await db.users.create(req.body);

@@ -1,21 +1,34 @@
 # Server
 
-HTTP server wrapper for Node.js with built-in error handling, port validation, and graceful shutdown capabilities.
+HTTP server wrapper for Node.js with error handling, port validation, graceful
+shutdown, and automatic AWS Lambda Web Function support.
 
 ## Overview
 
-The `Server` class provides a production-ready HTTP server implementation that wraps Node.js's native HTTP server with enhanced error handling, logging, and lifecycle management.
+The `Server` class wraps Node's native HTTP server with error events, structured
+logging and lifecycle management. It runs unchanged in two of the package's
+three [deployment modes](./deployment-modes.md):
+
+- **Plain Node server** (any host, local development): listens on `port`/`host`.
+- **AWS Lambda Web Function**: detected through the `AWS_LAMBDA_HTTP_ENDPOINT`
+  environment variable, which then dictates the address. `SIGTERM` drains the
+  server.
+
+The third mode, a Lambda Event Function, has no server at all: the handler calls
+`router.eventFunction(event)`. See [Router](./router.md#eventfunction).
 
 ## Installation
 
 ```typescript
-import Server from '@designofadecade/server';
+import { Server, WebFunction } from '@designofadecade/server';
+// or the subpath
+import Server from '@designofadecade/server/server';
 ```
 
 ## Basic Usage
 
 ```typescript
-import Server from '@designofadecade/server';
+import { Server } from '@designofadecade/server';
 
 // Create server with request handler
 const server = new Server({ port: 3000, host: '0.0.0.0' }, (req, res) => {
@@ -23,8 +36,76 @@ const server = new Server({ port: 3000, host: '0.0.0.0' }, (req, res) => {
   res.end('Hello World');
 });
 
-// Server starts automatically on instantiation
+server.on('error', (error) => {
+  console.error('server failed', error);
+  process.exit(1);
+});
+
+await server.ready; // listening
 ```
+
+The server starts listening in the constructor. Nothing else needs to be called.
+
+## WebFunction.serve()
+
+The shortest way to run a `Router` as an HTTP server, in a Lambda Web Function
+or anywhere else:
+
+```typescript
+import { Router, WebFunction } from '@designofadecade/server';
+
+const router = new Router({ initRoutes: [UserRoutes] });
+
+const server = WebFunction.serve(router, {
+  port: 3000, // local only; ignored under Lambda
+  cors: ['https://app.example.com'],
+});
+
+await server.ready;
+```
+
+```typescript
+static serve(router: Router, options?: WebFunctionOptions): Server
+
+interface WebFunctionOptions extends ServerOptions {
+  /** CORS policy, as for `router.nodeJSRequest`. Lambda adds no CORS headers itself. */
+  cors?: boolean | string[];
+}
+```
+
+`serve` returns an ordinary `Server`. It wires `router.nodeJSRequest(req, res, { cors })`
+as the request handler and adds a last-resort catch so a bug inside the router
+cannot become an unhandled rejection that takes down the environment and every
+concurrent request in it.
+
+## Web Function mode
+
+A Lambda Web Function is a real HTTP/1.1 server. Lambda starts the process,
+waits up to 10 seconds for it to listen on the address in
+`AWS_LAMBDA_HTTP_ENDPOINT` (`host:port`), forwards requests over HTTP/1.1, and
+sends `SIGTERM` about one second before it stops the environment.
+
+When that variable is set, `Server`:
+
+- parses it with `Server.parseEndpoint()` and binds there; `port` and `host`
+  options are ignored (binding anywhere else means the function never receives
+  a request and fails its init check);
+- defaults `handleSignals` to `true`, so `SIGTERM` calls `close()`;
+- logs `mode: 'web-function'` on startup.
+
+An **empty** `AWS_LAMBDA_HTTP_ENDPOINT` counts as unset: the server behaves as
+a plain Node server (`port`/`host` apply, no signal handling). A value that is
+set but not `host:port` throws from the constructor.
+
+Everything else is identical, which is why the same entry file runs locally and
+deployed. To exercise the Web Function branch locally:
+
+```bash
+AWS_LAMBDA_HTTP_ENDPOINT=127.0.0.1:8080 node index.js
+```
+
+See [Deployment Modes](./deployment-modes.md) for when to choose a Web Function
+and the production checklist.
 
 ## API Reference
 
@@ -37,8 +118,17 @@ new Server(options: ServerOptions, requestHandler: RequestHandler)
 #### Parameters
 
 - `options` - Configuration object
-  - `port` (number, optional) - Port number (1-65535). Default: `3000`
-  - `host` (string, optional) - Host to bind to. Default: `'0.0.0.0'`
+  - `port` (number, optional) - Port number (1-65535). Default: `3000`. Ignored
+    in Web Function mode.
+  - `host` (string, optional) - Host to bind to. Default: `'0.0.0.0'`. Ignored
+    in Web Function mode.
+  - `exitOnError` (boolean, optional) - Call `process.exit(1)` on a server
+    error instead of only emitting `'error'`. Default: `false`.
+  - `handleSignals` (boolean, optional) - Drain and close on `SIGTERM`.
+    Default: `true` in Web Function mode, `false` otherwise.
+  - `shutdownTimeoutMs` (number, optional) - How long `close()` waits for
+    in-flight requests before cutting remaining connections. Default: `800`,
+    which fits inside Lambda's one-second `SIGTERM` window.
 - `requestHandler` (function) - Function to handle incoming HTTP requests
   - Signature: `(req: IncomingMessage, res: ServerResponse) => void`
 
@@ -46,8 +136,51 @@ new Server(options: ServerOptions, requestHandler: RequestHandler)
 
 - `Error` - If port is invalid (not between 1-65535)
 - `Error` - If request handler is not a function
+- `Error` - If `AWS_LAMBDA_HTTP_ENDPOINT` is set but is not `host:port`
+
+### Static methods
+
+#### Server.isWebFunction()
+
+```typescript
+static isWebFunction(env?: NodeJS.ProcessEnv): boolean
+```
+
+`true` when `AWS_LAMBDA_HTTP_ENDPOINT` is set in `env` (default `process.env`).
+
+#### Server.parseEndpoint()
+
+```typescript
+static parseEndpoint(value: string): ServerAddress
+```
+
+Parses `host:port`, including a bracketed IPv6 host (`[::1]:8080`). Throws on
+anything else rather than guessing.
+
+#### Server.WEB_FUNCTION_ENDPOINT_ENV
+
+The variable name, `'AWS_LAMBDA_HTTP_ENDPOINT'`.
 
 ### Properties
+
+#### ready
+
+```typescript
+readonly ready: Promise<void>
+```
+
+Resolves once the server is listening; rejects if it fails to start. Awaiting it
+is optional: a rejection is also reported through the `'error'` event, and the
+promise never produces an unhandled rejection on its own.
+
+#### address
+
+```typescript
+get address(): ServerAddress
+```
+
+The address the server binds: `{ host, port }` from the options, or Lambda's
+endpoint in Web Function mode.
 
 #### server
 
@@ -55,9 +188,18 @@ new Server(options: ServerOptions, requestHandler: RequestHandler)
 get server(): Http.Server | null
 ```
 
-Returns the underlying Node.js HTTP server instance.
+Returns the underlying Node.js HTTP server instance, or `null` after `close()`
+has completed (or after a failed start has been closed).
 
-**Returns:** `Http.Server | null`
+### Events
+
+`Server` extends `EventEmitter`.
+
+| Event         | Payload         | When                                                                             |
+| ------------- | --------------- | -------------------------------------------------------------------------------- |
+| `'listening'` | `ServerAddress` | The server has bound and accepts connections.                                    |
+| `'close'`     | none            | `close()` has finished.                                                          |
+| `'error'`     | `Error`         | The underlying server failed (for example `EADDRINUSE`). Unhandled, this throws. |
 
 ### Methods
 
@@ -67,7 +209,21 @@ Returns the underlying Node.js HTTP server instance.
 close(): Promise<void>
 ```
 
-Gracefully closes the server and stops accepting new connections.
+Stops accepting connections, lets in-flight requests finish for up to
+`shutdownTimeoutMs`, then cuts whatever is left. Idle keep-alive sockets are
+closed immediately so they do not hold the server open for the keep-alive
+timeout. Removes the `SIGTERM` listener if one was installed.
+
+Lifecycle guarantees:
+
+- **Concurrent calls** while a close is in progress share one promise.
+- **A call after close has finished** resolves immediately; `server.server` is
+  `null` once closed, and nothing is re-closed.
+- **A call before the server is listening** waits for startup to finish or
+  fail, then closes (or, on a failed start, just resolves). `ready` is never
+  left hanging.
+- **A failed start** removes the `SIGTERM` listener, so a crashed server does
+  not keep the process alive through a dangling signal handler.
 
 **Returns:** Promise that resolves when server is closed or rejects on error
 
@@ -88,13 +244,17 @@ const devServer = new Server({ port: 3000, host: 'localhost' }, (req, res) => {
 });
 ```
 
-### Production Server
+### Production Server (your own host)
 
 ```typescript
-const prodServer = new Server({ port: 8080, host: '0.0.0.0' }, (req, res) => {
+const prodServer = new Server({ port: 8080, host: '0.0.0.0', handleSignals: true }, (req, res) => {
   // Your production request handler
 });
 ```
+
+`handleSignals: true` gives a container or systemd-managed process the same
+drain-on-`SIGTERM` behaviour a Web Function gets by default. Raise
+`shutdownTimeoutMs` if your orchestrator allows longer than a second.
 
 ### Custom Port from Environment
 
@@ -105,21 +265,24 @@ const server = new Server({ port }, requestHandler);
 
 ## Error Handling
 
-The Server class automatically handles common errors:
+Errors are emitted as an `'error'` event and recorded with a code for
+monitoring. The server does **not** exit the process unless `exitOnError` is
+set. If no listener is attached, Node's standard `EventEmitter` behaviour
+applies and the error is thrown.
 
 ### Port Already in Use (EADDRINUSE)
 
 ```typescript
-// Logs error and exits process with code 1
-// Error code: SERVER_PORT_IN_USE
+server.on('error', (error) => {
+  if ((error as NodeJS.ErrnoException).code === 'EADDRINUSE') {
+    // Error code in the log: SERVER_PORT_IN_USE
+  }
+});
 ```
 
 ### General Server Errors
 
-```typescript
-// Logs error details and exits process with code 1
-// Error code: SERVER_ERROR
-```
+Logged with code `SERVER_ERROR`, then emitted.
 
 ### Close Errors
 
@@ -135,40 +298,50 @@ try {
 ## Integration with Router
 
 ```typescript
-import Server from '@designofadecade/server';
-import Router from '@designofadecade/server/router';
+import { Router, Server } from '@designofadecade/server';
 
-const router = new Router({
-  initRoutes: [MyRoutes],
-});
+const router = new Router({ initRoutes: [MyRoutes] });
 
-const server = new Server({ port: 3000 }, router.nodeJSRequest.bind(router));
+const server = new Server({ port: 3000 }, (req, res) =>
+  router.nodeJSRequest(req, res, { cors: ['https://app.example.com'] })
+);
 ```
+
+Or, equivalently, `WebFunction.serve(router, { port: 3000, cors: [...] })`.
 
 ## Logging
 
 The Server class uses the built-in logger for CloudWatch-compatible structured logging:
 
-- **Startup:** Logs server listening on host:port
+- **Startup:** Logs server listening on host:port and `mode` (`'node'` or `'web-function'`)
 - **Errors:** Logs with error codes for monitoring
+- **Signal:** Logs `SIGTERM received, draining HTTP Server` when `handleSignals` is on
 - **Shutdown:** Logs successful close or errors
 
-All logs include `source` field for tracking (e.g., `Server.start`, `Server.close`).
+All logs include `source` field for tracking (e.g., `Server.start`, `Server.signal`, `Server.close`).
 
 ## Best Practices
 
-1. **Port Validation:** Always validate port numbers are within valid range (1-65535)
-2. **Error Handling:** Server exits on critical errors - use process managers like PM2 for auto-restart
-3. **Graceful Shutdown:** Always call `close()` on shutdown signals:
+1. **Listen for `'error'`.** Decide yourself what a failed bind means; the library
+   no longer exits the process for you.
+2. **Await `ready` before announcing.** Health checks and "listening on" messages
+   belong after `await server.ready`, not after the constructor returns.
+3. **Graceful shutdown.** In a Web Function it is on by default. Elsewhere, pass
+   `handleSignals: true` or call `close()` from your own signal handler:
    ```typescript
    process.on('SIGTERM', async () => {
      await server.close();
      process.exit(0);
    });
    ```
-4. **Host Binding:**
-   - Use `0.0.0.0` for production (accepts external connections)
+   Keep anything you run after `close()` short: Lambda gives the whole shutdown
+   about one second.
+4. **Do not spend the init budget before `serve`.** Lambda waits 10 seconds for
+   the listener. Open connections lazily or after `ready`.
+5. **Host Binding:**
+   - Use `0.0.0.0` for production on your own host (accepts external connections)
    - Use `localhost` for development (local only)
+   - Neither applies under Lambda, where the endpoint is dictated.
 
 ## Type Definitions
 
@@ -176,50 +349,65 @@ All logs include `source` field for tracking (e.g., `Server.start`, `Server.clos
 interface ServerOptions {
   port?: number;
   host?: string;
+  exitOnError?: boolean;
+  handleSignals?: boolean;
+  shutdownTimeoutMs?: number;
+}
+
+interface ServerAddress {
+  host: string;
+  port: number;
+}
+
+interface WebFunctionOptions extends ServerOptions {
+  cors?: boolean | string[];
 }
 
 type RequestHandler = (req: IncomingMessage, res: ServerResponse) => void;
 ```
 
+`ServerOptions`, `ServerAddress` and `WebFunctionOptions` are exported from the
+package root.
+
 ## Related Documentation
 
+- [Deployment Modes](./deployment-modes.md) - Web Function vs Event Function vs plain server
 - [Router](./router.md) - Request routing and handling
 - [Logger](./logger.md) - CloudWatch logging
-- [Local Development](./local.md) - Local testing utilities
+- [Local Development](./local.md) - Running Event Function handlers locally
 
 ## Examples
 
 ### Complete Application
 
 ```typescript
-import Server from '@designofadecade/server';
-import Router from '@designofadecade/server/router';
-import { UserRoutes, PostRoutes } from './routes';
+import { Router, WebFunction } from '@designofadecade/server';
+import { UserRoutes, PostRoutes } from './routes.js';
 
 // Initialize router
 const router = new Router({
   initRoutes: [UserRoutes, PostRoutes],
+  trustedProxies: process.env.BEHIND_CLOUDFRONT ? 1 : 0,
 });
 
-// Create server
-const server = new Server(
-  {
-    port: parseInt(process.env.PORT || '3000', 10),
-    host: process.env.HOST || '0.0.0.0',
-  },
-  router.nodeJSRequest.bind(router)
-);
-
-// Graceful shutdown
-process.on('SIGTERM', async () => {
-  console.log('SIGTERM received, closing server...');
-  await server.close();
-  process.exit(0);
+// One entry file: a Lambda Web Function when AWS_LAMBDA_HTTP_ENDPOINT is set,
+// a plain server on PORT otherwise. SIGTERM is handled in both.
+const server = WebFunction.serve(router, {
+  port: parseInt(process.env.PORT || '3000', 10),
+  host: process.env.HOST || '0.0.0.0',
+  handleSignals: true,
+  cors: ['https://app.example.com'],
 });
 
-process.on('SIGINT', async () => {
-  console.log('SIGINT received, closing server...');
-  await server.close();
-  process.exit(0);
+server.on('error', (error) => {
+  console.error('server failed to start', error);
+  process.exit(1);
 });
+
+server.on('close', () => {
+  // flush metrics, close pools — keep it under a second
+});
+
+await server.ready;
+console.log(`listening on ${server.address.host}:${server.address.port}`);
 ```
