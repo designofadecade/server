@@ -8,25 +8,30 @@ import Router from './Router.js';
 import Routes from './Routes.js';
 import Local from '../local/Local.js';
 import Context from '../context/Context.js';
-import type { LambdaHttpEvent, LambdaHttpResponse, RouterResponse, ContextLike } from '../index.js';
-import type { LambdaEvent, LambdaResponse } from '../local/Local.js';
+import type {
+  EventFunctionEvent,
+  EventFunctionResult,
+  RouterResponse,
+  ContextLike,
+} from '../index.js';
+import type { EventFunctionProxyEvent, EventFunctionProxyResult } from '../local/Local.js';
 
 /**
  * The canonical way to write a Lambda is to type the handler with the official
- * `@types/aws-lambda` event. `router.lambdaEvent(event)` has to accept that type
+ * `@types/aws-lambda` event. `router.eventFunction(event)` has to accept that type
  * directly — needing an `as any` at the boundary is the defect.
  */
-describe('Router.lambdaEvent input type', () => {
+describe('Router.eventFunction input type', () => {
   it('accepts an APIGatewayProxyEventV2 without a cast', () => {
     const router = new Router({});
-    const handler = async (event: APIGatewayProxyEventV2) => router.lambdaEvent(event);
+    const handler = async (event: APIGatewayProxyEventV2) => router.eventFunction(event);
     expectTypeOf(handler).toBeFunction();
   });
 
   it('models queryStringParameters the way API Gateway actually sends them', () => {
     // API Gateway omits absent values, so a lookup must be `string | undefined`
     // rather than the `Record<string, string>` this used to claim.
-    expectTypeOf<NonNullable<LambdaHttpEvent['queryStringParameters']>>().toEqualTypeOf<
+    expectTypeOf<NonNullable<EventFunctionEvent['queryStringParameters']>>().toEqualTypeOf<
       Record<string, string | undefined>
     >();
   });
@@ -35,7 +40,7 @@ describe('Router.lambdaEvent input type', () => {
    * A route may set more than one cookie, and a header map cannot hold two
    * values under one name. `RouterResponse.headers` therefore accepts an array,
    * and format 2.0 responses carry the result in `cookies` — which
-   * `LambdaHttpResponse` has to be able to name.
+   * `EventFunctionResult` has to be able to name.
    */
   it('accepts a repeated header on a route response', () => {
     assertType<RouterResponse>({
@@ -46,41 +51,41 @@ describe('Router.lambdaEvent input type', () => {
   });
 
   it('models the format 2.0 cookies field on the response', () => {
-    expectTypeOf<LambdaHttpResponse>().toHaveProperty('cookies');
-    expectTypeOf<NonNullable<LambdaHttpResponse['cookies']>>().toEqualTypeOf<string[]>();
+    expectTypeOf<EventFunctionResult>().toHaveProperty('cookies');
+    expectTypeOf<NonNullable<EventFunctionResult['cookies']>>().toEqualTypeOf<string[]>();
   });
 
   it('exports the event and response types so consumers can name them', () => {
-    expectTypeOf<LambdaHttpEvent>().toHaveProperty('requestContext');
-    expectTypeOf<LambdaHttpResponse>().toHaveProperty('statusCode');
+    expectTypeOf<EventFunctionEvent>().toHaveProperty('requestContext');
+    expectTypeOf<EventFunctionResult>().toHaveProperty('statusCode');
   });
 });
 
 /**
- * `Local.LambdaProxyRouter` wraps a real Lambda handler, so the event it
+ * `Local.EventFunctionProxy` wraps a real Lambda handler, so the event it
  * synthesises must satisfy the handler's declared parameter type. Constructor
- * and function parameters are checked contravariantly, so `LambdaEvent` has to
+ * and function parameters are checked contravariantly, so `EventFunctionProxyEvent` has to
  * be assignable *to* `APIGatewayProxyEventV2`, not merely resemble it.
  */
-describe('Local.LambdaProxyRouter handler type', () => {
+describe('Local.EventFunctionProxy handler type', () => {
   it('accepts a handler typed with the official AWS event', () => {
-    const wrapped = Local.LambdaProxyRouter(async (_event: APIGatewayProxyEventV2) => ({
+    const wrapped = Local.EventFunctionProxy(async (_event: APIGatewayProxyEventV2) => ({
       statusCode: 200,
       body: '{}',
     }));
     expectTypeOf(wrapped).toHaveProperty('request');
   });
 
-  it('accepts a Router lambdaEvent handler', () => {
+  it('accepts a Router eventFunction handler', () => {
     const router = new Router({});
-    const wrapped = Local.LambdaProxyRouter((event) => router.lambdaEvent(event));
+    const wrapped = Local.EventFunctionProxy((event) => router.eventFunction(event));
     expectTypeOf(wrapped).toHaveProperty('request');
   });
 
   /**
    * The response side is the mirror of the event fix, and needs the opposite
    * variance: a handler's return type is covariant, so AWS's result type has to
-   * be assignable *to* `LambdaResponse`. `APIGatewayProxyResultV2` is a union
+   * be assignable *to* `EventFunctionProxyResult`. `APIGatewayProxyResultV2` is a union
    * whose members are a structured result — `statusCode` optional, header
    * values `string | number | boolean` — and a bare `string`. Declaring
    * `statusCode: number` and `Record<string, string>` headers meant the only
@@ -92,7 +97,7 @@ describe('Local.LambdaProxyRouter handler type', () => {
       statusCode: 200,
       body: '{}',
     });
-    const wrapped = Local.LambdaProxyRouter(handler);
+    const wrapped = Local.EventFunctionProxy(handler);
     expectTypeOf(wrapped).toHaveProperty('request');
   });
 
@@ -100,30 +105,30 @@ describe('Local.LambdaProxyRouter handler type', () => {
     const handler = async (
       _event: APIGatewayProxyEventV2
     ): Promise<APIGatewayProxyStructuredResultV2> => ({ statusCode: 200, body: '{}' });
-    const wrapped = Local.LambdaProxyRouter(handler);
+    const wrapped = Local.EventFunctionProxy(handler);
     expectTypeOf(wrapped).toHaveProperty('request');
   });
 
   it('accepts the bare string return APIGatewayProxyResultV2 permits', () => {
-    const wrapped = Local.LambdaProxyRouter(async () => 'Hello from Lambda!');
+    const wrapped = Local.EventFunctionProxy(async () => 'Hello from Lambda!');
     expectTypeOf(wrapped).toHaveProperty('request');
   });
 
   it('models the response the way API Gateway does', () => {
     // Optional, because format 2.0 infers 200 when the handler omits it.
-    assertType<LambdaResponse>({} as APIGatewayProxyStructuredResultV2);
+    assertType<EventFunctionProxyResult>({} as APIGatewayProxyStructuredResultV2);
   });
 
   it('synthesises an event assignable to the AWS type', () => {
-    assertType<APIGatewayProxyEventV2>({} as LambdaEvent);
+    assertType<APIGatewayProxyEventV2>({} as EventFunctionProxyEvent);
   });
 
   it('carries cookies in API Gateway v2 wire format', () => {
-    expectTypeOf<NonNullable<LambdaEvent['cookies']>>().toEqualTypeOf<string[]>();
+    expectTypeOf<NonNullable<EventFunctionProxyEvent['cookies']>>().toEqualTypeOf<string[]>();
   });
 
   it('exports its event and response types', () => {
-    expectTypeOf<LambdaResponse>().toHaveProperty('statusCode');
+    expectTypeOf<EventFunctionProxyResult>().toHaveProperty('statusCode');
   });
 });
 

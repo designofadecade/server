@@ -135,7 +135,7 @@ describe('Router edge cases', () => {
       }
       const router = new Router({ initRoutes: [Odd] });
 
-      const response = await router.lambdaEvent({
+      const response = await router.eventFunction({
         requestContext: { http: { method: 'GET', path: '/deep/path' } },
         headers: {},
       });
@@ -158,7 +158,7 @@ describe('Router edge cases', () => {
       const router = new Router({ initRoutes: [Dyn] });
 
       const call = () =>
-        router.lambdaEvent({
+        router.eventFunction({
           requestContext: { http: { method: 'GET', path: '/items/42' } },
           headers: {},
         });
@@ -181,7 +181,7 @@ describe('Router edge cases', () => {
       const router = new Router({ initRoutes: [Dyn] });
 
       const miss = () =>
-        router.lambdaEvent({
+        router.eventFunction({
           requestContext: { http: { method: 'DELETE', path: '/nope/nope' } },
           headers: {},
         });
@@ -195,7 +195,7 @@ describe('Router edge cases', () => {
     it('should parse the Lambda cookies array', async () => {
       const router = new Router({ initRoutes: [Echo] });
 
-      const response = await router.lambdaEvent({
+      const response = await router.eventFunction({
         requestContext: { http: { method: 'GET', path: '/echo' } },
         headers: {},
         cookies: ['session=abc123', 'theme=dark', 'signed=a=b=c'],
@@ -211,7 +211,7 @@ describe('Router edge cases', () => {
     it('should return an empty object when there are no cookies', async () => {
       const router = new Router({ initRoutes: [Echo] });
 
-      const response = await router.lambdaEvent({
+      const response = await router.eventFunction({
         requestContext: { http: { method: 'GET', path: '/echo' } },
         headers: {},
         cookies: [],

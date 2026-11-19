@@ -26,7 +26,7 @@ describe('Router path normalization ReDoS resistance', () => {
   it('normalizes a long run of slashes in linear time', async () => {
     const router = build();
     const started = performance.now();
-    await router.lambdaEvent({
+    await router.eventFunction({
       requestContext: { http: { method: 'GET', path: '/'.repeat(200_000) + 'x' } },
       headers: {},
     });
@@ -35,13 +35,13 @@ describe('Router path normalization ReDoS resistance', () => {
 
   it('still routes and still strips trailing slashes', async () => {
     const router = build();
-    const hit = await router.lambdaEvent({
+    const hit = await router.eventFunction({
       requestContext: { http: { method: 'GET', path: '/ok///' } },
       headers: {},
     });
     expect(hit.statusCode).toBe(200);
 
-    const root = await router.lambdaEvent({
+    const root = await router.eventFunction({
       requestContext: { http: { method: 'GET', path: '/' } },
       headers: {},
     });

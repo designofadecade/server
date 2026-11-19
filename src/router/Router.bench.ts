@@ -31,7 +31,7 @@ describe('Router Performance', () => {
   bench('lambda event - simple route', async () => {
     const router = new Router({ initRoutes: [TestRoutes] });
 
-    await router.lambdaEvent({
+    await router.eventFunction({
       requestContext: {
         http: {
           method: 'GET',
@@ -45,7 +45,7 @@ describe('Router Performance', () => {
   bench('lambda event - route with params', async () => {
     const router = new Router({ initRoutes: [ParamRoutes] });
 
-    await router.lambdaEvent({
+    await router.eventFunction({
       requestContext: {
         http: {
           method: 'GET',
@@ -59,7 +59,7 @@ describe('Router Performance', () => {
   bench('lambda event - complex pattern', async () => {
     const router = new Router({ initRoutes: [ComplexRoutes] });
 
-    await router.lambdaEvent({
+    await router.eventFunction({
       requestContext: {
         http: {
           method: 'GET',
@@ -89,7 +89,7 @@ describe('Router Performance', () => {
       middleware: [async () => {}, async () => {}, async () => {}, async () => {}, async () => {}],
     });
 
-    await router.lambdaEvent({
+    await router.eventFunction({
       requestContext: {
         http: {
           method: 'GET',

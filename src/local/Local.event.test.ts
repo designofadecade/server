@@ -4,12 +4,12 @@ import Router from '../router/Router.ts';
 import Routes from '../router/Routes.ts';
 
 /**
- * `LambdaProxyRouter` exists so a real Lambda handler can be exercised locally.
+ * `EventFunctionProxy` exists so a real Lambda handler can be exercised locally.
  * That only holds if the event it synthesises matches the API Gateway HTTP API
  * v2.0 wire format — a handler that reads the event the documented way must see
  * what it would see when deployed.
  */
-describe('Local.LambdaProxyRouter event shape', () => {
+describe('Local.EventFunctionProxy event shape', () => {
   let handler;
   let seenEvent;
   let req;
@@ -38,24 +38,24 @@ describe('Local.LambdaProxyRouter event shape', () => {
   it('sends cookies as an array of "name=value" strings', async () => {
     req = makeReq({ headers: { host: 'localhost:3000', cookie: 'session=abc; theme=dark' } });
 
-    await Local.LambdaProxyRouter(handler).request(req, res);
+    await Local.EventFunctionProxy(handler).request(req, res);
 
     expect(seenEvent.cookies).toEqual(['session=abc', 'theme=dark']);
   });
 
   it('sends an empty cookies array when the request has none', async () => {
-    await Local.LambdaProxyRouter(handler).request(req, res);
+    await Local.EventFunctionProxy(handler).request(req, res);
 
     expect(seenEvent.cookies).toEqual([]);
   });
 
   /**
-   * The regression that motivated the array format: `Router.lambdaEvent` parses
+   * The regression that motivated the array format: `Router.eventFunction` parses
    * `event.cookies` as an API Gateway array and guards with `Array.isArray`.
    * Handed an object it took the guard and silently dropped every cookie, so a
    * cookie-authenticated route worked when deployed and failed locally.
    */
-  it('delivers cookies through a wrapped Router.lambdaEvent handler', async () => {
+  it('delivers cookies through a wrapped Router.eventFunction handler', async () => {
     let received;
     const router = new Router({
       initRoutes: [
@@ -73,7 +73,7 @@ describe('Local.LambdaProxyRouter event shape', () => {
 
     req = makeReq({ headers: { host: 'localhost:3000', cookie: 'session=abc; theme=dark' } });
 
-    await Local.LambdaProxyRouter((event) => router.lambdaEvent(event)).request(req, res);
+    await Local.EventFunctionProxy((event) => router.eventFunction(event)).request(req, res);
 
     expect(received).toEqual({ session: 'abc', theme: 'dark' });
   });
@@ -83,7 +83,7 @@ describe('Local.LambdaProxyRouter event shape', () => {
       headers: { host: 'localhost:3000', 'x-custom': ['one', 'two'] },
     });
 
-    await Local.LambdaProxyRouter(handler).request(req, res);
+    await Local.EventFunctionProxy(handler).request(req, res);
 
     expect(seenEvent.headers['x-custom']).toBe('one, two');
   });
@@ -91,7 +91,7 @@ describe('Local.LambdaProxyRouter event shape', () => {
   it('populates the API Gateway v2 envelope fields', async () => {
     req = makeReq({ url: '/test?a=1&b=2' });
 
-    await Local.LambdaProxyRouter(handler).request(req, res);
+    await Local.EventFunctionProxy(handler).request(req, res);
 
     expect(seenEvent.version).toBe('2.0');
     expect(seenEvent.routeKey).toBe('GET /test');
@@ -105,15 +105,15 @@ describe('Local.LambdaProxyRouter event shape', () => {
       headers: {
         host: 'api.example.com',
         'user-agent': 'vitest',
-        'x-forwarded-for': '203.0.113.7, 198.51.100.1',
       },
+      socket: { remoteAddress: '192.0.2.10' },
     });
 
-    await Local.LambdaProxyRouter(handler).request(req, res);
+    await Local.EventFunctionProxy(handler).request(req, res);
 
     const ctx = seenEvent.requestContext;
     expect(ctx.http.protocol).toBe('HTTP/1.1');
-    expect(ctx.http.sourceIp).toBe('203.0.113.7');
+    expect(ctx.http.sourceIp).toBe('192.0.2.10');
     expect(ctx.http.userAgent).toBe('vitest');
     expect(ctx.domainName).toBe('api.example.com');
     expect(ctx.domainPrefix).toBe('api');
@@ -122,15 +122,37 @@ describe('Local.LambdaProxyRouter event shape', () => {
     expect(typeof ctx.timeEpoch).toBe('number');
   });
 
+  /**
+   * SECURITY: API Gateway takes `sourceIp` from the TCP connection. The first
+   * X-Forwarded-For value is whatever the client chose to send; using it let
+   * any caller pick the address an IP allowlist or rate limiter saw.
+   */
+  it('takes sourceIp from the socket, never from a client-sent X-Forwarded-For', async () => {
+    req = makeReq({
+      headers: { host: 'localhost:3000', 'x-forwarded-for': '203.0.113.7, 198.51.100.1' },
+      socket: { remoteAddress: '192.0.2.10' },
+    });
+
+    await Local.EventFunctionProxy(handler).request(req, res);
+
+    expect(seenEvent.requestContext.http.sourceIp).toBe('192.0.2.10');
+  });
+
+  it('falls back to 127.0.0.1 when the socket address is unknown', async () => {
+    await Local.EventFunctionProxy(handler).request(req, res);
+
+    expect(seenEvent.requestContext.http.sourceIp).toBe('127.0.0.1');
+  });
+
   it('lets the requestContext option override synthesised fields', async () => {
-    await Local.LambdaProxyRouter(handler, { requestContext: { stage: 'dev' } }).request(req, res);
+    await Local.EventFunctionProxy(handler, { requestContext: { stage: 'dev' } }).request(req, res);
 
     expect(seenEvent.requestContext.stage).toBe('dev');
   });
 
   /** API Gateway omits `body` entirely rather than sending null. */
   it('omits body when the request has none', async () => {
-    await Local.LambdaProxyRouter(handler).request(req, res);
+    await Local.EventFunctionProxy(handler).request(req, res);
 
     expect(seenEvent.body).toBeUndefined();
   });

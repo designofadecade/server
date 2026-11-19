@@ -246,7 +246,7 @@ describe('Router', () => {
       // URLPattern reports an unmatched optional group as undefined. It used to
       // be assigned straight into params, which is typed Record<string, string>,
       // so a handler could read `undefined` where a string was promised.
-      const response = await router.lambdaEvent({
+      const response = await router.eventFunction({
         requestContext: { http: { method: 'GET', path: '/files' } },
         headers: {},
       });
@@ -260,7 +260,7 @@ describe('Router', () => {
     });
 
     it('should include an optional segment that did match', async () => {
-      const response = await router.lambdaEvent({
+      const response = await router.eventFunction({
         requestContext: { http: { method: 'GET', path: '/files/report.pdf' } },
         headers: {},
       });
@@ -280,7 +280,7 @@ describe('Router', () => {
         headers: {},
       };
 
-      const response = await router.lambdaEvent(event);
+      const response = await router.eventFunction(event);
       expect(response.statusCode).toBe(200);
       expect(response.body).toBe('static');
     });
@@ -296,7 +296,7 @@ describe('Router', () => {
         headers: {},
       };
 
-      const response = await router.lambdaEvent(event);
+      const response = await router.eventFunction(event);
       expect(response.statusCode).toBe(200);
     });
 
@@ -311,7 +311,7 @@ describe('Router', () => {
         headers: {},
       };
 
-      const response = await router.lambdaEvent(event);
+      const response = await router.eventFunction(event);
       expect(response.statusCode).toBe(404);
     });
 
@@ -326,7 +326,7 @@ describe('Router', () => {
         headers: {},
       };
 
-      const response = await router.lambdaEvent(event);
+      const response = await router.eventFunction(event);
       expect(response.statusCode).toBe(200);
     });
 
@@ -350,12 +350,12 @@ describe('Router', () => {
         headers: {},
       };
 
-      const response = await router.lambdaEvent(event);
+      const response = await router.eventFunction(event);
       expect(response.statusCode).toBe(200);
     });
   });
 
-  describe('lambdaEvent', () => {
+  describe('eventFunction', () => {
     beforeEach(() => {
       class TestRoutes extends Routes {
         constructor(router: Router) {
@@ -379,7 +379,7 @@ describe('Router', () => {
         headers: {},
       };
 
-      const response = await router.lambdaEvent(event);
+      const response = await router.eventFunction(event);
       expect(response.statusCode).toBe(200);
       expect(JSON.parse(response.body)).toEqual({ success: true });
     });
@@ -398,7 +398,7 @@ describe('Router', () => {
         body: JSON.stringify({ data: 'test' }),
       };
 
-      const response = await router.lambdaEvent(event);
+      const response = await router.eventFunction(event);
       expect(response.statusCode).toBe(201);
       expect(JSON.parse(response.body)).toEqual({ data: 'test' });
     });
@@ -417,7 +417,7 @@ describe('Router', () => {
         body: 'invalid json',
       };
 
-      const response = await router.lambdaEvent(event);
+      const response = await router.eventFunction(event);
       expect(response.statusCode).toBe(400);
       expect(JSON.parse(response.body)).toHaveProperty('error');
     });
@@ -434,7 +434,7 @@ describe('Router', () => {
         headers: {},
       };
 
-      const response = await router.lambdaEvent(event);
+      const response = await router.eventFunction(event);
       expect(response.statusCode).toBe(200);
     });
 
@@ -449,7 +449,7 @@ describe('Router', () => {
         headers: {},
       };
 
-      const response = await router.lambdaEvent(event);
+      const response = await router.eventFunction(event);
       expect(response.statusCode).toBe(200);
     });
   });
@@ -717,7 +717,7 @@ describe('Router', () => {
         headers: {},
       };
 
-      const response = await router.lambdaEvent(event);
+      const response = await router.eventFunction(event);
       expect(response.statusCode).toBe(401);
     });
 
@@ -734,7 +734,7 @@ describe('Router', () => {
         },
       };
 
-      const response = await router.lambdaEvent(event);
+      const response = await router.eventFunction(event);
       expect(response.statusCode).toBe(403);
     });
 
@@ -751,7 +751,7 @@ describe('Router', () => {
         },
       };
 
-      const response = await router.lambdaEvent(event);
+      const response = await router.eventFunction(event);
       expect(response.statusCode).toBe(200);
     });
 
@@ -768,7 +768,7 @@ describe('Router', () => {
         },
       };
 
-      const response = await router.lambdaEvent(event);
+      const response = await router.eventFunction(event);
       expect(response.statusCode).toBe(200);
     });
   });
@@ -804,7 +804,7 @@ describe('Router', () => {
         headers: {},
       };
 
-      const response = await router.lambdaEvent(event);
+      const response = await router.eventFunction(event);
       expect(globalMiddleware).toHaveBeenCalled();
       expect(response.statusCode).toBe(200);
     });
@@ -842,7 +842,7 @@ describe('Router', () => {
         headers: {},
       };
 
-      const response = await router.lambdaEvent(event);
+      const response = await router.eventFunction(event);
       expect(middleware).toHaveBeenCalled();
       expect(handler).not.toHaveBeenCalled();
       expect(response.statusCode).toBe(403);
@@ -872,7 +872,7 @@ describe('Router', () => {
         headers: {},
       };
 
-      const response = await router.lambdaEvent(event);
+      const response = await router.eventFunction(event);
       expect(response.statusCode).toBe(500);
       expect(JSON.parse(response.body)).toHaveProperty('error');
     });
@@ -898,13 +898,13 @@ describe('Router', () => {
         headers: {},
       };
 
-      const response = await router.lambdaEvent(event);
+      const response = await router.eventFunction(event);
       expect(response.statusCode).toBe(500);
     });
   });
 });
 
-describe('Router lambdaEvent query parameters', () => {
+describe('Router eventFunction query parameters', () => {
   let capturedQuery: Record<string, string> | undefined;
   let router: Router;
 
@@ -923,7 +923,7 @@ describe('Router lambdaEvent query parameters', () => {
   });
 
   it('passes through query parameters that have values', async () => {
-    const response = await router.lambdaEvent({
+    const response = await router.eventFunction({
       requestContext: { http: { method: 'GET', path: '/search' } },
       headers: {},
       queryStringParameters: { q: 'hello', page: '2' },
@@ -940,7 +940,7 @@ describe('Router lambdaEvent query parameters', () => {
    * string was promised.
    */
   it('drops query parameters sent without a value', async () => {
-    await router.lambdaEvent({
+    await router.eventFunction({
       requestContext: { http: { method: 'GET', path: '/search' } },
       headers: {},
       queryStringParameters: { q: 'hello', empty: undefined },
@@ -951,7 +951,7 @@ describe('Router lambdaEvent query parameters', () => {
   });
 
   it('defaults to an empty object when the event has no query parameters', async () => {
-    await router.lambdaEvent({
+    await router.eventFunction({
       requestContext: { http: { method: 'GET', path: '/search' } },
       headers: {},
     });

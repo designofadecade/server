@@ -6,6 +6,7 @@
  */
 
 import { logger } from '../logger/Logger.js';
+import type { RouterRequest } from '../router/Router.js';
 
 interface RequestLoggerInterface {
   info: (message: string, context?: Record<string, any>) => void;
@@ -20,6 +21,7 @@ interface RequestEvent {
     http?: {
       method: string;
       path: string;
+      sourceIp?: string;
     };
     identity?: {
       sourceIp?: string;
@@ -28,33 +30,63 @@ interface RequestEvent {
   httpMethod?: string;
   path?: string;
   headers?: Record<string, any>;
-  body?: string;
+  body?: unknown;
   queryStringParameters?: Record<string, any>;
   pathParameters?: Record<string, any>;
 }
 
+/**
+ * Anything a request logger can describe: a `RouterRequest` (any of the three
+ * deployment modes — it already carries a trustworthy `clientIp` and
+ * `requestId`), or a raw API Gateway event (format 2.0, or 1.0 for older
+ * callers).
+ */
+export type LoggableRequest = Pick<RouterRequest, 'method' | 'path' | 'headers'> &
+  Partial<Pick<RouterRequest, 'clientIp' | 'requestId' | 'body' | 'query' | 'params'>>;
+
 interface ResponseObject {
-  statusCode: number;
+  statusCode?: number;
+  status?: number;
   [key: string]: any;
 }
 
-/**
- * Creates a request-scoped logger with HTTP context
- *
- * @param {Object} request - AWS Lambda event or custom request object
- * @param {string} request.requestContext.requestId - Request ID
- * @param {string} request.httpMethod - HTTP method
- * @param {string} request.path - Request path
- * @returns {Object} Logger with request context
- */
-export function createRequestLogger(event: RequestEvent): RequestLoggerInterface {
-  const requestContext = {
+const isRouterRequest = (value: RequestEvent | LoggableRequest): value is LoggableRequest =>
+  typeof (value as LoggableRequest).method === 'string' &&
+  ('clientIp' in value || 'requestId' in value);
+
+function requestFields(request: RequestEvent | LoggableRequest) {
+  const userAgent = request.headers?.['user-agent'];
+  if (isRouterRequest(request)) {
+    return {
+      requestId: request.requestId || 'unknown',
+      method: request.method,
+      path: request.path,
+      sourceIp: request.clientIp || undefined,
+      userAgent: Array.isArray(userAgent) ? userAgent.join(', ') : userAgent,
+    };
+  }
+  const event = request as RequestEvent;
+  return {
     requestId: event.requestContext?.requestId || 'unknown',
     method: event.httpMethod || event.requestContext?.http?.method,
     path: event.path || event.requestContext?.http?.path,
-    sourceIp: event.requestContext?.identity?.sourceIp,
-    userAgent: event.headers?.['user-agent'],
+    // API Gateway sets both fields from the TCP connection; neither is read
+    // from X-Forwarded-For, which the client controls.
+    sourceIp: event.requestContext?.http?.sourceIp ?? event.requestContext?.identity?.sourceIp,
+    userAgent,
   };
+}
+
+/**
+ * Creates a request-scoped logger with HTTP context.
+ *
+ * @param request - A `RouterRequest` (preferred), or an API Gateway event
+ * @returns Logger with request context
+ */
+export function createRequestLogger(
+  request: RequestEvent | LoggableRequest
+): RequestLoggerInterface {
+  const requestContext = requestFields(request);
 
   return {
     info: (message: string, context: Record<string, any> = {}) => {
@@ -73,18 +105,35 @@ export function createRequestLogger(event: RequestEvent): RequestLoggerInterface
 }
 
 /**
+ * A raw event body is a string that is usually, but not always, JSON. It used
+ * to go through a bare `JSON.parse`, so any non-JSON body made the logging
+ * call itself throw and take the request down with it.
+ */
+function bodyForLog(body: unknown): unknown {
+  if (typeof body !== 'string') return body ?? undefined;
+  if (body === '') return undefined;
+  try {
+    return JSON.parse(body);
+  } catch {
+    return body;
+  }
+}
+
+/**
  * Middleware to automatically log incoming requests
  *
  * @param {Object} event - AWS Lambda event
  * @returns {void}
  */
-export function logRequest(event: RequestEvent): void {
-  const requestLogger = createRequestLogger(event);
+export function logRequest(request: RequestEvent | LoggableRequest): void {
+  const requestLogger = createRequestLogger(request);
+  const routerRequest = isRouterRequest(request) ? request : null;
+  const event = request as RequestEvent;
 
   requestLogger.info('Incoming request', {
-    body: event.body ? JSON.parse(event.body) : undefined,
-    queryParams: event.queryStringParameters,
-    pathParams: event.pathParameters,
+    body: bodyForLog(request.body),
+    queryParams: routerRequest ? routerRequest.query : event.queryStringParameters,
+    pathParams: routerRequest ? routerRequest.params : event.pathParameters,
   });
 }
 
@@ -97,17 +146,20 @@ export function logRequest(event: RequestEvent): void {
  * @returns {void}
  */
 export function logResponse(
-  event: RequestEvent,
+  request: RequestEvent | LoggableRequest,
   response: ResponseObject,
   durationMs: number
 ): void {
-  const requestLogger = createRequestLogger(event);
+  const requestLogger = createRequestLogger(request);
+  // `statusCode` for an Event Function result, `status` for a RouterResponse
+  // (which defaults to 200 when a route leaves it out).
+  const statusCode = response.statusCode ?? response.status ?? 200;
 
-  const level = response.statusCode >= 400 ? 'error' : 'info';
+  const level = statusCode >= 400 ? 'error' : 'info';
 
   requestLogger[level]('Request completed', {
-    statusCode: response.statusCode,
+    statusCode,
     durationMs,
-    success: response.statusCode < 400,
+    success: statusCode < 400,
   });
 }

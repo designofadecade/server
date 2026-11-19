@@ -325,7 +325,7 @@ describe('RequestLogger', () => {
       );
     });
 
-    it('should handle invalid JSON body', () => {
+    it('logs a non-JSON body as text instead of throwing', () => {
       const event = {
         requestContext: {
           requestId: 'test-id',
@@ -338,7 +338,11 @@ describe('RequestLogger', () => {
         headers: {},
       };
 
-      expect(() => logRequest(event)).toThrow();
+      expect(() => logRequest(event)).not.toThrow();
+      expect(logger.info).toHaveBeenCalledWith(
+        'Incoming request',
+        expect.objectContaining({ body: 'invalid json' })
+      );
     });
   });
 
@@ -453,5 +457,73 @@ describe('RequestLogger', () => {
         })
       );
     });
+  });
+});
+
+describe('RequestLogger with a RouterRequest', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const request = {
+    method: 'POST',
+    path: '/api/users',
+    headers: { 'user-agent': ['a', 'b'] },
+    clientIp: '203.0.113.5',
+    requestId: 'req-9',
+    body: { name: 'John' },
+    query: { q: '1' },
+    params: { id: '7' },
+  };
+
+  it('takes identity from the RouterRequest', () => {
+    createRequestLogger(request).info('test');
+    expect(logger.info).toHaveBeenCalledWith(
+      'test',
+      expect.objectContaining({
+        requestId: 'req-9',
+        method: 'POST',
+        path: '/api/users',
+        sourceIp: '203.0.113.5',
+        userAgent: 'a, b',
+      })
+    );
+  });
+
+  it('logs the parsed body, query and params', () => {
+    logRequest(request);
+    expect(logger.info).toHaveBeenCalledWith(
+      'Incoming request',
+      expect.objectContaining({
+        body: { name: 'John' },
+        queryParams: { q: '1' },
+        pathParams: { id: '7' },
+      })
+    );
+  });
+
+  it('reads status from a RouterResponse, defaulting to 200', () => {
+    logResponse(request, { status: 404 }, 5);
+    expect(logger.error).toHaveBeenCalledWith(
+      'Request completed',
+      expect.objectContaining({ statusCode: 404, success: false })
+    );
+    logResponse(request, {}, 5);
+    expect(logger.info).toHaveBeenCalledWith(
+      'Request completed',
+      expect.objectContaining({ statusCode: 200, success: true })
+    );
+  });
+
+  it('reads the format 2.0 sourceIp from a raw event', () => {
+    createRequestLogger({
+      requestContext: {
+        requestId: 'r',
+        http: { method: 'GET', path: '/', sourceIp: '198.51.100.1' },
+      },
+      headers: { 'x-forwarded-for': '6.6.6.6' },
+    }).info('test');
+    expect(logger.info).toHaveBeenCalledWith(
+      'test',
+      expect.objectContaining({ sourceIp: '198.51.100.1' })
+    );
   });
 });

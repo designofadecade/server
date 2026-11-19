@@ -10,7 +10,7 @@
  * import { handler } from './lambda/handler.js';
  * import Local from '@designofadecade/local';
  *
- * const localHandler = Local.LambdaProxyRouter(handler, {
+ * const localHandler = Local.EventFunctionProxy(handler, {
  *     requestContext: { stage: 'dev' }
  * });
  *
@@ -24,15 +24,14 @@ import Router from '../router/Router.js';
 import Routes from '../router/Routes.js';
 import type { RouterRequest, RouterResponse } from '../router/Router.js';
 import type { IncomingMessage, ServerResponse } from 'http';
-import { randomUUID } from 'node:crypto';
 
-interface LambdaProxyRouterOptions {
+interface EventFunctionProxyOptions {
   requestContext?: Record<string, unknown>;
   event?: Record<string, unknown>;
 }
 
 /**
- * The event `LambdaProxyRouter` synthesises, shaped as an API Gateway HTTP API
+ * The event `EventFunctionProxy` synthesises, shaped as an API Gateway HTTP API
  * (payload format 2.0) event.
  *
  * Every field AWS marks required is present, because the wrapped handler is
@@ -42,7 +41,7 @@ interface LambdaProxyRouterOptions {
  * `version`, `routeKey`, `rawQueryString` and `isBase64Encoded`, so passing a
  * conventionally typed handler was a type error.
  */
-export interface LambdaEvent {
+export interface EventFunctionProxyEvent {
   version: string;
   routeKey: string;
   rawPath: string;
@@ -57,7 +56,7 @@ export interface LambdaEvent {
   queryStringParameters: Record<string, string>;
   /**
    * API Gateway v2 sends cookies as `["name=value", ...]`, not as an object.
-   * Emitting an object here meant a wrapped `Router.lambdaEvent` handler ran
+   * Emitting an object here meant a wrapped `Router.eventFunction` handler ran
    * its array guard, found a non-array, and silently discarded every cookie.
    */
   cookies: string[];
@@ -106,10 +105,10 @@ export interface LambdaEvent {
  *   TypeScript only reports the earliest mismatched property, so fixing
  *   `statusCode` alone would just have moved the error one field over.
  *
- * `LambdaProxyRouter` accepts `LambdaResponse | string`; see there for the bare
+ * `EventFunctionProxy` accepts `EventFunctionProxyResult | string`; see there for the bare
  * string return format 2.0 also permits.
  */
-export interface LambdaResponse {
+export interface EventFunctionProxyResult {
   statusCode?: number;
   headers?: Record<string, string | number | boolean>;
   cookies?: string[];
@@ -119,20 +118,21 @@ export interface LambdaResponse {
 
 export default class Local {
   /**
-   * Lambda proxy router for local development
+   * Runs a Lambda Event Function handler locally.
    *
-   * Creates a router that wraps AWS Lambda handlers and allows them to be
-   * run locally with a Node.js HTTP server. Automatically converts between
+   * Wraps a handler written for API Gateway HTTP API (payload format 2.0) so a
+   * plain Node.js HTTP server can drive it. A Web Function needs none of this:
+   * it already is an HTTP server and runs locally as-is. Automatically converts between
    * HTTP requests and Lambda event format.
    *
-   * @param {Function} LambdaHandler - AWS Lambda handler function
+   * @param {Function} eventFunctionHandler - AWS Lambda handler function
    * @param {Object} options - Configuration options
    * @param {Object} options.requestContext - Additional requestContext fields for Lambda event
    * @param {Object} options.event - Additional event fields for Lambda event
    * @returns {Object} Object with request method for handling HTTP requests
    *
    * @example
-   * const handler = Local.LambdaProxyRouter(
+   * const handler = Local.EventFunctionProxy(
    *     async (event) => {
    *         return {
    *             statusCode: 200,
@@ -142,9 +142,11 @@ export default class Local {
    *     { requestContext: { stage: 'local' } }
    * );
    */
-  static LambdaProxyRouter(
-    LambdaHandler: (event: LambdaEvent) => Promise<LambdaResponse | string>,
-    options: LambdaProxyRouterOptions = {}
+  static EventFunctionProxy(
+    eventFunctionHandler: (
+      event: EventFunctionProxyEvent
+    ) => Promise<EventFunctionProxyResult | string>,
+    options: EventFunctionProxyOptions = {}
   ) {
     const router = new Router({
       initRoutes: [
@@ -156,8 +158,8 @@ export default class Local {
               '*',
               ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'],
               async (request: RouterRequest): Promise<RouterResponse> => {
-                const lambdaOptions =
-                  (request.lambdaOptions as {
+                const proxyOptions =
+                  (request.proxyOptions as {
                     requestContext?: Record<string, unknown>;
                     event?: Record<string, unknown>;
                   }) || {};
@@ -171,7 +173,7 @@ export default class Local {
                   headers[name] = Array.isArray(value) ? value.join(', ') : value;
                 }
 
-                const result: LambdaResponse | string = await LambdaHandler({
+                const result: EventFunctionProxyResult | string = await eventFunctionHandler({
                   version: '2.0',
                   routeKey: `${request.method} ${request.path}`,
                   rawPath: request.path,
@@ -195,20 +197,23 @@ export default class Local {
                       method: request.method,
                       path: request.path,
                       protocol: 'HTTP/1.1',
-                      sourceIp: headers['x-forwarded-for']?.split(',')[0]?.trim() ?? '127.0.0.1',
+                      // The socket address, as API Gateway reports the TCP
+                      // peer. The first X-Forwarded-For value is whatever the
+                      // client chose to send, so it never stands in for this.
+                      sourceIp: request.clientIp || '127.0.0.1',
                       userAgent: headers['user-agent'] ?? '',
                     },
-                    requestId: randomUUID(),
+                    requestId: request.requestId,
                     routeKey: `${request.method} ${request.path}`,
                     stage: '$default',
                     time: now.toISOString(),
                     timeEpoch: now.getTime(),
                     authorizer: request.authorizer || null,
-                    ...(lambdaOptions.requestContext || {}),
-                  } as LambdaEvent['requestContext'],
+                    ...(proxyOptions.requestContext || {}),
+                  } as EventFunctionProxyEvent['requestContext'],
                   body: request.body ? JSON.stringify(request.body) : undefined,
                   isBase64Encoded: false,
-                  ...(lambdaOptions.event || {}),
+                  ...(proxyOptions.event || {}),
                 });
 
                 // Format 2.0 lets a handler skip the response envelope: return
@@ -278,7 +283,7 @@ export default class Local {
       ) => {
         return router.nodeJSRequest(req, res, {
           cors: true,
-          lambdaOptions: {
+          proxyOptions: {
             requestContext: {
               ...options.requestContext,
               ...requestOptions.requestContext,

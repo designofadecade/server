@@ -40,7 +40,7 @@ const nodeRequest = async (router: Router) => {
 };
 
 const lambdaRequest = (router: Router) =>
-  router.lambdaEvent({
+  router.eventFunction({
     requestContext: { http: { method: 'GET', path: '/t' } },
     headers: {},
   });

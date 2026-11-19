@@ -4,7 +4,7 @@ import type { AddressInfo } from 'node:net';
 import Local from './Local.ts';
 
 /**
- * The other suites drive `LambdaProxyRouter` with a mocked request and
+ * The other suites drive `EventFunctionProxy` with a mocked request and
  * response, which cannot catch anything Node's HTTP layer does to a header or a
  * body on the way out. This one runs a real Lambda handler over a real socket
  * and reads the result back with `fetch`, so it exercises the whole chain the
@@ -13,8 +13,8 @@ import Local from './Local.ts';
  * Every assertion here is something API Gateway would do with the same handler
  * deployed. A failure means local dev and deployed have diverged.
  */
-const serve = async (handler: Parameters<typeof Local.LambdaProxyRouter>[0]) => {
-  const proxy = Local.LambdaProxyRouter(handler);
+const serve = async (handler: Parameters<typeof Local.EventFunctionProxy>[0]) => {
+  const proxy = Local.EventFunctionProxy(handler);
   const server = http.createServer((req, res) => proxy.request(req, res));
   await new Promise<void>((resolve) => server.listen(0, resolve));
   const { port } = server.address() as AddressInfo;
@@ -25,7 +25,7 @@ const serve = async (handler: Parameters<typeof Local.LambdaProxyRouter>[0]) => 
   };
 };
 
-describe('Local.LambdaProxyRouter over a real socket', () => {
+describe('Local.EventFunctionProxy over a real socket', () => {
   it('delivers status, cookies, headers and an untouched body', async () => {
     // Pretty-printed, with an escape and a trailing-zero number: all three are
     // rewritten by a JSON decode/re-encode round trip and must survive.

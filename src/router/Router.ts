@@ -1,5 +1,5 @@
 import { IncomingMessage, ServerResponse } from 'http';
-import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { logger } from '../logger/Logger.js';
 import RouteError from './RouteError.js';
 import type { ContextLike } from '../context/Context.js';
@@ -15,12 +15,16 @@ import type { ContextLike } from '../context/Context.js';
  * that declared one; the router reads only the fields below, so requiring it
  * bought nothing and blocked the primary use case.
  */
-export interface LambdaHttpEvent {
+export interface EventFunctionEvent {
   requestContext: {
     http: {
       method: string;
       path: string;
+      /** Client address as API Gateway saw the TCP connection. */
+      sourceIp?: string;
     };
+    /** API Gateway's request id; becomes `request.requestId`. */
+    requestId?: string;
     authorizer?: unknown;
   };
   headers: Record<string, string | string[] | undefined>;
@@ -35,8 +39,8 @@ export interface LambdaHttpEvent {
   queryStringParameters?: Record<string, string | undefined>;
 }
 
-/** The API Gateway HTTP API (payload format 2.0) response `lambdaEvent` returns. */
-export interface LambdaHttpResponse {
+/** The API Gateway HTTP API (payload format 2.0) response `eventFunction` returns. */
+export interface EventFunctionResult {
   statusCode: number;
   headers?: Record<string, string>;
   /**
@@ -88,8 +92,29 @@ export interface RouterRequest {
   params: Record<string, string>;
   query: Record<string, string>;
   headers: Record<string, string | string[] | undefined>;
+  /**
+   * The caller's IP address, from a source that cannot be spoofed by the
+   * caller in the current mode:
+   *
+   * - Event Function: `requestContext.http.sourceIp`, set by API Gateway.
+   * - Web Function: the last `X-Forwarded-For` entry, which Lambda appends
+   *   itself (earlier entries are client-supplied and ignored), or the entry
+   *   `trustedProxies` hops further back when a front door such as CloudFront
+   *   sits in front of the endpoint.
+   * - Plain Node server: the socket's remote address. `X-Forwarded-For` is
+   *   never trusted here, because nothing vouches for it.
+   *
+   * Empty string when no address is known.
+   */
+  clientIp: string;
+  /**
+   * An identifier for this request, for log correlation: API Gateway's request
+   * id, Lambda's `lambda-web-request-id`, or a fresh UUID on a plain server.
+   */
+  requestId: string;
   authorizer?: unknown;
-  lambdaOptions?: unknown;
+  /** Transport-specific options a proxy (see `Local`) passes to its catch-all route. */
+  proxyOptions?: unknown;
 }
 
 export interface RouterResponse {
@@ -145,6 +170,21 @@ export interface RouterOptions {
    * is always `null` — an unverified token is never exposed.
    */
   jwt?: JwtOptions;
+  /**
+   * Treat Node requests as arriving through a Lambda Web Function endpoint:
+   * read `clientIp` from `X-Forwarded-For` and `requestId` from
+   * `lambda-web-request-id`. Defaults to whether `AWS_LAMBDA_HTTP_ENDPOINT` is
+   * set. Never enable it on a server clients reach directly — those headers
+   * are only trustworthy because Lambda strips and rewrites them.
+   */
+  webFunction?: boolean;
+  /**
+   * Web Function only: the number of proxies you control in front of the
+   * Lambda endpoint (CloudFront in front of the endpoint = 1). Each one
+   * appends the address it saw, so the client is that many entries before the
+   * last. Default `0`. Has no effect on a plain server or an Event Function.
+   */
+  trustedProxies?: number;
 }
 
 export type RouterMiddleware = (request: RouterRequest) => Promise<RouterResponse | void>;
@@ -163,6 +203,8 @@ export default class Router {
   #bearerToken: string | null = null;
   #jwt: JwtOptions | null = null;
   #globalMiddleware: RouterMiddleware[] = [];
+  #webFunction: boolean;
+  #trustedProxies: number;
 
   constructor({
     context,
@@ -170,7 +212,14 @@ export default class Router {
     bearerToken = null,
     middleware = [],
     jwt,
+    webFunction = Boolean(process.env.AWS_LAMBDA_HTTP_ENDPOINT),
+    trustedProxies = 0,
   }: RouterOptions = {}) {
+    if (!Number.isInteger(trustedProxies) || trustedProxies < 0) {
+      throw new Error('trustedProxies must be a non-negative integer');
+    }
+    this.#webFunction = webFunction;
+    this.#trustedProxies = trustedProxies;
     this.#bearerToken = bearerToken;
     this.#jwt = jwt ?? null;
     this.#globalMiddleware = Array.isArray(middleware) ? middleware : [];
@@ -272,7 +321,15 @@ export default class Router {
     }
   }
 
-  async lambdaEvent(event: LambdaHttpEvent): Promise<LambdaHttpResponse> {
+  /**
+   * Handles an API Gateway HTTP API (payload format 2.0) event — the Lambda
+   * Event Function model. Export it as the Lambda handler:
+   *
+   * ```ts
+   * export const handler = (event: APIGatewayProxyEventV2) => router.eventFunction(event);
+   * ```
+   */
+  async eventFunction(event: EventFunctionEvent): Promise<EventFunctionResult> {
     try {
       let body = Router.MethodsWithBody.includes(event.requestContext.http.method)
         ? event.body
@@ -305,6 +362,8 @@ export default class Router {
         params: {},
         query: Router.#compactQuery(event?.queryStringParameters),
         headers: event.headers || {},
+        clientIp: event.requestContext.http.sourceIp ?? '',
+        requestId: event.requestContext.requestId || randomUUID(),
         authorizer: event.requestContext.authorizer || null,
       });
 
@@ -327,7 +386,7 @@ export default class Router {
         defaultMessage: 'Request processing failed',
         status: 500,
         context: {
-          source: 'Router.lambdaEvent',
+          source: 'Router.eventFunction',
           path: event.requestContext?.http?.path,
           method: event.requestContext?.http?.method,
         },
@@ -348,8 +407,8 @@ export default class Router {
     res: ServerResponse,
     {
       cors,
-      lambdaOptions,
-    }: { cors?: boolean | string[]; lambdaOptions?: Record<string, unknown> } = {}
+      proxyOptions,
+    }: { cors?: boolean | string[]; proxyOptions?: Record<string, unknown> } = {}
   ): Promise<void> {
     if (cors) {
       // SECURITY: Reflecting an arbitrary Origin alongside
@@ -426,8 +485,10 @@ export default class Router {
         params: {},
         query: Object.fromEntries(requestUrl.searchParams),
         headers: req.headers as Record<string, string | string[] | undefined>,
+        clientIp: this.#nodeClientIp(req),
+        requestId: this.#nodeRequestId(req),
         authorizer: await this.#createAuthorizerFromHeaders(req.headers),
-        lambdaOptions: lambdaOptions || {},
+        proxyOptions: proxyOptions || {},
       });
 
       if (!response || typeof response !== 'object') {
@@ -470,6 +531,41 @@ export default class Router {
           : JSON.stringify(errorResponse.body)
       );
     }
+  }
+
+  /**
+   * See `RouterRequest.clientIp`. In a Web Function, Lambda appends the
+   * connecting address as the LAST `X-Forwarded-For` value; everything before
+   * it came from the client. Reading the first value — the common idiom —
+   * hands the client the choice of its own IP.
+   */
+  #nodeClientIp(req: IncomingMessage): string {
+    if (this.#webFunction) {
+      const header = req.headers['x-forwarded-for'];
+      const raw = Array.isArray(header) ? header.join(',') : (header ?? '');
+      const hops = raw
+        .split(',')
+        .map((value) => value.trim())
+        .filter(Boolean);
+      return hops[hops.length - 1 - this.#trustedProxies] ?? '';
+    }
+    return req.socket?.remoteAddress ?? '';
+  }
+
+  /**
+   * Lambda strips any client-sent `lambda-web-*` header before adding its own
+   * `lambda-web-request-id`, so it is trusted only in Web Function mode. On a
+   * plain server a client could set it to anything, including text crafted
+   * to forge log lines.
+   */
+  #nodeRequestId(req: IncomingMessage): string {
+    if (this.#webFunction) {
+      const id = req.headers['lambda-web-request-id'];
+      // Lambda's ids are short and plain; anything else is not from Lambda
+      // (most likely `webFunction` set on a server clients reach directly).
+      if (typeof id === 'string' && /^[A-Za-z0-9._:-]{1,128}$/.test(id)) return id;
+    }
+    return randomUUID();
   }
 
   #parseCookies(cookieHeader: string): Record<string, string> {
