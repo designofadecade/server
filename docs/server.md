@@ -344,7 +344,10 @@ try {
 | `SERVER_PAYLOAD_TOO_LARGE` | An `Expect: 100-continue` body over `maxBodyBytes` was refused (`warn`) |
 
 The `413` the server sends for that refusal carries `error.code`
-`PAYLOAD_TOO_LARGE` in its body, as the router's does.
+`PAYLOAD_TOO_LARGE` in its body, as the router's does, and closes the
+connection the same way: the connection is marked so a request pipelined
+behind the refused body is never handed to `requestHandler`, and a client that
+sends the body anyway still reads the `413` rather than a reset.
 
 ## Integration with Router
 

@@ -1,6 +1,7 @@
 import { EventEmitter } from 'events';
 import Http, { IncomingMessage, ServerResponse } from 'http';
 import { logger } from '../logger/Logger.js';
+import { answerPayloadTooLarge, isRefusedConnection } from '../router/internal.js';
 
 export interface ServerOptions {
   /**
@@ -235,7 +236,17 @@ export default class Server extends EventEmitter {
   }
 
   #start(webFunction: boolean): void {
-    const server = Http.createServer(this.#timeouts, this.#requestHandler);
+    const handler = this.#requestHandler;
+    // SECURITY: a request pipelined behind a refused upload is never served,
+    // whatever the handler is; its connection is already closing.
+    const dispatch = (req: IncomingMessage, res: ServerResponse): void => {
+      if (isRefusedConnection(req.socket)) {
+        req.resume();
+        return;
+      }
+      handler(req, res);
+    };
+    const server = Http.createServer(this.#timeouts, dispatch);
     this.#server = server;
 
     const maxBodyBytes = this.#maxBodyBytes;
@@ -244,6 +255,10 @@ export default class Server extends EventEmitter {
       // `100 Continue` by itself, so a client announcing an oversized body
       // can be refused before it sends a byte of it.
       server.on('checkContinue', (req: IncomingMessage, res: ServerResponse) => {
+        if (isRefusedConnection(req.socket)) {
+          req.resume();
+          return;
+        }
         const declared = Number(req.headers['content-length']);
         if (Number.isFinite(declared) && declared > maxBodyBytes) {
           logger.warn('Refused request body over the size limit', {
@@ -252,15 +267,10 @@ export default class Server extends EventEmitter {
             method: req.method,
             maxBodyBytes,
           });
-          res.statusCode = 413;
-          res.setHeader('Content-Type', 'application/json');
-          res.setHeader('Connection', 'close');
-          res.end(
-            JSON.stringify({
-              success: false,
-              error: { code: 'PAYLOAD_TOO_LARGE', message: 'Request body too large' },
-            })
-          );
+          // The router's refusal: the connection is marked so a request
+          // pipelined behind this one is not served, and a client that
+          // sends the body anyway still reads the 413 (lingering close).
+          answerPayloadTooLarge(req, res);
           return;
         }
         res.writeContinue();

@@ -374,6 +374,11 @@ Every item is a rename unless marked otherwise. There are no aliases.
   is read and discarded (at most 4 MiB, then the connection is cut), and the
   socket closes when the upload ends or after 2 s. Buffered chunks are
   released as soon as the limit is exceeded.
+- **A request pipelined behind an `Expect: 100-continue` body refused with
+  `413` is not served, and that `413` is delivered with the same graceful
+  close as the router's.** `Server`'s refusal neither marked the connection
+  nor delayed the close, so a request sent behind the refused body still ran,
+  and a client that uploaded anyway could see a reset instead of the `413`.
 - **A client that disconnects mid-upload is not an error.** It was logged at
   `ERROR` with a stack and answered with a `500` nobody received, and the body
   read could hang when the connection closed before the body ended. It is now

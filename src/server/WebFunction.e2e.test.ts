@@ -442,6 +442,92 @@ describe('Expect: 100-continue against the body limit', () => {
     expect(data.startsWith('HTTP/1.1 100 Continue')).toBe(true);
   });
 
+  it('does not serve a request pipelined behind a refused 100-continue body', async () => {
+    vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    const handler = vi.fn((_req: Http.IncomingMessage, res: Http.ServerResponse) => res.end('ok'));
+    const port = await freePort();
+    server = new Server({ port, host: '127.0.0.1', maxBodyBytes: 10 }, handler);
+    await server.ready;
+
+    // The client sends the body without waiting, then a second request.
+    const data = await rawExchange(
+      port,
+      'POST /upload HTTP/1.1\r\nHost: x\r\nExpect: 100-continue\r\nContent-Length: 20\r\n\r\n' +
+        'a'.repeat(20) +
+        'GET /next HTTP/1.1\r\nHost: x\r\n\r\n'
+    );
+
+    expect(data.startsWith('HTTP/1.1 413')).toBe(true);
+    expect(data.match(/HTTP\/1\.1 \d{3}/g)).toEqual(['HTTP/1.1 413']);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('does not run a route pipelined behind a refused 100-continue body (WebFunction)', async () => {
+    vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    const hits: string[] = [];
+    class Tracked extends Routes {
+      constructor(router: Router) {
+        super(router);
+        this.addRoute('/next', 'GET', async () => {
+          hits.push('GET /next');
+          return { body: { ok: true } };
+        });
+      }
+    }
+    const port = await freePort();
+    server = WebFunction.serve(new Router({ initRoutes: [Tracked], maxBodyBytes: 10 }), {
+      port,
+      host: '127.0.0.1',
+    });
+    await server.ready;
+
+    const data = await rawExchange(
+      port,
+      'POST /upload HTTP/1.1\r\nHost: x\r\nExpect: 100-continue\r\nContent-Length: 20\r\n\r\n' +
+        'a'.repeat(20) +
+        'GET /next HTTP/1.1\r\nHost: x\r\n\r\n'
+    );
+
+    expect(data.startsWith('HTTP/1.1 413')).toBe(true);
+    expect(hits).toEqual([]);
+  });
+
+  it('delivers the 413 to a client that uploads anyway after its continue timeout', async () => {
+    vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    const port = await freePort();
+    server = new Server({ port, host: '127.0.0.1', maxBodyBytes: 100 }, (_req, res) =>
+      res.end('ok')
+    );
+    await server.ready;
+
+    // The client reads nothing until its upload is done, so the 413 sits
+    // unread in its receive buffer: a reset from the server would discard it.
+    const size = 1024 * 1024;
+    const upload = (): Promise<string> =>
+      new Promise((resolve) => {
+        const socket = createConnection(port, '127.0.0.1');
+        let data = '';
+        socket.pause();
+        socket.on('data', (chunk) => (data += chunk.toString('latin1')));
+        socket.on('error', (error: NodeJS.ErrnoException) => resolve(`error ${error.code}`));
+        socket.on('close', () => resolve(data));
+        socket.write(
+          `POST /upload HTTP/1.1\r\nHost: x\r\nExpect: 100-continue\r\nContent-Length: ${size}\r\n\r\n`
+        );
+        // Like curl after its continue wait: send the body regardless.
+        setTimeout(() => {
+          socket.write(Buffer.alloc(size, 97), () => {
+            setTimeout(() => socket.resume(), 50);
+          });
+        }, 30);
+        setTimeout(() => socket.destroy(), 3000).unref();
+      });
+
+    for (let run = 0; run < 10; run++) {
+      expect((await upload()).slice(0, 12)).toBe('HTTP/1.1 413');
+    }
+  }, 30_000);
+
   it.each([0, -1, 1.5, NaN])('rejects maxBodyBytes %s', (value) => {
     expect(() => new Server({ maxBodyBytes: value }, () => {})).toThrow(/maxBodyBytes/);
   });

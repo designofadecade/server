@@ -4,7 +4,12 @@ import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto
 import { logger } from '../logger/Logger.js';
 import RouteError from './RouteError.js';
 import { isCorsSafelistedContentType, isSameOriginRequest } from './origin.js';
-import { RAW_BODY } from './internal.js';
+import {
+  RAW_BODY,
+  answerPayloadTooLarge,
+  isRefusedConnection,
+  payloadTooLargeBody,
+} from './internal.js';
 import type { ContextLike } from '../context/Context.js';
 
 /**
@@ -241,22 +246,10 @@ class ClientAbortedError extends Error {
   }
 }
 
-/**
- * Connections that were answered 413 and are being closed. Node keeps parsing
- * what arrives on them, so a request pipelined behind the refused body would
- * otherwise still reach a route — on a connection already told
- * `Connection: close`.
- */
-const refusedConnections = new WeakSet<object>();
-
 export default class Router {
   static MethodsWithBody = ['POST', 'PUT', 'PATCH'];
   static #MAX_CACHE_SIZE = 1000;
   static #DEFAULT_MAX_BODY_BYTES = 1024 * 1024; // 1 MiB
-  /** Most of a refused upload read (and discarded) so the 413 can land. */
-  static #MAX_DRAIN_BYTES = 4 * 1024 * 1024;
-  /** How long a refused upload's connection may linger before it is cut. */
-  static #REFUSED_UPLOAD_LINGER_MS = 2000;
 
   #routes = {
     cache: new Map<string, RouteRegistration | null>(),
@@ -538,7 +531,7 @@ export default class Router {
 
     // SECURITY: a request pipelined behind a refused upload is never served;
     // its connection is already closing.
-    if (req.socket && refusedConnections.has(req.socket)) {
+    if (isRefusedConnection(req.socket)) {
       req.resume?.();
       return;
     }
@@ -688,7 +681,7 @@ export default class Router {
           method: req.method,
           maxBodyBytes: this.#maxBodyBytes,
         });
-        Router.#answerPayloadTooLarge(req, res);
+        answerPayloadTooLarge(req, res);
         return;
       }
       if (error instanceof ClientAbortedError) {
@@ -986,64 +979,6 @@ export default class Router {
   }
 
   /**
-   * Answers 413 to a body over the limit without losing the answer to a TCP
-   * reset. Destroying the socket while unread upload bytes sit in the
-   * kernel's receive buffer makes it send RST, and a client still uploading
-   * (Node's `http.request`, `fetch`, curl) then reports ECONNRESET instead of
-   * the 413. So the response goes out with `Connection: close`, the rest of
-   * the upload is read and discarded — at most `#MAX_DRAIN_BYTES`, then the
-   * connection is cut — and the socket is destroyed after
-   * `#REFUSED_UPLOAD_LINGER_MS` if the client has not closed it by then
-   * (also the fallback when the response never finishes because the client
-   * reads nothing).
-   */
-  static #answerPayloadTooLarge(req: IncomingMessage, res: ServerResponse): void {
-    const socket = req.socket;
-    if (socket) refusedConnections.add(socket);
-    const cut = () => {
-      if (socket && !socket.destroyed) socket.destroy();
-    };
-    const linger = setTimeout(cut, Router.#REFUSED_UPLOAD_LINGER_MS);
-    linger.unref?.();
-    socket?.once?.('close', () => clearTimeout(linger));
-
-    // Lingering close. With `Connection: close`, Node ends the response with
-    // `socket.destroySoon()`, which destroys the socket as soon as the FIN is
-    // flushed — while the client may still be uploading, so the next bytes
-    // to arrive draw a reset that can wipe the unread 413 from the client's
-    // receive buffer. Half-close instead; the drain, the byte cap and the
-    // timer below decide when the socket is actually destroyed.
-    let closeWhenFlushed = cut;
-    if (socket && typeof socket.destroySoon === 'function') {
-      const destroySoon = socket.destroySoon;
-      closeWhenFlushed = () => destroySoon.call(socket);
-      socket.destroySoon = function lingeringClose(this: typeof socket) {
-        if (this.writable) this.end();
-      };
-    }
-
-    let drained = 0;
-    req.on?.('error', () => {});
-    req.on?.('data', (chunk: Buffer | string) => {
-      drained += chunk.length;
-      if (drained > Router.#MAX_DRAIN_BYTES) cut();
-    });
-    // The whole upload has arrived: nothing is left to draw a reset, so the
-    // connection can go once the answer is out.
-    req.on?.('end', () => {
-      if (res.writableFinished) closeWhenFlushed();
-      else res.once?.('finish', closeWhenFlushed);
-    });
-    req.resume?.();
-
-    res.statusCode = 413;
-    res.setHeader('Content-Type', 'application/json');
-    // The connection cannot be reused for another request: say so.
-    res.setHeader('Connection', 'close');
-    res.end(Router.#payloadTooLargeBody());
-  }
-
-  /**
    * Whether a body-read failure is the client going away (connection reset,
    * aborted upload) rather than a fault on this side.
    */
@@ -1134,18 +1069,11 @@ export default class Router {
     return Math.max(0, Math.floor((compact.length * 3) / 4) - padding);
   }
 
-  static #payloadTooLargeBody(): string {
-    return JSON.stringify({
-      success: false,
-      error: { code: 'PAYLOAD_TOO_LARGE', message: 'Request body too large' },
-    });
-  }
-
   static #payloadTooLargeResult(): EventFunctionResult {
     return {
       statusCode: 413,
       headers: { 'Content-Type': 'application/json' },
-      body: Router.#payloadTooLargeBody(),
+      body: payloadTooLargeBody(),
     };
   }
 
