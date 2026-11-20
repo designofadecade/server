@@ -177,8 +177,13 @@ http.createServer((req, res) => local.request(req, res)).listen(3000, '0.0.0.0')
 ```
 
 Entries are IPv4 or IPv6 addresses or CIDR ranges (`10.0.0.0/8`,
-`fd00::/8`); an IPv4-mapped IPv6 peer is matched against IPv4 entries. An
-entry that is neither throws when the proxy is created. `allowedPeers: true`
+`fd00::/8`); an IPv4-mapped IPv6 peer is matched against IPv4 entries, and an
+IPv4-mapped range (`::ffff:10.0.0.0/104`) is taken as the IPv4 range it maps
+(`10.0.0.0/8`). IPv6 entries cover IPv4 peers too: Node's `BlockList` maps the
+two families, so `::/0` admits every IPv4 peer as well. An entry that is
+neither, an IPv6 address with a zone id (`fe80::1%eth0`, which no peer
+address carries) or an IPv4-mapped range wider than `/96` throws when the
+proxy is created. `allowedPeers: true`
 serves any peer and logs `LOCAL_PEER_CHECK_DISABLED` once at startup: every
 machine that can reach the port then acts as the injected authorizer.
 

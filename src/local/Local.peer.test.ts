@@ -139,6 +139,13 @@ describe('Local.EventFunctionProxy peer check', () => {
       [['10.0.0.0/8', 'fd00::/8'], 'fd12::5'],
       [[' 192.168.1.20 '], '192.168.1.20'],
       [['0.0.0.0/0'], '203.0.113.9'],
+      // An IPv4-mapped range is the IPv4 range it maps (/104 is /8).
+      [['::ffff:10.0.0.0/104'], '10.20.30.40'],
+      [['::ffff:10.0.0.0/104'], '::ffff:10.20.30.40'],
+      [['::FFFF:192.168.1.0/120'], '192.168.1.77'],
+      [['::ffff:192.168.1.20/128'], '192.168.1.20'],
+      // Node's BlockList maps families: an IPv6 rule also covers IPv4 peers.
+      [['::/0'], '203.0.113.9'],
     ])('%j admits peer %j', async (allowedPeers, remoteAddress) => {
       const { handler, res } = await run(remoteAddress, { allowedPeers });
       expect(res.statusCode).toBe(200);
@@ -150,6 +157,8 @@ describe('Local.EventFunctionProxy peer check', () => {
       [['192.168.1.0/24'], '192.168.2.1'],
       [['fd00::/8'], 'fe80::1'],
       [[], '192.168.1.20'],
+      [['::ffff:10.0.0.0/104'], '11.0.0.1'],
+      [['::ffff:192.168.1.0/120'], '192.168.2.1'],
     ])('%j still refuses peer %j', async (allowedPeers, remoteAddress) => {
       vi.spyOn(logger, 'warn').mockImplementation(() => {});
       const { handler, res } = await run(remoteAddress, { allowedPeers });
@@ -229,10 +238,28 @@ describe('Local.EventFunctionProxy peer check', () => {
       '1.2.3.4/8/1',
       '::/129',
       '192.168.1.256',
+      '::ffff:10.0.0.0/129',
     ])('throws at construction on entry %j', (entry) => {
       expect(() =>
         Local.EventFunctionProxy(async () => ({ statusCode: 200 }), { allowedPeers: [entry] })
       ).toThrow(TypeError);
+    });
+
+    it.each(['fe80::1%eth0', 'fe80::%25lo0', 'fe80::/10%eth0', 'fe80::1%eth0/64'])(
+      'throws on an IPv6 zone id, which no peer address carries: %j',
+      (entry) => {
+        expect(() =>
+          Local.EventFunctionProxy(async () => ({ statusCode: 200 }), { allowedPeers: [entry] })
+        ).toThrow(/zone id/);
+      }
+    );
+
+    it('throws on an IPv4-mapped range wider than ::ffff:0.0.0.0/96, naming the IPv4 form', () => {
+      expect(() =>
+        Local.EventFunctionProxy(async () => ({ statusCode: 200 }), {
+          allowedPeers: ['::ffff:10.0.0.0/80'],
+        })
+      ).toThrow(/write IPv4 ranges in IPv4 form/);
     });
 
     it('throws on a non-string entry', () => {

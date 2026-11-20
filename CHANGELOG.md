@@ -97,8 +97,11 @@ the reasoning for choosing a mode is in
 - **`Local.EventFunctionProxy` option `allowedPeers?: string[] | true`** —
   client IP addresses or CIDR ranges (IPv4 or IPv6) served besides loopback
   peers; `true` serves any peer and logs `LOCAL_PEER_CHECK_DISABLED` once at
-  startup. An entry that is not an address or range throws when the proxy is
-  created (see Security).
+  startup. An IPv4-mapped range (`::ffff:10.0.0.0/104`) is taken as the IPv4
+  range it maps (`10.0.0.0/8`). An entry that is not an address or range, an
+  IPv6 address with a zone id (`fe80::1%eth0`, which could never match) or an
+  IPv4-mapped range wider than `/96` throws when the proxy is created (see
+  Security).
 - **`logRequest` options `logBody`, `bodyFields`, `paramFields` and
   `logPath`** — name the body fields and parameters whose values may be
   logged, and opt the raw path back in (see Security).

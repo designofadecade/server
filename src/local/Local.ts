@@ -157,26 +157,39 @@ function peerAddressOf(value: unknown): [string, 'ipv4' | 'ipv6'] | null {
 
 /**
  * Builds the opt-in peer list from `allowedPeers` entries: addresses
- * (`192.168.1.30`, `fd00::1`) or CIDR ranges (`192.168.1.0/24`). Throws on
- * anything else, so a typo cannot silently leave the list narrower or wider
- * than intended.
+ * (`192.168.1.30`, `fd00::1`) or CIDR ranges (`192.168.1.0/24`). An
+ * IPv4-mapped range in dotted form (`::ffff:10.0.0.0/104`) is taken as the
+ * IPv4 range it maps (`10.0.0.0/8`). Throws on anything else, including an
+ * IPv6 zone id (`fe80::1%eth0`, which no peer address ever matches), so a
+ * typo cannot silently leave the list narrower or wider than intended.
  */
 function peerListOf(entries: readonly string[]): BlockList {
   const list = new BlockList();
   for (const entry of entries) {
+    const invalid = (why = 'is not an IP address or CIDR range'): TypeError =>
+      new TypeError(`EventFunctionProxy allowedPeers: ${JSON.stringify(entry)} ${why}`);
     const [rawAddress, prefix, ...rest] = typeof entry === 'string' ? entry.trim().split('/') : [];
+    if (typeof entry === 'string' && entry.includes('%')) {
+      throw invalid('has an IPv6 zone id, which no peer address carries; drop the %zone');
+    }
     const parsed = peerAddressOf(rawAddress);
-    const prefixLength = prefix === undefined ? undefined : Number(prefix);
-    const maxPrefix = parsed?.[1] === 'ipv4' ? 32 : 128;
-    if (
-      !parsed ||
-      rest.length > 0 ||
-      (prefix !== undefined &&
-        (!/^\d{1,3}$/.test(prefix) || prefixLength! < 0 || prefixLength! > maxPrefix))
-    ) {
-      throw new TypeError(
-        `EventFunctionProxy allowedPeers: ${JSON.stringify(entry)} is not an IP address or CIDR range`
-      );
+    if (!parsed || rest.length > 0 || (prefix !== undefined && !/^\d{1,3}$/.test(prefix))) {
+      throw invalid();
+    }
+    let prefixLength = prefix === undefined ? undefined : Number(prefix);
+    // `peerAddressOf` unwrapped a dotted IPv4-mapped address: its prefix
+    // counts the 96 bits of `::ffff:` too.
+    const mapped = parsed[1] === 'ipv4' && parsed[0] !== rawAddress;
+    if (mapped && prefixLength !== undefined) {
+      if (prefixLength < 96 || prefixLength > 128) {
+        throw invalid(
+          'is an IPv4-mapped range wider than ::ffff:0.0.0.0/96; write IPv4 ranges in IPv4 form (10.0.0.0/8)'
+        );
+      }
+      prefixLength -= 96;
+    }
+    if (prefixLength !== undefined && prefixLength > (parsed[1] === 'ipv4' ? 32 : 128)) {
+      throw invalid();
     }
     if (prefixLength === undefined) list.addAddress(parsed[0], parsed[1]);
     else list.addSubnet(parsed[0], prefixLength, parsed[1]);
