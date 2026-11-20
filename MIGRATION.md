@@ -288,7 +288,11 @@ read their values. Log lines carry `route` (the matched pattern, e.g.
 `/users/:id`) instead of `path`; pass `{ logPath: true }` to `logRequest`,
 `createRequestLogger` or `logResponse` to log the raw path too, and update log
 queries that filter on `path`. `route`, `path` and `userAgent` are cut at 256
-characters.
+characters. The router's own error lines (`ROUTER_HANDLER_ERROR`, 404s,
+request failures) follow the same rule: `route`, and no path unless
+`new Router({ logPath: true })` (query removed, 256 characters). The 404
+message is now `Route not found`; update anything that matched
+`Route GET /x does not exist`.
 
 ### 12. CORS-safelisted content types are not JSON-parsed
 
@@ -320,12 +324,17 @@ Nothing changes if you open your frontend at `localhost`, `127.0.0.1` or
   `file:`/`null`) no longer gets CORS. List it:
   `cors: ['http://192.168.1.20:5173']`. This allowlist also sends
   `Access-Control-Allow-Credentials: true`, as the router does.
-- **Cross-origin writes are refused.** A POST/PUT/PATCH/DELETE or preflight
-  from an origin the `cors` mode does not allow (default and `false`:
-  non-loopback; `string[]`: unlisted and not same-origin) gets
-  `403 CROSS_ORIGIN_FORBIDDEN`, form posts and `no-cors` fetches included.
-  Requests with no `Origin` (curl, scripts) are unaffected. A cross-site GET
-  still runs, so keep GET routes free of side effects.
+- **Cross-origin writes are refused.** Any method but GET (HEAD and
+  preflights included) from an origin the `cors` mode does not allow
+  (default and `false`: non-loopback; `string[]`: unlisted and not
+  same-origin) gets `403 CROSS_ORIGIN_FORBIDDEN`, form posts and `no-cors`
+  fetches included. A request with no `Origin` and no `Sec-Fetch-Site` is
+  refused too when it sends a form `Content-Type` (`text/plain`,
+  `application/x-www-form-urlencoded`, `multipart/form-data`) or a body
+  without a `Content-Type`: from curl or a script, send
+  `Content-Type: application/json`. With `allowedHosts: true`, a non-loopback
+  same-origin frontend must be listed in `cors`. A cross-site GET still runs,
+  so keep GET routes free of side effects.
 - **To restore the old behaviour exactly:** `{ cors: true, allowedHosts: true }`.
   This is unsafe: any website you visit can use the proxy with its injected
   authorizer. Both settings log a warning at startup.

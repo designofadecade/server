@@ -199,6 +199,16 @@ export interface RouterOptions {
    * directly they choose the entry this reads.
    */
   trustedProxies?: number;
+  /**
+   * Also write the raw request path to the router's own error log lines
+   * (handler errors, 404s, request failures). Off by default: a path can
+   * carry secrets (`/reset-password/<token>`) and personal data
+   * (`/users/<email>`), so those lines carry only the matched route pattern
+   * (`route`), and no path at all when no route matched. When on, the path is
+   * logged without its query string and cut at 256 characters. Same rule as
+   * `RequestLogger`'s `logPath`.
+   */
+  logPath?: boolean;
 }
 
 export type RouterMiddleware = (request: RouterRequest) => Promise<RouterResponse | void>;
@@ -219,6 +229,7 @@ export default class Router {
   #globalMiddleware: RouterMiddleware[] = [];
   #webFunction: boolean;
   #trustedProxies: number;
+  #logPath: boolean;
 
   constructor({
     context,
@@ -228,12 +239,14 @@ export default class Router {
     jwt,
     webFunction = Boolean(process.env.AWS_LAMBDA_HTTP_ENDPOINT),
     trustedProxies = 0,
+    logPath = false,
   }: RouterOptions = {}) {
     if (!Number.isInteger(trustedProxies) || trustedProxies < 0) {
       throw new Error('trustedProxies must be a non-negative integer');
     }
     this.#webFunction = webFunction;
     this.#trustedProxies = trustedProxies;
+    this.#logPath = logPath === true;
     this.#bearerToken = bearerToken;
     this.#jwt = jwt ?? null;
     this.#globalMiddleware = Array.isArray(middleware) ? middleware : [];
@@ -354,6 +367,27 @@ export default class Router {
     return end === path.length ? path : path.slice(0, end);
   }
 
+  /** Longest raw path written to an error log line when `logPath` is on. */
+  static #MAX_LOGGED_PATH = 256;
+
+  /**
+   * Log fields that identify a request without its own values: the matched
+   * route pattern when known, and the raw path only when `logPath` is on
+   * (query string removed, length capped). See `RouterOptions.logPath`.
+   */
+  #requestLogFields(path: unknown, route?: string): Record<string, string> {
+    const fields: Record<string, string> = {};
+    if (typeof route === 'string') fields.route = route.slice(0, Router.#MAX_LOGGED_PATH);
+    if (this.#logPath && typeof path === 'string') {
+      const bare = path.split('?', 1)[0];
+      fields.path =
+        bare.length > Router.#MAX_LOGGED_PATH
+          ? `${bare.slice(0, Router.#MAX_LOGGED_PATH)}…[truncated, ${bare.length} chars]`
+          : bare;
+    }
+    return fields;
+  }
+
   #pruneCache(): void {
     if (this.#routes.cache.size > Router.#MAX_CACHE_SIZE) {
       const firstKey = this.#routes.cache.keys().next().value;
@@ -372,6 +406,8 @@ export default class Router {
    * ```
    */
   async eventFunction(event: EventFunctionEvent): Promise<EventFunctionResult> {
+    // Kept outside the try so the error log can name the matched route.
+    let routerRequest: RouterRequest | undefined;
     try {
       let body = Router.MethodsWithBody.includes(event.requestContext.http.method)
         ? event.body
@@ -400,7 +436,7 @@ export default class Router {
         }
       }
 
-      const response = await this.#request({
+      routerRequest = {
         path: event.requestContext.http.path,
         method: event.requestContext.http.method,
         body: body,
@@ -411,7 +447,8 @@ export default class Router {
         clientIp: event.requestContext.http.sourceIp ?? '',
         requestId: event.requestContext.requestId || randomUUID(),
         authorizer: event.requestContext.authorizer || null,
-      });
+      };
+      const response = await this.#request(routerRequest);
 
       const { headers, cookies } = Router.#splitResponseHeaders(
         Router.#withDefaultContentType(response.headers)
@@ -433,7 +470,7 @@ export default class Router {
         status: 500,
         context: {
           source: 'Router.eventFunction',
-          path: event.requestContext?.http?.path,
+          ...this.#requestLogFields(event.requestContext?.http?.path, routerRequest?.route),
           method: event.requestContext?.http?.method,
         },
       });
@@ -574,8 +611,10 @@ export default class Router {
       return;
     }
 
+    // Kept outside the try so the error log can name the matched route.
+    let routerRequest: RouterRequest | undefined;
     try {
-      const response = await this.#request({
+      routerRequest = {
         path: requestUrl.pathname,
         method: req.method!,
         body: Router.MethodsWithBody.includes(req.method!)
@@ -589,7 +628,8 @@ export default class Router {
         requestId: this.#nodeRequestId(req),
         authorizer: await this.#createAuthorizerFromHeaders(req.headers),
         proxyOptions: proxyOptions || {},
-      });
+      };
+      const response = await this.#request(routerRequest);
 
       if (!response || typeof response !== 'object') {
         res.statusCode = 500;
@@ -621,7 +661,7 @@ export default class Router {
         status: 500,
         context: {
           source: 'Router.nodeJSRequest',
-          path: req.url,
+          ...this.#requestLogFields(requestUrl.pathname, routerRequest?.route),
           method: req.method,
         },
       });
@@ -962,12 +1002,14 @@ export default class Router {
     const route = this.#findRouteHandler(request.path, request.method);
 
     if (!route) {
-      const notFoundError = new Error(`Route ${request.method} ${request.path} does not exist`);
+      // The path stays out of the message: it is logged (and its stack with
+      // it), and a path can carry secrets.
+      const notFoundError = new Error('Route not found');
       notFoundError.name = 'NotFoundError';
       return RouteError.fromError(notFoundError, {
         defaultMessage: 'Route not found',
         status: 404,
-        context: { path: request.path, method: request.method },
+        context: { ...this.#requestLogFields(request.path), method: request.method },
       });
     }
 
@@ -1025,7 +1067,7 @@ export default class Router {
         context: {
           source: 'Router.request',
           code: 'ROUTER_HANDLER_ERROR',
-          path: request.path,
+          ...this.#requestLogFields(request.path, request.route),
           method: request.method,
         },
       });

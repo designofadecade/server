@@ -115,15 +115,20 @@ frontend. Three checks are on by default. Together they block, for other
 websites:
 
 - **reading responses**: CORS is granted to loopback origins only;
-- **sending anything but GET/HEAD**: a cross-origin `POST`, `PUT`, `DELETE`,
-  `OPTIONS` preflight and so on from an origin that is not allowed gets `403`
-  before the handler runs (form posts and `no-cors` fetches included);
+- **sending anything but GET**: a cross-origin `POST`, `PUT`, `DELETE`,
+  `HEAD`, `OPTIONS` preflight and so on from an origin that is not allowed
+  gets `403` before the handler runs (form posts and `no-cors` fetches
+  included);
 - **DNS rebinding**: a request whose `Host` is not a loopback name gets `403`.
 
-They do **not** stop a cross-site `GET` or `HEAD` from running: a link, an
-`<img>` or a `no-cors` fetch still reaches the handler with the injected
-authorizer; only reading the reply is blocked. **GET routes must not have side
-effects.**
+They do **not** stop a cross-site `GET` from running: a link, an `<img>` or a
+`no-cors` fetch still reaches the handler with the injected authorizer; only
+reading the reply is blocked. Only `GET` is exempt, so **GET routes must not
+have side effects.**
+
+In the default mode any loopback origin on any port (including `*.localhost`)
+may write, so another local app with an XSS hole can drive the proxy; list
+your frontend's origins with `cors: [...]` to narrow that.
 
 ### Host check (DNS rebinding)
 
@@ -150,8 +155,14 @@ Local.EventFunctionProxy(handler, {
 });
 ```
 
-`allowedHosts: true` turns the check off. It is unsafe, and the proxy logs a
-warning (`LOCAL_HOST_CHECK_DISABLED`) once when it is created.
+`allowedHosts: true` turns the check off. It is unsafe: a DNS-rebinding page
+can then read `GET` responses. The proxy logs a warning
+(`LOCAL_HOST_CHECK_DISABLED`) once when it is created. Writes stay limited:
+with the Host check off, neither `Sec-Fetch-Site: same-origin` nor an
+`Origin` that matches the `Host` vouches for a non-loopback origin (a
+rebinding page produces both), so only loopback origins and, with
+`cors: [...]`, the listed origins may write. Prefer listing names in
+`allowedHosts`.
 
 ### CORS
 
@@ -169,16 +180,22 @@ pages) and any non-http(s) scheme get no CORS grant.
 
 Withholding CORS headers only stops another site reading the response; a
 browser still sends a form post or a `no-cors` fetch. So, unless `cors: true`,
-a request whose method is not `GET` or `HEAD` (`OPTIONS` included) is refused
+a request whose method is not `GET` (`HEAD` and `OPTIONS` included) is refused
 when it is cross-origin from an origin the mode does not allow:
 
 - it carries an `Origin` that is not allowed, or
 - its `Sec-Fetch-Site` is `cross-site` or `same-site` and it carries no allowed
-  `Origin`.
+  `Origin`, or
+- it carries neither `Origin` nor `Sec-Fetch-Site` (older browsers send
+  neither on a form post) and its `Content-Type` is one a form can send
+  (`application/x-www-form-urlencoded`, `multipart/form-data`, `text/plain`,
+  compared on the MIME type as the router does), or it has a body
+  (`Content-Length` above 0, or `Transfer-Encoding`) with no `Content-Type`.
 
 Allowed origins are loopback origins for the default and `cors: false`, and the
-listed origins plus same-origin requests for `cors: string[]`. The refusal runs
-after the Host check and before the body is read:
+listed origins plus same-origin requests for `cors: string[]` (with
+`allowedHosts: true`, same-origin counts only for a loopback origin). The
+refusal runs after the Host check and before the body is read:
 
 ```json
 {
@@ -188,8 +205,10 @@ after the Host check and before the body is read:
 ```
 
 and is logged as `LOCAL_CROSS_ORIGIN_BLOCKED`. A request with no `Origin` and no
-cross-site `Sec-Fetch-Site` (curl, server-to-server) is not a browser
-cross-origin request and passes. `cors: true` keeps allowing everything.
+`Sec-Fetch-Site` (curl, server-to-server) passes when it sends a non-form
+`Content-Type` such as `application/json`, or no body and no `Content-Type`;
+send `-H 'Content-Type: application/json'` from curl. `cors: true` keeps
+allowing everything.
 
 CORS is enforced by browsers only. A non-browser client on the same machine
 can still call the proxy, and the Host check does not stop it: keep the

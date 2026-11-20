@@ -351,6 +351,19 @@ describe('Local.EventFunctionProxy unsafe opt-ins', () => {
     }
   });
 
+  it('the allowedHosts: true warning says what rebinding can still do', () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    try {
+      Local.EventFunctionProxy(async () => ({ statusCode: 200 }), { allowedHosts: true });
+      const message = String(warn.mock.calls[0]![0]);
+      expect(message).toContain('DNS-rebinding');
+      expect(message).toContain('read GET responses');
+      expect(message).toContain('cross-origin writes are still limited');
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it('does not warn for the defaults or for explicit lists', () => {
     const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
     try {
@@ -539,9 +552,91 @@ describe('Local.EventFunctionProxy cross-origin writes (CSRF)', () => {
     expect(headers['access-control-allow-origin']).toBeUndefined();
   });
 
-  it('still runs a HEAD from evil', async () => {
-    const { handler } = await runWithBody({ method: 'HEAD', headers: evil });
+  // Only GET is exempt: a HEAD runs the handler just as a POST does.
+  it('refuses a HEAD from evil', async () => {
+    const { res, handler } = await runWithBody({ method: 'HEAD', headers: evil });
+    forbidden(res);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('allows a HEAD with no Origin and no Sec-Fetch-Site (curl)', async () => {
+    const { res, handler } = await runWithBody({ method: 'HEAD', headers: {} });
+    expect(res.statusCode).toBe(200);
     expect(handler).toHaveBeenCalled();
+  });
+
+  describe('no Origin and no Sec-Fetch-Site (older browsers send neither on a form post)', () => {
+    it.each([
+      'application/x-www-form-urlencoded',
+      'multipart/form-data; boundary=x',
+      'text/plain;charset=UTF-8',
+      ' Text/Plain ',
+    ])('refuses a POST with form Content-Type %j', async (contentType) => {
+      const { res, handler, on } = await runWithBody({
+        method: 'POST',
+        headers: { 'content-type': contentType, 'content-length': '3' },
+        body: 'a=1',
+      });
+      forbidden(res);
+      expect(handler).not.toHaveBeenCalled();
+      expect(on).not.toHaveBeenCalled();
+    });
+
+    it('refuses a bodiless POST with a form Content-Type', async () => {
+      const { res } = await runWithBody({
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded', 'content-length': '0' },
+      });
+      forbidden(res);
+    });
+
+    it.each([{ 'content-length': '5' }, { 'transfer-encoding': 'chunked' }])(
+      'refuses a body with no Content-Type (%j)',
+      async (bodyHeaders) => {
+        const { res, handler } = await runWithBody({
+          method: 'POST',
+          headers: bodyHeaders,
+          body: 'hello',
+        });
+        forbidden(res);
+        expect(handler).not.toHaveBeenCalled();
+      }
+    );
+
+    it.each([{}, { 'content-length': '0' }])(
+      'allows a bodiless POST with no Content-Type (%j)',
+      async (bodyHeaders) => {
+        const { res, handler } = await runWithBody({ method: 'POST', headers: bodyHeaders });
+        expect(res.statusCode).toBe(200);
+        expect(handler).toHaveBeenCalled();
+      }
+    );
+
+    it.each(['PUT', 'PATCH', 'DELETE'])(
+      'allows a JSON %s (curl, server-to-server)',
+      async (method) => {
+        const { res, handler } = await runWithBody({
+          method,
+          headers: { 'content-type': 'application/json', 'content-length': '2' },
+          body: '{}',
+        });
+        expect(res.statusCode).toBe(200);
+        expect(handler).toHaveBeenCalled();
+      }
+    );
+
+    it('cors: true still allows a form post (explicit, warned opt-in)', async () => {
+      const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+      try {
+        const { res } = await runWithBody(
+          { method: 'POST', headers: { 'content-type': 'text/plain' }, body: 'x' },
+          { ...authorizer, cors: true }
+        );
+        expect(res.statusCode).toBe(200);
+      } finally {
+        warn.mockRestore();
+      }
+    });
   });
 
   it('logs the refusal with a bounded origin', async () => {
@@ -608,6 +703,89 @@ describe('Local.EventFunctionProxy cross-origin writes (CSRF)', () => {
       const { res } = await runWithBody(
         { method: 'POST', headers: { origin: 'http://localhost:3000' } },
         options
+      );
+      expect(res.statusCode).toBe(200);
+    });
+
+    // SECURITY: with the Host check off, a DNS-rebinding page is same-origin
+    // in its own browser and its Origin host equals the Host it sends, so
+    // neither signal may vouch for a non-loopback origin.
+    describe('allowedHosts: true (DNS rebinding)', () => {
+      const rebinding = { ...options, allowedHosts: true as const };
+      const quiet = async <T>(fn: () => Promise<T>) => {
+        const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+        try {
+          return await fn();
+        } finally {
+          warn.mockRestore();
+        }
+      };
+
+      it.each([{ 'sec-fetch-site': 'same-origin' }, {}])(
+        'refuses a rebinding page POST (%j)',
+        async (site) => {
+          const { res, handler } = await quiet(() =>
+            runWithBody(
+              {
+                method: 'POST',
+                headers: { host: 'evil.example', origin: 'http://evil.example', ...site },
+              },
+              rebinding
+            )
+          );
+          forbidden(res);
+          expect(handler).not.toHaveBeenCalled();
+        }
+      );
+
+      it('refuses a rebinding page POST in the default mode too', async () => {
+        const { res } = await quiet(() =>
+          runWithBody(
+            {
+              method: 'POST',
+              headers: {
+                host: 'evil.example',
+                origin: 'http://evil.example',
+                'sec-fetch-site': 'same-origin',
+              },
+            },
+            { ...authorizer, allowedHosts: true }
+          )
+        );
+        forbidden(res);
+      });
+
+      it('still allows a listed origin and a loopback same-origin POST', async () => {
+        const listed = await quiet(() =>
+          runWithBody(
+            {
+              method: 'POST',
+              headers: { host: 'evil.example', origin: 'https://app.example.test' },
+            },
+            rebinding
+          )
+        );
+        expect(listed.res.statusCode).toBe(200);
+        const loopback = await quiet(() =>
+          runWithBody(
+            {
+              method: 'POST',
+              headers: { origin: 'http://localhost:3000', 'sec-fetch-site': 'same-origin' },
+            },
+            rebinding
+          )
+        );
+        expect(loopback.res.statusCode).toBe(200);
+      });
+    });
+
+    it('allowedHosts list: a same-origin POST from a listed host still passes', async () => {
+      const { res } = await runWithBody(
+        {
+          method: 'POST',
+          headers: { host: '192.168.1.20:3000', origin: 'http://192.168.1.20:3000' },
+        },
+        { ...options, allowedHosts: ['192.168.1.20'] }
       );
       expect(res.statusCode).toBe(200);
     });
