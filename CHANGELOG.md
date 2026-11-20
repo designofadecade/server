@@ -65,7 +65,25 @@ the reasoning for choosing a mode is in
   `statusCode`.
 - **`RouterOptions.maxBodyBytes`** — the request body limit, default 1 MiB,
   applied on every transport; larger bodies get `413 PAYLOAD_TOO_LARGE` (see
-  Fixed).
+  Fixed). The read-only **`router.maxBodyBytes`** getter returns the
+  effective limit.
+- **`ServerOptions.maxBodyBytes`** — when set, an `Expect: 100-continue`
+  request whose `Content-Length` is over the limit is answered
+  `413 PAYLOAD_TOO_LARGE` (with `Connection: close`) instead of
+  `100 Continue`, so the client never uploads it; logged as
+  `SERVER_PAYLOAD_TOO_LARGE` at `warn`. `WebFunction.serve` sets it to the
+  router's `maxBodyBytes` (see Security).
+- **`ServerOptions.requestTimeout` and `headersTimeout`**, with the statics
+  **`Server.DEFAULT_REQUEST_TIMEOUT_MS`** (`30000`) and
+  **`Server.DEFAULT_HEADERS_TIMEOUT_MS`** (`10000`) — slow-client limits, the
+  defaults on a plain Node host (see Changed — breaking). Validated:
+  non-negative integers, and `headersTimeout` must not exceed a non-zero
+  `requestTimeout`.
+- **`EventFunctionProxyOptions.maxBodyBytes`** — the local proxy's body limit,
+  default 1 MiB, so local development can refuse (and accept) what the wrapped
+  router does.
+- **Log codes `ROUTER_CLIENT_ABORTED`** (`debug`: the client disconnected
+  while its body was being read) **and `SERVER_PAYLOAD_TOO_LARGE`** (`warn`).
 - **`RouterOptions.logPath`** — adds the raw path (query removed, cut at 256
   characters) to the router's own error logs, which otherwise carry only
   `route` (see Security).
@@ -120,8 +138,22 @@ Every item is a rename unless marked otherwise. There are no aliases.
   `Sec-Fetch-Site`, get `403 CROSS_ORIGIN_FORBIDDEN`. (behaviour, see
   Security)
 - **`cors: string[]` refuses cross-origin writes** from origins that are
-  neither on the list nor same-origin: `403 CORS_ORIGIN_FORBIDDEN`.
-  (behaviour, see Security)
+  neither on the list nor same-origin: `403 CORS_ORIGIN_FORBIDDEN`. This
+  includes `HEAD`: only `GET` from such an origin still runs (without CORS
+  headers), as in `Local.EventFunctionProxy`. (behaviour, see Security)
+- **`Local.EventFunctionProxy` passes the raw request body as `event.body`**,
+  as API Gateway sends it: the text unchanged when it is valid UTF-8 (JSON is
+  not re-serialised), otherwise base64 with `isBase64Encoded: true`; omitted
+  when empty. It used to be `JSON.stringify` of the parsed body, so a text
+  body arrived JSON-quoted. `JSON.parse(event.body)` still works for JSON; a
+  handler that relied on a quoted text body, or parsed twice, must change.
+  (behaviour, see Fixed)
+- **A plain Node `Server` answers `408` to slow clients**: by default a client
+  has 30 s (`requestTimeout`) to send the whole request and 10 s
+  (`headersTimeout`) for its headers. This bounds receiving the request, not
+  the handler. Not applied in a Lambda Web Function unless set there; Node's
+  own defaults stay. Set either option to change it, or `requestTimeout: 0`
+  to disable. (behaviour, see Security)
 - **`logRequest` logs no request values by default**, only the body's content
   type and size and the names of query and path parameters. New options
   `logBody` + `bodyFields` and `paramFields`. The request helpers log the
@@ -136,7 +168,8 @@ Every item is a rename unless marked otherwise. There are no aliases.
   `upgradeTimeoutMs`** (default 10 000 ms), including a `verifyClient` that
   never settles. (behaviour, see Security)
 - **Event Functions answer `413 PAYLOAD_TOO_LARGE` for bodies over
-  `maxBodyBytes`** (default 1 MiB); they used to accept anything API Gateway
+  `maxBodyBytes`** (default 1 MiB, measured after base64 decoding) and log
+  `ROUTER_PAYLOAD_TOO_LARGE`; they used to accept anything API Gateway
   delivered. Raise `maxBodyBytes` if you rely on larger bodies. (behaviour,
   see Fixed)
 - **`text/plain`, `application/x-www-form-urlencoded` and
@@ -237,12 +270,13 @@ Every item is a rename unless marked otherwise. There are no aliases.
   query string and cut at 256 characters, as `RequestLogger` does.
 - **The CORS allowlist rejects, not just logs**. With `cors: string[]`, a
   request whose `Origin` is neither on the list nor same-origin gets
-  `403 CORS_ORIGIN_FORBIDDEN` for preflights and every method but GET/HEAD,
-  before the body is read or any middleware or route runs. Same-origin means
+  `403 CORS_ORIGIN_FORBIDDEN` for preflights and every method but GET (HEAD
+  included: a HEAD route runs its handler like any other), before the body is
+  read or any middleware or route runs. Same-origin means
   `Sec-Fetch-Site: same-origin`, or, with no `Sec-Fetch-Site`, an `Origin`
   whose host:port equals `Host`; any other `Sec-Fetch-Site` value wins over a
-  matching Host, and a `null` or unparseable Origin never counts. GET/HEAD
-  still run with CORS headers withheld. `Vary: Origin` is on every allowlist
+  matching Host, and a `null` or unparseable Origin never counts. GET still
+  runs with CORS headers withheld, so GET routes must not have side effects. `Vary: Origin` is on every allowlist
   response, the 403s included. `cors: true` and no `cors` are unchanged.
   `eventFunction` does no CORS handling (configure it on API Gateway). CORS is
   not a CSRF defence on its own; see docs/router.md.
@@ -297,6 +331,23 @@ Every item is a rename unless marked otherwise. There are no aliases.
   `authenticate` is. A `verifyClient` that never settles no longer holds the
   pending socket open. A value above `2147483647` (which `setTimeout` would
   turn into 1 ms) throws.
+- **A request pipelined behind a refused body is not served.** After a `413`
+  for an oversized body the connection is closing, but Node kept parsing what
+  arrived on it, so a second request sent on the same connection behind the
+  refused upload still reached a route. It is now ignored.
+- **Slow uploads cannot hold a plain Node server's sockets open.** The new
+  `requestTimeout` / `headersTimeout` defaults (30 s / 10 s, see Changed —
+  breaking) answer `408` and close the connection of a client that trickles
+  its request.
+- **`Expect: 100-continue` uploads over the limit are refused before the body
+  is sent** when `Server` knows the limit (`ServerOptions.maxBodyBytes`;
+  `WebFunction.serve` sets it from the router). Node used to answer
+  `100 Continue` to every such request, inviting the upload only to refuse it.
+- **`Router` and `Local.EventFunctionProxy` share one implementation** of the
+  same-origin test and the CORS-safelisted `Content-Type` check, so the two
+  cannot drift apart. Behaviour is unchanged; Local keeps its stricter rule
+  that, with the Host check off, only a loopback `Origin` counts as
+  same-origin.
 - **Release pipeline.** The publish job no longer runs `npm ci` (and with it
   every dependency's install scripts) while holding the npm OIDC token: build,
   publish and GitHub-release are separate jobs, publishing the packed tarball
@@ -313,8 +364,31 @@ Every item is a rename unless marked otherwise. There are no aliases.
   an oversized `Content-Length` without reading the body) with
   `Connection: close`. The Event Function transport had no limit at all and
   now applies the same one. New `RouterOptions.maxBodyBytes`, default 1 MiB.
+  Both transports log the refusal as `ROUTER_PAYLOAD_TOO_LARGE` at `warn`.
   **Behaviour change:** Event Functions now refuse bodies over 1 MiB that API
   Gateway used to let through; raise `maxBodyBytes` if you rely on them.
+- **The `413` reaches a client that is still uploading.** The socket was
+  destroyed as soon as the answer was written, while unread upload bytes were
+  still arriving, so the client often saw a TCP reset (`ECONNRESET`) instead
+  of the `413`. The connection now closes gracefully: the rest of the upload
+  is read and discarded (at most 4 MiB, then the connection is cut), and the
+  socket closes when the upload ends or after 2 s. Buffered chunks are
+  released as soon as the limit is exceeded.
+- **A client that disconnects mid-upload is not an error.** It was logged at
+  `ERROR` with a stack and answered with a `500` nobody received, and the body
+  read could hang when the connection closed before the body ended. It is now
+  logged at `debug` as `ROUTER_CLIENT_ABORTED`, nothing is written, and the
+  body read always settles.
+- **A MIME-wrapped base64 Event Function body exactly at `maxBodyBytes` is
+  accepted.** Line breaks (CRLF every 76 characters) were counted as data, so
+  the decoded size was overstated; whitespace is now ignored.
+- **`Local.EventFunctionProxy` text bodies are passed unchanged.** They were
+  wrapped in JSON quotes (`say "hi"` became `"say \"hi\""`), and a body of
+  quotes nearly doubled in size, tripping the wrapped router's limit
+  (see Changed — breaking).
+- **`Local.EventFunctionProxy` with `cors: string[]` sends `Vary: Origin` on
+  its `403 CROSS_ORIGIN_FORBIDDEN`**, as on every other response in that
+  mode.
 - **Request bodies are decoded once, as UTF-8 bytes.** They were decoded chunk
   by chunk, so a multi-byte character (accented letters, emoji, CJK) that
   straddled a chunk boundary was corrupted in bodies larger than one chunk.

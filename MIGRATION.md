@@ -14,8 +14,9 @@ The renames are mechanical. The behavioural changes are security defaults:
 the client IP and request id are taken only from sources the caller cannot
 forge, the CORS allowlist refuses cross-origin writes, `logRequest` logs only
 the values you name, WebSocket checks have a deadline, the local Event Function proxy serves
-loopback only, and request bodies are capped at 1 MiB on every transport
-(items 6 and 10 to 15).
+loopback only and passes the raw request body, request bodies are capped at
+1 MiB on every transport, and a plain Node `Server` times out slow clients
+(items 6 and 10 to 16).
 
 Work through the greps. Nothing returned means that item does not apply.
 
@@ -313,7 +314,14 @@ proxy rewrites `Host` and you must support browsers without `Sec-Fetch-Site`,
 add the public origin too. Non-browser clients that send no Origin are
 unaffected.
 
-### 14. `Local.EventFunctionProxy` is loopback-only by default
+`HEAD` counts as a write here: a cross-origin `HEAD` from an origin that is
+neither listed nor same-origin also gets `403 CORS_ORIGIN_FORBIDDEN`, as
+`Local.EventFunctionProxy` already did. Only `GET` still runs (without CORS
+headers), so keep GET routes free of side effects. A page that issues
+cross-origin `HEAD` requests (link checkers, `fetch(url, { method: 'HEAD' })`)
+needs its origin on the list.
+
+### 14. `Local.EventFunctionProxy` is loopback-only by default and passes the raw body
 
 Nothing changes if you open your frontend at `localhost`, `127.0.0.1` or
 `*.localhost` and point it at the proxy on a loopback address. Otherwise:
@@ -339,6 +347,17 @@ Nothing changes if you open your frontend at `localhost`, `127.0.0.1` or
 - **To restore the old behaviour exactly:** `{ cors: true, allowedHosts: true }`.
   This is unsafe: any website you visit can use the proxy with its injected
   authorizer. Both settings log a warning at startup.
+- **`event.body` is the raw request text**, as API Gateway sends it, not
+  `JSON.stringify` of the router's parsed body. `JSON.parse(event.body)` still
+  works for JSON bodies (and so does `router.eventFunction(event)`). Code that
+  relied on a text body arriving JSON-quoted (`"say \"hi\""` instead of
+  `say "hi"`), or that parsed it twice, must change. A body that is not
+  valid UTF-8 arrives base64-encoded with `isBase64Encoded: true`; decode it
+  with `Buffer.from(event.body, 'base64')`. An empty body is still omitted.
+- **Match the wrapped router's body limit.** The proxy refuses bodies over its
+  own `maxBodyBytes` (default 1 MiB) with `413`. If the router you wrap raised
+  its limit, pass the same value:
+  `Local.EventFunctionProxy(handler, { maxBodyBytes: router.maxBodyBytes })`.
 
 ### 15. Event Functions refuse bodies over 1 MiB
 
@@ -349,6 +368,34 @@ anything API Gateway passed. If a route takes larger bodies, raise the limit
 (`new Router({ maxBodyBytes: 5 * 1024 * 1024 })`) or move the upload to a
 pre-signed S3 URL. On the Node transport an oversized body now gets a `413`
 response instead of a dropped connection.
+
+### 16. `Server` slow-client timeouts
+
+```bash
+grep -rn "new Server(\|WebFunction.serve(" --include="*.ts" --include="*.js" src packages | grep -v node_modules
+```
+
+Off Lambda, a `Server` now gives a client 30 s (`requestTimeout`,
+`Server.DEFAULT_REQUEST_TIMEOUT_MS`) to send the whole request, headers and
+body, and 10 s (`headersTimeout`, `Server.DEFAULT_HEADERS_TIMEOUT_MS`) for the
+headers; a slower client gets `408` and the connection is closed. This is the
+defence against slow uploads holding sockets open. It does not limit how long
+a handler runs or how long a response streams. In a Lambda Web Function
+Node's own defaults (300 s / 60 s) stay unless you set the options.
+
+- **Long uploads on a slow link** (large files, mobile clients): raise
+  `requestTimeout`, for example `new Server({ port, requestTimeout: 120_000 }, handler)`,
+  or pass `0` to disable it.
+- `headersTimeout` must not exceed a non-zero `requestTimeout`; the
+  constructor throws otherwise. Lowering only `requestTimeout` below 10 s
+  lowers the default `headersTimeout` with it.
+- Node checks both every 30 s, so a request can outlive them by up to that.
+
+`Expect: 100-continue` uploads over the body limit are now refused with `413`
+before the client sends the body, when `Server` knows the limit. With
+`WebFunction.serve` there is nothing to do: it passes the router's
+`maxBodyBytes`. A hand-built `Server` in front of a router can opt in with
+`new Server({ port, maxBodyBytes: router.maxBodyBytes }, handler)`.
 
 ---
 

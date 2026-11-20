@@ -76,7 +76,9 @@ interface WebFunctionOptions extends ServerOptions {
 `serve` returns an ordinary `Server`. It wires `router.nodeJSRequest(req, res, { cors })`
 as the request handler and adds a last-resort catch so a bug inside the router
 cannot become an unhandled rejection that takes down the environment and every
-concurrent request in it.
+concurrent request in it. Unless you pass `maxBodyBytes` yourself, it sets the
+server's `maxBodyBytes` to `router.maxBodyBytes`, so an `Expect: 100-continue`
+upload over the router's limit is refused before the client sends it.
 
 ## Web Function mode
 
@@ -129,6 +131,35 @@ new Server(options: ServerOptions, requestHandler: RequestHandler)
   - `shutdownTimeoutMs` (number, optional) - How long `close()` waits for
     in-flight requests before cutting remaining connections. Default: `800`,
     which fits inside Lambda's one-second `SIGTERM` window.
+  - `maxBodyBytes` (number, optional) - Largest body, in bytes, a client may
+    start sending after `Expect: 100-continue`. When set, such a request whose
+    `Content-Length` is over the limit gets `413` with
+    `{ success: false, error: { code: 'PAYLOAD_TOO_LARGE' } }` and
+    `Connection: close` instead of `100 Continue`, so the body is never
+    uploaded; it is logged as `SERVER_PAYLOAD_TOO_LARGE` at `warn`. Any other
+    `Expect: 100-continue` request gets its `100 Continue` and reaches the
+    handler as usual. Default: unset (Node answers `100 Continue` to
+    everything). `WebFunction.serve` sets it to the router's `maxBodyBytes`.
+    The handler still enforces its own limit on the bytes actually read. Must
+    be a positive integer.
+  - `requestTimeout` (number, optional) - Milliseconds a client has to send
+    the whole request, headers and body, before Node answers `408` and closes
+    the connection: the defence against slow uploads holding sockets open. It
+    does not limit how long a handler runs or a response streams. Default:
+    `30000` (`Server.DEFAULT_REQUEST_TIMEOUT_MS`) on a plain Node host; in a
+    Web Function, Node's own default (300 s) unless set, since Lambda is the
+    only client, delivers each request whole and enforces `timeoutSeconds`
+    itself. `0` disables it.
+  - `headersTimeout` (number, optional) - Milliseconds a client has to send
+    the complete request headers (`408` otherwise). Default: `10000`
+    (`Server.DEFAULT_HEADERS_TIMEOUT_MS`) on a plain Node host, or a shorter
+    non-zero `requestTimeout`; Node's own default (60 s) in a Web Function
+    unless set. Must not exceed a non-zero `requestTimeout`.
+
+  Node checks `requestTimeout` and `headersTimeout` every 30 s, so a request
+  can outlive them by up to that. Raise `requestTimeout` for long uploads on
+  slow links.
+
 - `requestHandler` (function) - Function to handle incoming HTTP requests
   - Signature: `(req: IncomingMessage, res: ServerResponse) => void`
 
@@ -137,6 +168,9 @@ new Server(options: ServerOptions, requestHandler: RequestHandler)
 - `Error` - If port is invalid (not between 1-65535)
 - `Error` - If request handler is not a function
 - `Error` - If `AWS_LAMBDA_HTTP_ENDPOINT` is set but is not `host:port`
+- `Error` - If `maxBodyBytes` is not a positive integer, `requestTimeout` or
+  `headersTimeout` is not a non-negative integer, or `headersTimeout` exceeds
+  a non-zero `requestTimeout`
 
 ### Static methods
 
@@ -160,6 +194,11 @@ anything else rather than guessing.
 #### Server.WEB_FUNCTION_ENDPOINT_ENV
 
 The variable name, `'AWS_LAMBDA_HTTP_ENDPOINT'`.
+
+#### Server.DEFAULT_REQUEST_TIMEOUT_MS / Server.DEFAULT_HEADERS_TIMEOUT_MS
+
+The `requestTimeout` (`30000`) and `headersTimeout` (`10000`) defaults off a
+Web Function, in milliseconds.
 
 ### Properties
 
@@ -295,6 +334,18 @@ try {
 }
 ```
 
+### Log codes
+
+| Code                       | When                                                                    |
+| -------------------------- | ----------------------------------------------------------------------- |
+| `SERVER_PORT_IN_USE`       | The port is already in use (`EADDRINUSE`)                               |
+| `SERVER_ERROR`             | Any other server error                                                  |
+| `SERVER_CLOSE_ERROR`       | `close()` failed                                                        |
+| `SERVER_PAYLOAD_TOO_LARGE` | An `Expect: 100-continue` body over `maxBodyBytes` was refused (`warn`) |
+
+The `413` the server sends for that refusal carries `error.code`
+`PAYLOAD_TOO_LARGE` in its body, as the router's does.
+
 ## Integration with Router
 
 ```typescript
@@ -352,6 +403,9 @@ interface ServerOptions {
   exitOnError?: boolean;
   handleSignals?: boolean;
   shutdownTimeoutMs?: number;
+  maxBodyBytes?: number;
+  requestTimeout?: number;
+  headersTimeout?: number;
 }
 
 interface ServerAddress {

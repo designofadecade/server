@@ -251,6 +251,17 @@ Idle keep-alive sockets are closed at once so they do not hold the server open.
 If you need to flush something on shutdown (a metrics buffer, a trace), do it
 in a `'close'` listener and keep it short; the second is shared.
 
+### Slow clients
+
+On a plain Node host `Server` answers `408` to a client that takes more than
+30 s to send its whole request (`requestTimeout`) or 10 s to send its headers
+(`headersTimeout`), so slow uploads cannot hold sockets open. In a Web
+Function these limits are not applied unless you set them: Lambda is the only
+client, delivers each request whole and enforces the function's
+`timeoutSeconds` itself, so Node's own defaults (300 s / 60 s) stay. Neither
+limit bounds how long a handler runs or a response streams. See
+[Server](./server.md#parameters).
+
 ## Why an Event Function
 
 ### Event sources that are not HTTP
@@ -391,8 +402,8 @@ are "the default does this; do not undo it".
 
 - [ ] Grep for module-level mutable state that assumes one request at a time (see [Concurrency](#concurrency-inside-one-environment)).
 - [ ] Size connection pools for 64 concurrent requests per environment (or whatever you configure), not for one.
-- [ ] Set `cors` to an explicit origin allowlist if browsers send credentials. Lambda adds no CORS headers of its own. Non-safe methods and preflights from an origin off the list (and not same-origin) get a `403`; see [CORS](router.md#cors).
-- [ ] Keep request bodies under 1 MiB or handle large uploads out of band (pre-signed S3 URLs). The router answers `413` above `maxBodyBytes` (default 1 MiB) on every transport.
+- [ ] Set `cors` to an explicit origin allowlist if browsers send credentials. Lambda adds no CORS headers of its own. Every method but `GET` (`HEAD` and preflights included) from an origin off the list (and not same-origin) gets a `403`, so keep GET routes free of side effects; see [CORS](router.md#cors).
+- [ ] Keep request bodies under 1 MiB or handle large uploads out of band (pre-signed S3 URLs). The router answers `413` above `maxBodyBytes` (default 1 MiB) on every transport. `WebFunction.serve` also refuses an `Expect: 100-continue` upload over the limit before the client sends it.
 - [ ] Only `GET HEAD POST PUT PATCH OPTIONS DELETE` reach the function; Lambda answers 400 to anything else before your code runs.
 - [ ] Request line plus headers must fit in 128 KiB (Lambda answers 431 otherwise). Large cookies and bearer tokens count.
 

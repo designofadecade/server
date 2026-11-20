@@ -102,11 +102,19 @@ new Router(options?: RouterOptions)
   `413` with `{ success: false, error: { code: 'PAYLOAD_TOO_LARGE' } }` before
   any middleware or route runs. On the Node transport a `Content-Length` over
   the limit is refused without reading the body, and a body that grows past it
-  stops being read; the response carries `Connection: close` and the
-  connection is dropped once it is sent. On the Event Function transport the
-  decoded size of `event.body` is measured (base64 bodies by their decoded
-  bytes). Raise it for routes that take large uploads, or better, upload to S3
-  with a pre-signed URL.
+  stops being buffered. The `413` carries `Connection: close` and the
+  connection closes gracefully: the rest of the upload is read and discarded
+  (at most 4 MiB, then the connection is cut), and the socket closes when the
+  upload ends or after 2 s, so a client that is still uploading receives the
+  `413` rather than a connection reset. A request pipelined behind the refused
+  one on the same connection is not served. On the Event Function transport
+  the decoded size of `event.body` is measured (base64 bodies by their decoded
+  bytes, whitespace such as MIME line breaks ignored). Both transports log the
+  refusal as `ROUTER_PAYLOAD_TOO_LARGE` at `warn`. `router.maxBodyBytes`
+  reads the effective limit (`WebFunction.serve` passes it to `Server`, which
+  then refuses an oversized `Expect: 100-continue` upload before it is sent).
+  Raise it for routes that take large uploads, or better, upload to S3 with a
+  pre-signed URL.
 
 **Example:**
 
@@ -143,6 +151,9 @@ ordinary applications.
 
 Request bodies are capped at `maxBodyBytes` (default 1 MiB); a larger body is
 answered `413 PAYLOAD_TOO_LARGE` before a route runs.
+
+A client that disconnects while its body is being read is logged at `debug`
+as `ROUTER_CLIENT_ABORTED` and no response is written; it is not an error.
 
 **Example:**
 
@@ -181,11 +192,16 @@ response.
 With an allowlist, a request whose `Origin` is not on it and is not
 same-origin is handled as follows:
 
-| Method                                                   | Result                                                                                                                                              |
-| -------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `OPTIONS` (preflight)                                    | `403`, no CORS headers, so the browser never sends the real request                                                                                 |
-| `POST`, `PUT`, `PATCH`, `DELETE`, anything else not safe | `403` with `{ success: false, error: { code: 'CORS_ORIGIN_FORBIDDEN', message } }`, refused before the body is read or any middleware or route runs |
-| `GET`, `HEAD`                                            | The route runs; CORS headers are withheld, so the other site cannot read the response                                                               |
+| Method                                                  | Result                                                                                                                                              |
+| ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OPTIONS` (preflight)                                   | `403`, no CORS headers, so the browser never sends the real request                                                                                 |
+| `HEAD`, `POST`, `PUT`, `PATCH`, `DELETE`, anything else | `403` with `{ success: false, error: { code: 'CORS_ORIGIN_FORBIDDEN', message } }`, refused before the body is read or any middleware or route runs |
+| `GET`                                                   | The route runs; CORS headers are withheld, so the other site cannot read the response                                                               |
+
+Only `GET` is exempt, as in `Local.EventFunctionProxy`: a `HEAD` route runs its
+handler like any other, so it is refused too. A cross-site `GET` still reaches
+the route (a link, an `<img>`, a `no-cors` fetch), so **GET routes must not
+have side effects.**
 
 Every response to an allowlist request carries `Vary: Origin`, the 403s
 included. Each refusal logs `ROUTER_CORS_ORIGIN_BLOCKED` at `warn` (the
@@ -252,6 +268,18 @@ through an array-valued `set-cookie` header are lifted into the format 2.0
 
 Both `EventFunctionEvent` and `EventFunctionResult` are exported from the
 package root if you need to name them.
+
+#### maxBodyBytes
+
+```typescript
+get maxBodyBytes(): number
+```
+
+The router's effective body limit in bytes (the `maxBodyBytes` option, or the
+1 MiB default). Pass it on so other layers refuse what the router refuses:
+`WebFunction.serve` gives it to `Server` for `Expect: 100-continue`, and
+`Local.EventFunctionProxy(handler, { maxBodyBytes: router.maxBodyBytes })`
+matches local development to it.
 
 ## Routes Class
 
@@ -638,8 +666,11 @@ Log lines written by the router carry a `code` for monitoring:
   `source` says where it came from
 - `ROUTER_HANDLER_ERROR` - A route handler threw (logged with `ROUTE_ERROR`'s
   fields, `code` overridden)
-- `ROUTER_PAYLOAD_TOO_LARGE` - A body over `maxBodyBytes` was refused on the
-  Node transport
+- `ROUTER_PAYLOAD_TOO_LARGE` - A body over `maxBodyBytes` was refused
+  (`warn`, both transports; `source` is `Router.nodeJSRequest` or
+  `Router.eventFunction`)
+- `ROUTER_CLIENT_ABORTED` - The client disconnected while its body was being
+  read (`debug`); no response is written
 - `ROUTER_CORS_ORIGIN_BLOCKED` - A cross-origin request from an origin not on
   the `cors` allowlist was refused
 - `ROUTER_INVALID_REQUEST_URL` - A request with an unparseable URL or `Host`
@@ -670,7 +701,8 @@ The router implements intelligent caching:
   `eventFunction`, measured after base64 decoding). A larger body gets
   `413 PAYLOAD_TOO_LARGE` before any middleware or route runs; on the Node
   transport an oversized `Content-Length` is refused without reading the body,
-  with `Connection: close`.
+  with `Connection: close` and a graceful close (see `maxBodyBytes` above).
+  `router.maxBodyBytes` reads the limit.
 - JWT claims are exposed only after verification: configure `jwt` (see `RouterOptions`); there is no decode-without-verify helper.
 
 ## Best Practices

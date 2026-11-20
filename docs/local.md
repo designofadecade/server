@@ -72,6 +72,12 @@ Creates a proxy that wraps an Event Function handler for local development.
     loopback origins only. See [Security: CORS and Host](#security-cors-and-host)
   - `allowedHosts` (`string[] | true`, optional) - Extra `Host` names to serve
     besides loopback ones. Default: loopback only. See below
+  - `maxBodyBytes` (number, optional) - Largest request body accepted, in
+    bytes; a larger one gets `413 PAYLOAD_TOO_LARGE` before the handler runs.
+    Default: `1048576` (1 MiB), the router's default. Set it to the
+    `maxBodyBytes` of the router the handler wraps
+    (`maxBodyBytes: router.maxBodyBytes`), so local development refuses and
+    accepts what deployment does. Must be a positive integer
 
 **Returns:** Object with a `request` method for handling HTTP requests. `request`
 accepts the same `{ requestContext, event }` overrides per call.
@@ -166,12 +172,12 @@ rebinding page produces both), so only loopback origins and, with
 
 ### CORS
 
-| `cors`               | Behaviour                                                                                                                                                                         |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| omitted (default)    | A loopback `Origin` (`http`/`https`, same hosts as above, any port) is reflected in `Access-Control-Allow-Origin`, with `Vary: Origin` and no `Access-Control-Allow-Credentials`. |
-| `false`              | No CORS headers.                                                                                                                                                                  |
-| `['https://a.test']` | The router's allowlist: exact origins are reflected **with** `Access-Control-Allow-Credentials: true`. Loopback origins are not added implicitly.                                 |
-| `true`               | `Access-Control-Allow-Origin: *`. Unsafe: any website can call the proxy and read the responses. Logs `LOCAL_CORS_WILDCARD` once at startup.                                      |
+| `cors`               | Behaviour                                                                                                                                                                                                     |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| omitted (default)    | A loopback `Origin` (`http`/`https`, same hosts as above, any port) is reflected in `Access-Control-Allow-Origin`, with `Vary: Origin` and no `Access-Control-Allow-Credentials`.                             |
+| `false`              | No CORS headers.                                                                                                                                                                                              |
+| `['https://a.test']` | The router's allowlist: exact origins are reflected **with** `Access-Control-Allow-Credentials: true`. Loopback origins are not added implicitly. Every response carries `Vary: Origin`, the `403`s included. |
+| `true`               | `Access-Control-Allow-Origin: *`. Unsafe: any website can call the proxy and read the responses. Logs `LOCAL_CORS_WILDCARD` once at startup.                                                                  |
 
 A malformed `Origin`, the opaque `null` origin (sandboxed iframes, `file:`
 pages) and any non-http(s) scheme get no CORS grant.
@@ -224,6 +230,23 @@ Local.EventFunctionProxy(handler, {
 });
 ```
 
+## Log codes
+
+The proxy's own warnings carry a `code`:
+
+| Code                         | When                                                    |
+| ---------------------------- | ------------------------------------------------------- |
+| `LOCAL_HOST_NOT_ALLOWED`     | A request with a non-allowed `Host` was refused (`403`) |
+| `LOCAL_CROSS_ORIGIN_BLOCKED` | A cross-origin request was refused (`403`)              |
+| `LOCAL_CORS_WILDCARD`        | Created with `cors: true` (once, at startup)            |
+| `LOCAL_HOST_CHECK_DISABLED`  | Created with `allowedHosts: true` (once, at startup)    |
+
+Its refusals carry `error.code` `HOST_NOT_ALLOWED` or `CROSS_ORIGIN_FORBIDDEN`
+in the body. Everything else, including the `413 PAYLOAD_TOO_LARGE` for a body
+over `maxBodyBytes`, comes from the router the proxy runs on and is logged with
+the router's codes (`ROUTER_PAYLOAD_TOO_LARGE`, `ROUTER_CLIENT_ABORTED`, ...;
+see [Router error codes](./router.md#error-codes)).
+
 ## Event Format
 
 The proxy converts HTTP requests to API Gateway HTTP API (format 2.0) events:
@@ -257,11 +280,19 @@ interface EventFunctionProxyEvent {
     authorizer: unknown; // Authorization data
     // ...additional fields from options
   };
-  body?: string; // Omitted when there is no body
+  body?: string; // Raw request text, or base64 (see below); omitted when empty
   isBase64Encoded: boolean;
   // ...additional fields from options
 }
 ```
+
+`body` is the request body as API Gateway sends it: the raw text, unchanged,
+when it is valid UTF-8 (a JSON body is passed through as sent, not parsed and
+re-serialised), otherwise the bytes base64-encoded with
+`isBase64Encoded: true`. It is omitted when the request has no body. Parse it
+in the handler (`JSON.parse(event.body)`), or decode a binary one with
+`Buffer.from(event.body, 'base64')`; `router.eventFunction(event)` does both
+for you.
 
 The event carries every field AWS marks required on `APIGatewayProxyEventV2`,
 so a handler typed with `@types/aws-lambda` can be wrapped directly:
