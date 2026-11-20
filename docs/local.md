@@ -56,7 +56,7 @@ http
 ```typescript
 static EventFunctionProxy(
   eventFunctionHandler: (event: EventFunctionProxyEvent) => Promise<EventFunctionProxyResult | string>,
-  options?: { requestContext?: Record<string, unknown>; event?: Record<string, unknown> }
+  options?: EventFunctionProxyOptions
 ): { request: (req: IncomingMessage, res: ServerResponse, requestOptions?) => Promise<void> }
 ```
 
@@ -68,6 +68,10 @@ Creates a proxy that wraps an Event Function handler for local development.
 - `options` (object, optional)
   - `requestContext` (object) - Additional `requestContext` fields merged into every event
   - `event` (object) - Additional top-level event fields merged into every event
+  - `cors` (`boolean | string[]`, optional) - Cross-origin access. Default:
+    loopback origins only. See [Security: CORS and Host](#security-cors-and-host)
+  - `allowedHosts` (`string[] | true`, optional) - Extra `Host` names to serve
+    besides loopback ones. Default: loopback only. See below
 
 **Returns:** Object with a `request` method for handling HTTP requests. `request`
 accepts the same `{ requestContext, event }` overrides per call.
@@ -99,6 +103,70 @@ const handler = Local.EventFunctionProxy(
     },
   }
 );
+```
+
+## Security: CORS and Host
+
+The proxy is a development server, but it is still reachable from every
+website the developer opens in a browser, and it runs the handler with
+whatever `authorizer` you inject (or one derived from a JWT). **An injected
+authorizer applies to every caller that reaches the proxy**, not just your own
+frontend. Two checks, both on by default, keep other sites out.
+
+### Host check (DNS rebinding)
+
+A request is served only when its `Host` header names a loopback host:
+`localhost`, `*.localhost`, any `127.0.0.0/8` address or `[::1]`, on any port.
+Anything else, including a missing or malformed `Host`, gets `403`:
+
+```json
+{ "success": false, "error": { "code": "HOST_NOT_ALLOWED", "message": "Host not allowed" } }
+```
+
+The check runs first, for every method (`OPTIONS` and `HEAD` included), before
+the body is read, the authorizer is derived or the handler runs. It blocks
+DNS rebinding: an attacker re-points their own domain at `127.0.0.1`, and the
+browser then treats your backend as same-origin with their page, but it still
+sends their domain as `Host`.
+
+To reach the proxy from another device on your LAN or through a tunnel, list
+those names. Matching is case-insensitive and ignores the port:
+
+```typescript
+Local.EventFunctionProxy(handler, {
+  allowedHosts: ['192.168.1.20', 'my-app.tunnel.example'],
+});
+```
+
+`allowedHosts: true` turns the check off. It is unsafe, and the proxy logs a
+warning (`LOCAL_HOST_CHECK_DISABLED`) once when it is created.
+
+### CORS
+
+| `cors`               | Behaviour                                                                                                                                                                         |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| omitted (default)    | A loopback `Origin` (`http`/`https`, same hosts as above, any port) is reflected in `Access-Control-Allow-Origin`, with `Vary: Origin` and no `Access-Control-Allow-Credentials`. |
+| `false`              | No CORS headers.                                                                                                                                                                  |
+| `['https://a.test']` | The router's allowlist: exact origins are reflected **with** `Access-Control-Allow-Credentials: true`. Loopback origins are not added implicitly.                                 |
+| `true`               | `Access-Control-Allow-Origin: *`. Unsafe: any website can call the proxy and read the responses. Logs `LOCAL_CORS_WILDCARD` once at startup.                                      |
+
+A malformed `Origin`, the opaque `null` origin (sandboxed iframes, `file:`
+pages) and any non-http(s) scheme get no CORS grant. Preflights are answered
+`204` either way; without an `Access-Control-Allow-Origin` the browser blocks
+the real request.
+
+CORS is enforced by browsers only. A non-browser client on the same machine
+can still call the proxy, and the Host check does not stop it: keep the
+injected authorizer to what you would accept any local process using.
+
+A frontend served from a host you added to `allowedHosts` is not a loopback
+origin, so give it a `cors` entry too:
+
+```typescript
+Local.EventFunctionProxy(handler, {
+  allowedHosts: ['192.168.1.20'],
+  cors: ['http://192.168.1.20:5173'],
+});
 ```
 
 ## Event Format
@@ -285,6 +353,10 @@ const handler = Local.EventFunctionProxy(lambdaHandler, {
 ```
 
 ### With Authorization
+
+The injected identity is given to every request the proxy serves. The
+loopback-only defaults above are what limit that to your own machine; keep
+them unless you need to widen them.
 
 ```typescript
 const handler = Local.EventFunctionProxy(lambdaHandler, {

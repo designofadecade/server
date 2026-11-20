@@ -115,7 +115,7 @@ The server is composed of several modular components:
 
 ### Local development
 
-- **Local**: `Local.EventFunctionProxy` runs a Lambda Event Function handler behind a local HTTP server
+- **Local**: `Local.EventFunctionProxy` runs a Lambda Event Function handler behind a local HTTP server. It serves loopback `Host` names only and grants CORS to loopback origins only by default; see [docs/local.md](./docs/local.md#security-cors-and-host) to opt in LAN or tunnel hosts
 
 ### Integrations
 
