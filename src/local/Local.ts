@@ -21,6 +21,7 @@
  */
 
 import Router from '../router/Router.js';
+import { RAW_BODY } from '../router/internal.js';
 import { isCorsSafelistedContentType, isSameOriginRequest } from '../router/origin.js';
 import Routes from '../router/Routes.js';
 import type { RouterRequest, RouterResponse } from '../router/Router.js';
@@ -72,6 +73,26 @@ export interface EventFunctionProxyOptions {
    * port ignored. `true` disables the check.
    */
   allowedHosts?: string[] | true;
+  /**
+   * Largest request body the proxy accepts, in bytes; a larger one is
+   * answered `413 PAYLOAD_TOO_LARGE` before the handler runs. Default 1 MiB,
+   * the router's default. Set it to the `maxBodyBytes` of the router the
+   * handler wraps, so local dev refuses (and accepts) what deployment does.
+   */
+  maxBodyBytes?: number;
+}
+
+/**
+ * Decodes a request body that is valid UTF-8 to text; anything else is
+ * `null`. Used to tell a text body from a binary one.
+ */
+const strictUtf8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
+function utf8OrNull(bytes: Buffer): string | null {
+  try {
+    return strictUtf8.decode(bytes);
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -331,6 +352,8 @@ export default class Local {
     options: EventFunctionProxyOptions = {}
   ) {
     const router = new Router({
+      // Validated by the router: a positive integer, default 1 MiB.
+      ...(options.maxBodyBytes !== undefined ? { maxBodyBytes: options.maxBodyBytes } : {}),
       initRoutes: [
         class LocalRoutes extends Routes {
           constructor(router: Router) {
@@ -345,6 +368,16 @@ export default class Local {
                     requestContext?: Record<string, unknown>;
                     event?: Record<string, unknown>;
                   }) || {};
+
+                // The body as API Gateway sends it: the raw text, unparsed
+                // (the wrapped handler parses it), or base64 with
+                // `isBase64Encoded` when it is not valid UTF-8. Re-encoding a
+                // parsed body (as this once did with JSON.stringify) turned a
+                // text body into a quoted JSON string and grew its size.
+                const rawBody = Buffer.isBuffer(request.body) ? request.body : null;
+                const text = rawBody ? utf8OrNull(rawBody) : null;
+                const body =
+                  rawBody === null ? undefined : text !== null ? text : rawBody.toString('base64');
 
                 const rawQueryString = new URLSearchParams(request.query).toString();
                 const now = new Date();
@@ -393,8 +426,8 @@ export default class Local {
                     authorizer: request.authorizer || null,
                     ...(proxyOptions.requestContext || {}),
                   } as EventFunctionProxyEvent['requestContext'],
-                  body: request.body ? JSON.stringify(request.body) : undefined,
-                  isBase64Encoded: false,
+                  body,
+                  isBase64Encoded: rawBody !== null && text === null,
                   ...(proxyOptions.event || {}),
                 });
 
@@ -571,7 +604,7 @@ export default class Local {
           }
         }
 
-        return router.nodeJSRequest(req, res, {
+        const routerOptions = {
           cors: options.cors === undefined ? false : options.cors,
           proxyOptions: {
             requestContext: {
@@ -583,7 +616,9 @@ export default class Local {
               ...requestOptions.event,
             },
           },
-        });
+        };
+        // Internal flag: hand the route the raw body bytes (see RAW_BODY).
+        return router.nodeJSRequest(req, res, Object.assign(routerOptions, { [RAW_BODY]: true }));
       },
     };
   }

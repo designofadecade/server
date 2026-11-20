@@ -4,6 +4,7 @@ import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto
 import { logger } from '../logger/Logger.js';
 import RouteError from './RouteError.js';
 import { isCorsSafelistedContentType, isSameOriginRequest } from './origin.js';
+import { RAW_BODY } from './internal.js';
 import type { ContextLike } from '../context/Context.js';
 
 /**
@@ -524,6 +525,7 @@ export default class Router {
     options: { cors?: boolean | string[]; proxyOptions?: Record<string, unknown> } = {}
   ): Promise<void> {
     const { cors, proxyOptions } = options;
+    const rawBody = (options as { [RAW_BODY]?: unknown })[RAW_BODY] === true;
 
     // SECURITY: a request pipelined behind a refused upload is never served;
     // its connection is already closing.
@@ -634,7 +636,7 @@ export default class Router {
         path: requestUrl.pathname,
         method: req.method!,
         body: Router.MethodsWithBody.includes(req.method!)
-          ? await this.#getNodeJSRequestBody(req)
+          ? await this.#getNodeJSRequestBody(req, rawBody)
           : null,
         cookies: this.#parseCookies(req.headers?.cookie || ''),
         params: {},
@@ -1043,7 +1045,7 @@ export default class Router {
     return code === 'ECONNRESET' || code === 'ECONNABORTED' || error.message === 'aborted';
   }
 
-  async #getNodeJSRequestBody(req: IncomingMessage): Promise<unknown> {
+  async #getNodeJSRequestBody(req: IncomingMessage, raw = false): Promise<unknown> {
     const limit = this.#maxBodyBytes;
     const declared = Number(req.headers['content-length']);
     if (Number.isFinite(declared) && declared > limit) throw new BodyTooLargeError();
@@ -1076,6 +1078,10 @@ export default class Router {
       req.on('end', () => {
         if (done) return;
         done = true;
+        if (raw) {
+          resolve(size > 0 ? Buffer.concat(chunks) : null);
+          return;
+        }
         const body = Buffer.concat(chunks).toString('utf8');
         if (
           req.headers['content-type']?.includes('application/json') &&
