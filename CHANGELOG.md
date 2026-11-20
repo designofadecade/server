@@ -95,8 +95,9 @@ Every item is a rename unless marked otherwise. There are no aliases.
 - **`Local.EventFunctionProxy` serves loopback only by default.** Any other,
   missing or malformed `Host` gets `403 HOST_NOT_ALLOWED`, and only loopback
   origins get CORS (reflected, `Vary: Origin`, no credentials). Opt hosts in
-  with `allowedHosts: [...]` and origins with `cors: [...]`. (behaviour, see
-  Security)
+  with `allowedHosts: [...]` and origins with `cors: [...]`. Cross-origin
+  requests other than GET/HEAD from origins that are not allowed get
+  `403 CROSS_ORIGIN_FORBIDDEN`. (behaviour, see Security)
 - **`cors: string[]` refuses cross-origin writes** from origins that are
   neither on the list nor same-origin: `403 CORS_ORIGIN_FORBIDDEN`.
   (behaviour, see Security)
@@ -178,7 +179,10 @@ Every item is a rename unless marked otherwise. There are no aliases.
   summary and warns once (`REQUEST_LOGGER_BODY_FIELDS_REQUIRED`). Unlisted
   keys are `'[REDACTED]'` at any depth, sensitive keys (password, token, ssn,
   cardNumber, ...) stay redacted even when listed, strings are capped at 256
-  characters, and text and binary bodies are never logged.
+  characters, and text and binary bodies are never logged. The logged `path`
+  and `userAgent` are cut at 256 characters; `path` is the raw request path
+  (the router exposes no route pattern), so secrets in URLs still reach the
+  log.
 - **The CORS allowlist rejects, not just logs** (F2). With `cors: string[]`, a
   request whose `Origin` is neither on the list nor same-origin gets
   `403 CORS_ORIGIN_FORBIDDEN` for preflights and every method but GET/HEAD,
@@ -202,7 +206,17 @@ Every item is a rename unless marked otherwise. There are no aliases.
   headers, `string[]` = router allowlist with credentials, `true` = the old
   wildcard) and `allowedHosts?: string[] | true` (extra names, case-insensitive,
   port ignored; `true` disables the check). Both unsafe settings log a warning
-  at startup. `EventFunctionProxyOptions` is now exported.
+  at startup. `EventFunctionProxyOptions` is now exported. Withholding CORS
+  only blocks reading, so unless `cors: true` a cross-origin request that is
+  not GET/HEAD (preflights included) is refused with
+  `403 CROSS_ORIGIN_FORBIDDEN` before the body is read or the handler runs,
+  when its `Origin` is not allowed (default/`false`: not loopback;
+  `string[]`: unlisted and not same-origin), or its `Sec-Fetch-Site` is
+  `cross-site`/`same-site` without an allowed `Origin`. This stops form posts
+  and `no-cors` fetches from other sites acting as the injected authorizer.
+  Requests with no `Origin` (curl) pass; cross-site GETs still run, so GET
+  routes must not have side effects. The logged Host of a refusal is cut at
+  200 characters.
 - **`WebSocketServer` `authenticate` option** (F3). `authenticate(req)` runs at
   upgrade time, after `allowedOrigins` and `verifyClient`. A falsy result, a
   throw, a rejection or running past `upgradeTimeoutMs` refuses the upgrade
@@ -211,12 +225,16 @@ Every item is a rename unless marked otherwise. There are no aliases.
   connection, passed as a trailing argument to `connection` (`ws, req, auth`)
   and `message` (`parsed, ws, req, auth`) events and to `EventsManager`
   handlers, and returned by the new `getAuth(ws)`. Without `authenticate`,
-  event arguments are unchanged.
+  event arguments are unchanged. `authenticate` without `allowedOrigins` logs
+  `WEBSOCKET_NO_ORIGIN_ALLOWLIST` once per server: with cookie auth any site
+  could otherwise open a socket as the visitor (cross-site WebSocket
+  hijacking).
 - **`WebSocketServer` `upgradeTimeoutMs`.** One deadline (default 10 000 ms)
   for the whole upgrade gate, `verifyClient` then `authenticate`. Past it the
   upgrade is refused: 403 while `verifyClient` is pending, 401 while
   `authenticate` is. A `verifyClient` that never settles no longer holds the
-  pending socket open.
+  pending socket open. A value above `2147483647` (which `setTimeout` would
+  turn into 1 ms) throws.
 - **Release pipeline.** The publish job no longer runs `npm ci` (and with it
   every dependency's install scripts) while holding the npm OIDC token: build,
   publish and GitHub-release are separate jobs, publishing the packed tarball
