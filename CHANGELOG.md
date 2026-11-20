@@ -7,6 +7,489 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [11.0.0] - 2026-11-20
+
+Adds the AWS Lambda **Web Function** deployment model and renames the existing
+Lambda surface after the model it implements, the Lambda **Event Function**.
+The same `Router` and routes now run in three places: as a Web Function (the
+function is a real HTTP/1.1 server), as an Event Function (one API Gateway
+HTTP API v2 event per invocation), and on a plain Node server. The upgrade
+checklist is in [MIGRATION.md](./MIGRATION.md#upgrading-from-10x-to-110);
+the reasoning for choosing a mode is in
+[docs/deployment-modes.md](https://github.com/designofadecade/server/blob/main/docs/deployment-modes.md).
+
+### Added
+
+- **`RouterRequest.route`** (optional): the matched route pattern
+  (`/users/:id`), set by the router before middleware in every mode; unset
+  when no route matched.
+- **`WebFunction.serve(router, options)`** — entry point for a Lambda Web
+  Function that is, unchanged, also a local or any-host Node server. Wires
+  `router.nodeJSRequest(req, res, { cors })` to a `Server` and returns it. A
+  last-resort catch stops a bug inside the router from becoming an unhandled
+  rejection that kills the environment and every concurrent request in it.
+  `WebFunctionOptions` extends `ServerOptions` with `cors`.
+- **`Server` runs as a Lambda Web Function.** When `AWS_LAMBDA_HTTP_ENDPOINT`
+  (`host:port`) is set it binds there, ignoring `port`/`host` — binding
+  anywhere else means Lambda never delivers a request and the function fails
+  its 10-second init check. An empty variable counts as unset (plain mode:
+  `port` applies, socket IP); a malformed one throws from the constructor
+  rather than guessing. New options: `handleSignals` (drain and close on
+  `SIGTERM`; default `true` in Web Function mode, `false` otherwise) and
+  `shutdownTimeoutMs` (default `800`, inside the one-second window Lambda allows
+  after `SIGTERM`). New `ready` promise (resolves on listen, rejects on failure,
+  never an unhandled rejection by itself), `address` getter,
+  `'listening'`/`'close'` events, `Server.isWebFunction()`,
+  `Server.parseEndpoint()` (accepts bracketed IPv6) and
+  `Server.WEB_FUNCTION_ENDPOINT_ENV`. Startup logs now include
+  `mode: 'web-function' | 'node'`.
+- **`RouterRequest.clientIp`** — the caller's address from a source the caller
+  cannot forge in the current mode (see Security). Empty string when unknown.
+- **`RouterRequest.requestId`** — API Gateway's `requestId` in an Event
+  Function, Lambda's `lambda-web-request-id` in a Web Function, a fresh UUID on
+  a plain server. Both new fields are **required** on the type.
+- **`RouterOptions.webFunction`** — whether `nodeJSRequest` reads the Lambda
+  Web Function headers. Defaults to `AWS_LAMBDA_HTTP_ENDPOINT` being set.
+- **`RouterOptions.trustedProxies`** — Web Function only: the number of proxies
+  you control in front of the endpoint (CloudFront = `1`); `clientIp` is taken
+  that many `X-Forwarded-For` entries before the last. Default `0`. Throws on a
+  negative or non-integer value. **Only safe when the endpoint cannot be reached
+  except through those proxies** (CloudFront: `IamAuth` on the endpoint, invoke
+  permission granted only to the distribution); on a directly reachable
+  endpoint the client chooses the entry it reads.
+- **`RequestLogger` accepts a `RouterRequest`.** `createRequestLogger`,
+  `logRequest` and `logResponse` take the router's request (preferred, works in
+  every mode) or an API Gateway event as before. Any object with a string
+  `method` is treated as a `RouterRequest`; API Gateway events have no top-level
+  `method`. `logResponse` reads `status` (a `RouterResponse`) as well as
+  `statusCode`.
+- **`RouterOptions.maxBodyBytes`** — the request body limit, default 1 MiB,
+  applied on every transport; larger bodies get `413 PAYLOAD_TOO_LARGE` (see
+  Fixed). The read-only **`router.maxBodyBytes`** getter returns the
+  effective limit.
+- **`ServerOptions.maxBodyBytes`** — when set, an `Expect: 100-continue`
+  request whose `Content-Length` is over the limit is answered
+  `413 PAYLOAD_TOO_LARGE` (with `Connection: close`) instead of
+  `100 Continue`, so the client never uploads it; logged as
+  `SERVER_PAYLOAD_TOO_LARGE` at `warn`. `WebFunction.serve` sets it to the
+  router's `maxBodyBytes` (see Security).
+- **`ServerOptions.requestTimeout` and `headersTimeout`**, with the statics
+  **`Server.DEFAULT_REQUEST_TIMEOUT_MS`** (`30000`) and
+  **`Server.DEFAULT_HEADERS_TIMEOUT_MS`** (`10000`) — slow-client limits, the
+  defaults on a plain Node host (see Changed — breaking). Validated:
+  non-negative integers, and `headersTimeout` must not exceed a non-zero
+  `requestTimeout`.
+- **`EventFunctionProxyOptions.maxBodyBytes`** — the local proxy's body limit,
+  default 1 MiB, so local development can refuse (and accept) what the wrapped
+  router does.
+- **Log codes `ROUTER_CLIENT_ABORTED`** (`debug`: the client disconnected
+  while its body was being read), **`SERVER_PAYLOAD_TOO_LARGE`** (`warn`)
+  **and `SERVER_CLIENT_ERROR`** (`warn`: Node rejected a malformed or
+  timed-out request; `debug` when the client only reset the connection).
+- **`RouterOptions.logPath`** — adds the raw path (query removed, cut at 256
+  characters) to the router's own error logs, which otherwise carry only
+  `route` (see Security).
+- **`WebSocketServer` options `authenticate` and `upgradeTimeoutMs`, and
+  `getAuth(ws)`** — authenticate at upgrade time, bound the whole upgrade
+  gate, and read a connection's authenticate result (see Security).
+- **`Local.EventFunctionProxy` options `cors` and `allowedHosts`** — opt
+  origins and Host names in beyond the loopback-only default (see Security).
+- **`Local.EventFunctionProxy` option `allowedPeers?: string[] | true`** —
+  client IP addresses or CIDR ranges (IPv4 or IPv6) served besides loopback
+  peers; `true` serves any peer and logs `LOCAL_PEER_CHECK_DISABLED` once at
+  startup. An IPv4-mapped range (`::ffff:10.0.0.0/104`) is taken as the IPv4
+  range it maps (`10.0.0.0/8`). An entry that is not an address or range, an
+  IPv6 address with a zone id (`fe80::1%eth0`, which could never match) or an
+  IPv4-mapped range wider than `/96` throws when the proxy is created (see
+  Security).
+- **`logRequest` options `logBody`, `bodyFields`, `paramFields` and
+  `logPath`** — name the body fields and parameters whose values may be
+  logged, and opt the raw path back in (see Security).
+- **Exports from the package root:** `WebFunction`, `WebFunctionOptions`,
+  `ServerOptions`, `ServerAddress`, `JwtOptions`, `JwtHmacAlgorithm`,
+  `EventFunctionProxyOptions`, and from `RequestLogger` the types
+  `LoggableRequest`, `RequestLogOptions` and `LogRequestOptions`.
+- **`docs/deployment-modes.md`** — why choose a Web Function over an Event
+  Function and when not to, a decision table, a minimal entry file for each of
+  the three modes using one `Router`, and a production checklist.
+
+### Changed — breaking
+
+Every item is a rename unless marked otherwise. There are no aliases.
+
+- `router.lambdaEvent()` -> **`router.eventFunction()`**.
+- `LambdaHttpEvent` -> **`EventFunctionEvent`**; `LambdaHttpResponse` ->
+  **`EventFunctionResult`**.
+- `Local.LambdaProxyRouter` -> **`Local.EventFunctionProxy`**; its `LambdaEvent`
+  / `LambdaResponse` types -> **`EventFunctionProxyEvent`** /
+  **`EventFunctionProxyResult`**.
+- `RouterRequest.lambdaOptions` -> **`proxyOptions`**, and the matching
+  `nodeJSRequest(req, res, { lambdaOptions })` option -> `{ proxyOptions }`.
+- **`RouterRequest` has two new REQUIRED fields**, `clientIp: string` and
+  `requestId: string`. Hand-built `RouterRequest` literals — consumer unit
+  tests that call a handler directly, fixtures, custom transports — fail to
+  typecheck until both are added. Handlers and middleware that only read the
+  request are unaffected.
+- **`Server` behaves differently when `AWS_LAMBDA_HTTP_ENDPOINT` is set:** it
+  binds there instead of `port`/`host` and handles `SIGTERM`. No change outside
+  Lambda. (behaviour)
+- **`Local.EventFunctionProxy` sets `requestContext.http.sourceIp` from the
+  socket**, not from the first `X-Forwarded-For` value. Locally that is usually
+  `::1` or `::ffff:127.0.0.1` rather than `127.0.0.1`. Tests that forged an
+  address through the header, or asserted the literal `127.0.0.1`, should use
+  the `requestContext` option instead. (behaviour, see Security)
+
+- **`Local.EventFunctionProxy` serves only this machine by default.** A
+  request whose TCP peer is not loopback (`127.0.0.0/8`, `::1`,
+  `::ffff:127.x.x.x`), or has no address, gets `403 PEER_NOT_ALLOWED` before
+  anything else runs, whatever its `Host`; opt devices in with
+  `allowedPeers: [...]`. Mock requests in tests need a loopback
+  `socket.remoteAddress`. Any other, missing or malformed `Host` gets
+  `403 HOST_NOT_ALLOWED`, and only loopback
+  origins get CORS (reflected, `Vary: Origin`, no credentials). Opt hosts in
+  with `allowedHosts: [...]` and origins with `cors: [...]`. Cross-origin
+  requests other than GET (HEAD included) from origins that are not allowed,
+  and form-typed or untyped-body writes with neither `Origin` nor
+  `Sec-Fetch-Site`, get `403 CROSS_ORIGIN_FORBIDDEN`. (behaviour, see
+  Security)
+- **`cors: string[]` refuses cross-origin writes** from origins that are
+  neither on the list nor same-origin: `403 CORS_ORIGIN_FORBIDDEN`. This
+  includes `HEAD`: only `GET` from such an origin still runs (without CORS
+  headers), as in `Local.EventFunctionProxy`. (behaviour, see Security)
+- **`Local.EventFunctionProxy` passes the raw request body as `event.body`**,
+  as API Gateway sends it: the text unchanged when it is valid UTF-8 (JSON is
+  not re-serialised), otherwise base64 with `isBase64Encoded: true`; omitted
+  when empty. It used to be `JSON.stringify` of the parsed body, so a text
+  body arrived JSON-quoted. `JSON.parse(event.body)` still works for JSON; a
+  handler that relied on a quoted text body, or parsed twice, must change.
+  (behaviour, see Fixed)
+- **A plain Node `Server` answers `408` to slow clients**: by default a client
+  has 30 s (`requestTimeout`) to send the whole request and 10 s
+  (`headersTimeout`) for its headers. This bounds receiving the request, not
+  the handler. Not applied in a Lambda Web Function unless set there; Node's
+  own defaults stay. Set either option to change it, or `requestTimeout: 0`
+  to disable. (behaviour, see Security)
+- **`logRequest` logs no request values by default**, only the body's content
+  type and size and the names of query and path parameters. New options
+  `logBody` + `bodyFields` and `paramFields`. The request helpers log the
+  matched `route` pattern instead of the raw `path` unless `logPath: true`.
+  (behaviour, see Security)
+- **The router's own error log lines carry `route`, not the raw path**
+  (handler errors, 404s, request failures), and the 404 message is now
+  `Route not found` (it named the method and path). New router option
+  `logPath: true` adds the path, query removed, cut at 256 characters.
+  (behaviour, see Security)
+- **`WebSocketServer` refuses upgrades whose checks run past
+  `upgradeTimeoutMs`** (default 10 000 ms), including a `verifyClient` that
+  never settles. (behaviour, see Security)
+- **Event Functions answer `413 PAYLOAD_TOO_LARGE` for bodies over
+  `maxBodyBytes`** (default 1 MiB, measured after base64 decoding) and log
+  `ROUTER_PAYLOAD_TOO_LARGE`; they used to accept anything API Gateway
+  delivered. Raise `maxBodyBytes` if you rely on larger bodies. (behaviour,
+  see Fixed)
+- **`text/plain`, `application/x-www-form-urlencoded` and
+  `multipart/form-data` bodies are no longer JSON-parsed**, even when the
+  content type mentions `application/json`; `request.body` is the raw string.
+  (behaviour, see Security)
+- **`WebSocketServer` drops frames from sockets that are no longer `OPEN`**,
+  and `message` listeners and `EventsManager` handlers receive extra trailing
+  arguments (`ws, req`, plus `auth` with `authenticate`). A handler that
+  already took an optional second parameter, or logs all its arguments, now
+  receives the socket there.
+  (behaviour, see Security)
+
+- **The Node transport routes on the request target verbatim and refuses
+  targets URL resolution would rewrite.** `request.path` is the target up to
+  the first `?`, no longer `new URL(req.url, base).pathname`. A target that
+  does not start with exactly one `/` (`//host/...`, `/\...`, absolute-form
+  `http://host/...`, `*` including `OPTIONS *`), or that contains a
+  backslash, a `.`/`..` segment (raw or percent-encoded, any case: `%2e`,
+  `%2E`), a control character, `%00` or `#`, gets `400 INVALID_REQUEST`
+  before CORS, the body or any route runs. `eventFunction` refuses the same
+  paths (`requestContext.http.path`), `#` excepted. Ordinary paths, trailing
+  slashes, percent-encoded characters, path parameters (still
+  percent-encoded) and query strings behave exactly as before. Mock requests
+  in tests that set `req.url` to an absolute URL (`'http://localhost/x'`)
+  must use the path (`'/x'`). (behaviour, see Security)
+
+### Security
+
+- **Client IP is never taken from the first `X-Forwarded-For` value.** That
+  value is whatever the client sent; reading it — the common idiom — hands the
+  client the choice of its own address, and with it any rate limit, allowlist
+  or audit trail keyed on it. `clientIp` now comes from
+  `requestContext.http.sourceIp` in an Event Function (set by API Gateway);
+  from the **last** `X-Forwarded-For` entry in a Web Function, which Lambda
+  appends itself, moved back by `trustedProxies` when a front door you control
+  adds its own entry; and from the socket's remote address on a plain server,
+  where nothing vouches for the header at all.
+- **Web Function `clientIp` must be a literal IP address.** The selected
+  `X-Forwarded-For` entry is accepted only if `net.isIP` recognises it (IPv4 or
+  IPv6); otherwise `clientIp` is `''`. With `trustedProxies > 0` on an endpoint
+  that is also directly reachable, the chosen entry is client text; the check
+  keeps arbitrary strings and log-forging characters out of `clientIp` even in
+  that misconfiguration.
+- **`Local.EventFunctionProxy` no longer makes a spoofed IP look legitimate.**
+  Its synthesised `sourceIp` was the first `X-Forwarded-For` value, so a handler
+  that authorised on `sourceIp` could be exercised locally with a forged
+  address and then behave differently deployed. It is now the socket address,
+  as API Gateway reports it.
+- **`lambda-web-request-id` is trusted only in Web Function mode.** Lambda
+  strips any client-sent `lambda-web-*` header before adding its own, so there
+  the value is authentic. On a plain server a client could set it to anything,
+  including text crafted to forge log lines; a fresh UUID is used instead. The
+  accepted value is also shape-checked (`[A-Za-z0-9._:-]{1,128}`), so a
+  `webFunction: true` misconfiguration on a directly reachable server still
+  cannot inject arbitrary text into logs.
+- **`RequestLogger` reads `sourceIp` from API Gateway's request context**
+  (`http.sourceIp` for format 2.0, `identity.sourceIp` for 1.0) and never from
+  `X-Forwarded-For`.
+
+- **`HtmlSanitizer.clean` attribute parsing is linear (ReDoS).** The
+  attribute regex required a quoted value after every name, so a long run of
+  name characters with no `=` inside an allowed tag was rescanned from every
+  position: one ~1 MB tag blocked the event loop for minutes. A bare name is now
+  consumed once and skipped. The attributes kept are identical.
+- **Bodies with a CORS-safelisted content type are never JSON-parsed (CSRF).**
+  Both body parsers parsed any `Content-Type` containing `application/json`,
+  including `text/plain;application/json`, which a browser sends cross-site
+  with cookies and no preflight. A body whose MIME type is `text/plain`,
+  `application/x-www-form-urlencoded` or `multipart/form-data` is now left as a
+  string. Every other content type parses exactly as before. CORS is not a CSRF
+  defence: cookie-authenticated apps still need SameSite cookies, an
+  Origin/`Sec-Fetch-Site` check or CSRF tokens for form-style requests.
+- **`WebSocketServer` messages could not be tied to the connection that sent
+  them (moderate).** Every client's frames were emitted as a bare `message` event,
+  so authentication done in the `connection` handler could not keep a refused
+  client's frames away from `message` listeners or `EventsManager` handlers, and no
+  handler could authorize the sender. Worse, `ws` keeps delivering frames from a
+  socket after `ws.close()` until the peer answers the close frame (up to 30 s), so
+  a client refused with `close()` could keep reaching handlers. Now:
+  - `message` is emitted as `(parsed, ws, req)` — the sending socket and its
+    upgrade request — and `EventsManager` passes them to every handler as
+    `handler(msg, ws, req)`. Existing one-argument listeners are unaffected.
+  - Frames from a socket that is no longer `OPEN` are dropped, so closing or
+    terminating a client in the `connection` handler stops its messages at once.
+    **Behaviour change:** frames that arrive after the server has started closing
+    a socket are no longer emitted.
+- **`logRequest` logs no request values by default**. A body that was
+  not JSON (a form-encoded login, multipart, plain text, a base64 event body)
+  used to be logged as a raw string, and JSON bodies were filtered only by a
+  list of sensitive key names, so fields with other names (`dob`, a diagnosis,
+  an address) reached the log. Now the body is logged as
+  `{ contentType, bytes | fields | items }` and query and path parameters as
+  their names only. To log values, name them: `{ logBody: true, bodyFields:
+[...] }` and `paramFields: [...]`. A missing or empty `bodyFields` logs the
+  summary and warns once (`REQUEST_LOGGER_BODY_FIELDS_REQUIRED`). Unlisted
+  keys are `'[REDACTED]'` at any depth, sensitive keys (password, token, ssn,
+  cardNumber, ...) stay redacted even when listed, strings are capped at 256
+  characters, and text and binary bodies are never logged. `logRequest`,
+  `createRequestLogger` and `logResponse` log `route`, the matched pattern
+  (new optional `RouterRequest.route`, set by the router in every mode), not
+  the raw path, which can carry reset tokens or email addresses; the raw
+  `path` is logged only with the new `logPath: true` option, and with no
+  matched route (404, raw API Gateway events) no path is logged without it.
+  `route`, `path` and `userAgent` are cut at 256 characters.
+- **The router's error logs no longer carry the raw path.** Handler errors
+  (`ROUTER_HANDLER_ERROR`), 404s and `nodeJSRequest`/`eventFunction` failures
+  logged `request.path`, and on Node `req.url` with its query string, through
+  `RouteError.fromError`; the 404 message (logged with its stack) named the
+  path too. They now log `route`, the matched pattern, and no path when none
+  matched. `new Router({ logPath: true })` opts the path back in, without the
+  query string and cut at 256 characters, as `RequestLogger` does.
+- **The CORS allowlist rejects, not just logs**. With `cors: string[]`, a
+  request whose `Origin` is neither on the list nor same-origin gets
+  `403 CORS_ORIGIN_FORBIDDEN` for preflights and every method but GET (HEAD
+  included: a HEAD route runs its handler like any other), before the body is
+  read or any middleware or route runs. Same-origin means
+  `Sec-Fetch-Site: same-origin`, or, with no `Sec-Fetch-Site`, an `Origin`
+  whose host:port equals `Host`; any other `Sec-Fetch-Site` value wins over a
+  matching Host, and a `null` or unparseable Origin never counts. GET still
+  runs with CORS headers withheld, so GET routes must not have side effects. `Vary: Origin` is on every allowlist
+  response, the 403s included. `cors: true` and no `cors` are unchanged.
+  `eventFunction` does no CORS handling (configure it on API Gateway). CORS is
+  not a CSRF defence on its own; see docs/router.md.
+- **`Local.EventFunctionProxy` no longer sends `Access-Control-Allow-Origin: *`
+  or serves any Host**. The proxy injects an authorizer into every
+  event, so any website the developer visited could drive the local backend
+  and read responses as that identity, and DNS rebinding reached it as
+  same-origin. By default it now serves only loopback `Host` names
+  (`localhost`, `*.localhost`, `127.0.0.0/8`, `[::1]`); any other, missing or
+  malformed Host gets `403 HOST_NOT_ALLOWED` before the body, authorizer or
+  handler is touched. Only loopback origins get CORS, with `Vary: Origin` and
+  no credentials. New options: `cors?: boolean | string[]` (`false` = no CORS
+  headers, `string[]` = router allowlist with credentials, `true` = the old
+  wildcard) and `allowedHosts?: string[] | true` (extra names, case-insensitive,
+  port ignored; `true` disables the check). Both unsafe settings log a warning
+  at startup. `EventFunctionProxyOptions` is now exported. Withholding CORS
+  only blocks reading, so unless `cors: true` a cross-origin request that is
+  not GET (HEAD and preflights included) is refused with
+  `403 CROSS_ORIGIN_FORBIDDEN` before the body is read or the handler runs,
+  when its `Origin` is not allowed (default/`false`: not loopback;
+  `string[]`: unlisted and not same-origin), or its `Sec-Fetch-Site` is
+  `cross-site`/`same-site` without an allowed `Origin`. This stops form posts
+  and `no-cors` fetches from other sites acting as the injected authorizer.
+  Only GET is exempt: a cross-site HEAD runs the handler too and is refused.
+  A request with neither `Origin` nor `Sec-Fetch-Site` (an older browser's
+  form post looks like this) is refused when its `Content-Type` is a form
+  type (`application/x-www-form-urlencoded`, `multipart/form-data`,
+  `text/plain`) or it has a body with no `Content-Type`; curl and
+  server-to-server calls with `application/json`, or with no body and no
+  type, pass. With `allowedHosts: true`, `Sec-Fetch-Site: same-origin` and
+  the Origin-equals-Host fallback count only for a loopback Origin, so a
+  DNS-rebinding page cannot write through `cors: [...]`'s same-origin rule.
+  Any loopback origin on any port may write by default; list origins with
+  `cors: [...]` to narrow that. Cross-site GETs still run, so GET routes must
+  not have side effects. The logged Host of a refusal is cut at
+  200 characters.
+- **`WebSocketServer` `authenticate` option**. `authenticate(req)` runs at
+  upgrade time, after `allowedOrigins` and `verifyClient`. A falsy result, a
+  throw, a rejection or running past `upgradeTimeoutMs` refuses the upgrade
+  with 401, so no socket opens and none of the client's frames is dispatched;
+  the error is logged, never sent to the client. A truthy result is stored per
+  connection, passed as a trailing argument to `connection` (`ws, req, auth`)
+  and `message` (`parsed, ws, req, auth`) events and to `EventsManager`
+  handlers, and returned by the new `getAuth(ws)`. Without `authenticate`,
+  event arguments are unchanged. `authenticate` without `allowedOrigins` logs
+  `WEBSOCKET_NO_ORIGIN_ALLOWLIST` once per server: with cookie auth any site
+  could otherwise open a socket as the visitor (cross-site WebSocket
+  hijacking).
+- **`WebSocketServer` `upgradeTimeoutMs`.** One deadline (default 10 000 ms)
+  for the whole upgrade gate, `verifyClient` then `authenticate`. Past it the
+  upgrade is refused: 403 while `verifyClient` is pending, 401 while
+  `authenticate` is. A `verifyClient` that never settles no longer holds the
+  pending socket open. A value above `2147483647` (which `setTimeout` would
+  turn into 1 ms) throws.
+- **A request pipelined behind a refused body is not served.** After a `413`
+  for an oversized body the connection is closing, but Node kept parsing what
+  arrived on it, so a second request sent on the same connection behind the
+  refused upload still reached a route. It is now ignored.
+- **Slow uploads cannot hold a plain Node server's sockets open.** The new
+  `requestTimeout` / `headersTimeout` defaults (30 s / 10 s, see Changed —
+  breaking) answer `408` and close the connection of a client that trickles
+  its request.
+- **`Expect: 100-continue` uploads over the limit are refused before the body
+  is sent** when `Server` knows the limit (`ServerOptions.maxBodyBytes`;
+  `WebFunction.serve` sets it from the router). Node used to answer
+  `100 Continue` to every such request, inviting the upload only to refuse it.
+- **`Router` and `Local.EventFunctionProxy` share one implementation** of the
+  same-origin test and the CORS-safelisted `Content-Type` check, so the two
+  cannot drift apart. Behaviour is unchanged; Local keeps its stricter rule
+  that, with the Host check off, only a loopback `Origin` counts as
+  same-origin.
+- **Release pipeline.** The publish job no longer runs `npm ci` (and with it
+  every dependency's install scripts) while holding the npm OIDC token: build,
+  publish and GitHub-release are separate jobs, publishing the packed tarball
+  with `--ignore-scripts`. Every action is pinned to a commit SHA, checkouts
+  do not persist the token, and a tag that does not match `package.json` is
+  refused.
+- **Malformed requests (bad chunked encoding, oversized headers, request
+  timeouts) are logged at `warn` as `SERVER_CLIENT_ERROR`; Node's
+  `400`/`408`/`431` answers are kept.** They reached no log above `debug`, so
+  request-smuggling probes and slow-client attacks went unseen. The log
+  carries Node's error code only (`errorCode`), never the raw request bytes.
+  A client that simply reset the connection is logged at `debug`.
+
+- **The router no longer serves a different path than a proxy in front of it
+  judged.** `nodeJSRequest` took `request.path` from `new URL(req.url, base)`,
+  and URL resolution reads `//x/admin` as an authority and serves `/admin`
+  (`/\x/admin` likewise), and removes dot segments, percent-encoded ones
+  included (`/pub/%2e%2e/admin`). A proxy, CDN or WAF that guards `/admin` by
+  path saw `//x/admin` or `/pub/%2e%2e/admin`, let it through, and the router
+  ran the `/admin` route. The path is now taken verbatim and every such target
+  is refused with `400 INVALID_REQUEST` on both transports, so the router
+  never dispatches on a path other than the one it received. Dynamic routes
+  are matched on the path itself, no longer on a URL parsed from it: parsing
+  cut an Event Function path at `?` or `#` and trimmed trailing spaces, so
+  `/admin/1#x/y` and `/admin/1?/x/y` ran `/admin/:id` with `id` `1`; they now
+  get `404`, and `/admin/1 ` gives `id` `1%20`, as `/admin/1%20` does on the
+  Node transport. Matching ordinary paths is unchanged. The refusal is
+  logged as `ROUTER_INVALID_REQUEST_URL` with a fixed `reason` and the method
+  (cut at 16 characters), never the target; the logged `Host` of a malformed
+  Host refusal is dropped for the same reason.
+
+- **`Local.EventFunctionProxy` decides who is local from the socket, not
+  the `Host` header.** The only check keeping the proxy, and the identity it
+  injects, to the developer's machine was the `Host` header, which the client
+  chooses. Node's `listen(port)` binds every interface, so a machine on the
+  same network that sent `Host: localhost` (with no `Origin` and a JSON
+  body, which the cross-origin write check lets through) ran any route as the
+  injected authorizer and read the replies. The proxy now refuses any request
+  whose `req.socket.remoteAddress` is not loopback with
+  `403 PEER_NOT_ALLOWED`, before the Host check, CORS, the body, the
+  authorizer or the handler; other machines must be listed in the new
+  `allowedPeers` option. The refusal is logged as `LOCAL_PEER_NOT_ALLOWED`
+  with the peer address (cut at 64 characters) and the method. The Host check
+  stays, as the DNS-rebinding defence. The docs now bind every example to
+  `127.0.0.1`.
+
+### Fixed
+
+- **A dynamic route reached with a trailing slash gets its path parameters.**
+  The route was found on the path with trailing slashes stripped but its
+  parameters were read from the path as received, so `/users/42/` ran
+  `/users/:id` with an empty `params`. A `*` group keeps its trailing slash,
+  as before.
+- **Request bodies over the size limit get `413`, on every transport.** Found
+  by running the package in the Lambda Node 24 image. The Node transport
+  destroyed the socket instead of answering, so clients saw a dropped
+  connection with no status; it now answers `413 PAYLOAD_TOO_LARGE` (refusing
+  an oversized `Content-Length` without reading the body) with
+  `Connection: close`. The Event Function transport had no limit at all and
+  now applies the same one. New `RouterOptions.maxBodyBytes`, default 1 MiB.
+  Both transports log the refusal as `ROUTER_PAYLOAD_TOO_LARGE` at `warn`.
+  **Behaviour change:** Event Functions now refuse bodies over 1 MiB that API
+  Gateway used to let through; raise `maxBodyBytes` if you rely on them.
+- **The `413` reaches a client that is still uploading.** The socket was
+  destroyed as soon as the answer was written, while unread upload bytes were
+  still arriving, so the client often saw a TCP reset (`ECONNRESET`) instead
+  of the `413`. The connection now closes gracefully: the rest of the upload
+  is read and discarded (at most 4 MiB, then the connection is cut), and the
+  socket closes when the upload ends or after 2 s. Buffered chunks are
+  released as soon as the limit is exceeded.
+- **A request pipelined behind an `Expect: 100-continue` body refused with
+  `413` is not served, and that `413` is delivered with the same graceful
+  close as the router's.** `Server`'s refusal neither marked the connection
+  nor delayed the close, so a request sent behind the refused body still ran,
+  and a client that uploaded anyway could see a reset instead of the `413`.
+- **A client that disconnects mid-upload is not an error.** It was logged at
+  `ERROR` with a stack and answered with a `500` nobody received, and the body
+  read could hang when the connection closed before the body ended. It is now
+  logged at `debug` as `ROUTER_CLIENT_ABORTED`, nothing is written, and the
+  body read always settles.
+- **A MIME-wrapped base64 Event Function body exactly at `maxBodyBytes` is
+  accepted.** Line breaks (CRLF every 76 characters) were counted as data, so
+  the decoded size was overstated; whitespace is now ignored.
+- **`Local.EventFunctionProxy` text bodies are passed unchanged.** They were
+  wrapped in JSON quotes (`say "hi"` became `"say \"hi\""`), and a body of
+  quotes nearly doubled in size, tripping the wrapped router's limit
+  (see Changed — breaking).
+- **`Local.EventFunctionProxy` with `cors: string[]` sends `Vary: Origin` on
+  its `403 CROSS_ORIGIN_FORBIDDEN`**, as on every other response in that
+  mode.
+- **Request bodies are decoded once, as UTF-8 bytes.** They were decoded chunk
+  by chunk, so a multi-byte character (accented letters, emoji, CJK) that
+  straddled a chunk boundary was corrupted in bodies larger than one chunk.
+- **`Server.close()` is safe to call concurrently, early, or late.** Calls made
+  while a close is in progress share the same promise, so a second call no
+  longer races the first on the underlying `http.Server`. A call after close
+  has finished resolves immediately (`server.server` is `null` once closed)
+  instead of failing with `ERR_SERVER_NOT_RUNNING`. A call before the server is
+  listening waits for startup to finish or fail, then closes; previously
+  `http.Server.close()` on a not-yet-listening server rejected and left `ready`
+  hanging. When startup fails, the `SIGTERM` listener is removed so a dead
+  server cannot keep the process alive. Idle keep-alive sockets are closed
+  immediately so a drain does not wait out the keep-alive timeout while serving
+  nothing.
+- **`logRequest` no longer throws on a non-JSON body.** A raw event body went
+  through a bare `JSON.parse`, so any plain-text or form body made the logging
+  call itself throw and take the request down with it. Non-JSON bodies are now
+  summarised, never logged as text.
+- **`logResponse` understands `RouterResponse`.** It read only `statusCode`, so
+  a `RouterResponse` (which uses `status`) was always logged as `undefined`
+  and never at `error` level. Both fields are read; a missing status defaults
+  to `200`, as the router does.
+
 ## [10.4.1] - 2026-09-10
 
 Package metadata only. No code, no type and no build-output changes; the
@@ -911,7 +1394,7 @@ console.log(response.body.error.message); // "Failed"
   - Error code preservation for safe errors only
   - 30 comprehensive tests including security scenarios
 - Safe error classes whitelist: ValidationError, ConflictError, NotFoundError, AuthenticationError, AuthorizationError, UserError, BadRequestError, ForbiddenError
-- Complete documentation in [docs/route-error.md](docs/route-error.md) with security features, usage examples, and best practices
+- Complete documentation in [docs/route-error.md](https://github.com/designofadecade/server/blob/main/docs/route-error.md) with security features, usage examples, and best practices
 - Migration examples and real-world usage scenarios
 
 ### Changed

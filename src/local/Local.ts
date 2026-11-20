@@ -8,31 +8,312 @@
  * @example
  * // Wrap your Lambda handler for local development
  * import { handler } from './lambda/handler.js';
- * import Local from '@designofadecade/local';
+ * import { Local } from '@designofadecade/server';
  *
- * const localHandler = Local.LambdaProxyRouter(handler, {
+ * const localHandler = Local.EventFunctionProxy(handler, {
  *     requestContext: { stage: 'dev' }
  * });
  *
  * // Use with Node.js http server
  * http.createServer((req, res) => {
  *     localHandler.request(req, res);
- * }).listen(3000);
+ * }).listen(3000, '127.0.0.1');
  */
 
 import Router from '../router/Router.js';
+import { RAW_BODY } from '../router/internal.js';
+import { isCorsSafelistedContentType, isSameOriginRequest } from '../router/origin.js';
 import Routes from '../router/Routes.js';
 import type { RouterRequest, RouterResponse } from '../router/Router.js';
+import { logger } from '../logger/Logger.js';
 import type { IncomingMessage, ServerResponse } from 'http';
-import { randomUUID } from 'node:crypto';
+import { BlockList, isIP } from 'node:net';
 
-interface LambdaProxyRouterOptions {
+export interface EventFunctionProxyOptions {
   requestContext?: Record<string, unknown>;
   event?: Record<string, unknown>;
+  /**
+   * Cross-origin access to the local backend.
+   *
+   * - omitted (default): CORS is granted only to loopback origins (`http` or
+   *   `https`, host `localhost`, `*.localhost`, `127.0.0.0/8` or `[::1]`, any
+   *   port). The Origin is reflected with `Vary: Origin` and no
+   *   `Access-Control-Allow-Credentials`; any other origin gets no
+   *   `Access-Control-Allow-Origin`.
+   * - `false`: no CORS headers at all.
+   * - `string[]`: the router's allowlist semantics: exact-match origins are
+   *   reflected *with* `Access-Control-Allow-Credentials: true`.
+   * - `true`: `Access-Control-Allow-Origin: *`. SECURITY: every website the
+   *   developer visits can then call the local backend and read the
+   *   responses, under whatever authorizer the proxy injects. Opt in only
+   *   when nothing sensitive is reachable.
+   *
+   * Except with `true`, a cross-origin request that is not GET (HEAD and
+   * OPTIONS preflights included) from an origin the mode does not allow is
+   * refused with 403 `CROSS_ORIGIN_FORBIDDEN` before the handler runs: the
+   * default and `false` allow loopback origins (any port, so any other local
+   * app can write too), `string[]` allows listed origins and same-origin
+   * requests (with `allowedHosts: true`, same-origin counts only for a
+   * loopback Origin). A request with no `Origin` and no `Sec-Fetch-Site`
+   * passes (curl, server-to-server) unless it looks like an older browser's
+   * form post: a form `Content-Type` (`application/x-www-form-urlencoded`,
+   * `multipart/form-data`, `text/plain`), or a body with no `Content-Type`.
+   * Only GET is exempt: a cross-site GET still runs (only reading the reply
+   * is blocked), so GET routes must not have side effects.
+   */
+  cors?: boolean | string[];
+  /**
+   * Host names accepted in the `Host` header, besides loopback ones.
+   *
+   * By default a request is refused with 403 unless its Host is `localhost`,
+   * `*.localhost`, a `127.0.0.0/8` address or `[::1]`. That blocks DNS
+   * rebinding, where an attacker's domain is re-pointed at 127.0.0.1 so the
+   * browser treats the local backend as same-origin with the attacker page.
+   * List extra names here for a LAN address or a tunnel
+   * (`['192.168.1.20', 'dev.example.test']`): matched case-insensitively,
+   * port ignored. `true` disables the check. This check does not decide
+   * which machines may connect (the client chooses Host); a LAN device also
+   * needs `allowedPeers`.
+   */
+  allowedHosts?: string[] | true;
+  /**
+   * Network peers (the TCP client address) allowed besides this machine.
+   *
+   * By default a request is refused with 403 `PEER_NOT_ALLOWED` unless it
+   * arrives from a loopback address (`127.0.0.0/8`, `::1`, or
+   * `::ffff:127.x.x.x`), whatever its `Host` header says: the Host header is
+   * chosen by the client, so it cannot tell the developer's own browser from
+   * another machine on the same network. Tunnels (cloudflared, ngrok) connect
+   * from loopback and need only `allowedHosts`.
+   *
+   * List IP addresses or CIDR ranges to let other machines in
+   * (`['192.168.1.30', '192.168.1.0/24', 'fd00::/8']`); an IPv4-mapped IPv6
+   * peer is matched as IPv4. An entry that is not an address or range throws.
+   * `true` admits any peer, and logs a warning at startup: every machine that
+   * can reach the port then acts as the injected authorizer. Prefer binding
+   * the server to loopback (`listen(3000, '127.0.0.1')`) as well.
+   */
+  allowedPeers?: string[] | true;
+  /**
+   * Largest request body the proxy accepts, in bytes; a larger one is
+   * answered `413 PAYLOAD_TOO_LARGE` before the handler runs. Default 1 MiB,
+   * the router's default. Set it to the `maxBodyBytes` of the router the
+   * handler wraps, so local dev refuses (and accepts) what deployment does.
+   */
+  maxBodyBytes?: number;
 }
 
 /**
- * The event `LambdaProxyRouter` synthesises, shaped as an API Gateway HTTP API
+ * Decodes a request body that is valid UTF-8 to text; anything else is
+ * `null`. Used to tell a text body from a binary one.
+ */
+const strictUtf8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
+function utf8OrNull(bytes: Buffer): string | null {
+  try {
+    return strictUtf8.decode(bytes);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Normalises a Host-like value (`name`, `name:port`, `[v6]:port`) to its
+ * lowercase hostname, or `null` when it does not parse as one. Anything that
+ * would make `URL` read part of it as userinfo or a path is rejected first.
+ */
+function hostnameOf(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed || /[\s@/\\?#]/.test(trimmed)) return null;
+  // A bare IPv6 literal (`::1`) has to be bracketed to parse as a host.
+  const candidate =
+    !trimmed.startsWith('[') && trimmed.split(':').length > 2 ? `[${trimmed}]` : trimmed;
+  try {
+    const hostname = new URL(`http://${candidate}`).hostname.toLowerCase();
+    return hostname || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Loopback peer addresses: `127.0.0.0/8` and `::1`. */
+const LOOPBACK_PEERS = new BlockList();
+LOOPBACK_PEERS.addSubnet('127.0.0.0', 8, 'ipv4');
+LOOPBACK_PEERS.addAddress('::1', 'ipv6');
+
+/**
+ * A socket address as `[address, family]`, with an IPv4-mapped IPv6 address
+ * (`::ffff:192.168.1.30`, what a dual-stack server reports for an IPv4
+ * client) unwrapped to IPv4. `null` for anything that is not an IP address.
+ */
+function peerAddressOf(value: unknown): [string, 'ipv4' | 'ipv6'] | null {
+  if (typeof value !== 'string') return null;
+  const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(value);
+  const address = mapped ? mapped[1]! : value;
+  const version = isIP(address);
+  if (version === 4) return [address, 'ipv4'];
+  if (version === 6) return [address, 'ipv6'];
+  return null;
+}
+
+/**
+ * Builds the opt-in peer list from `allowedPeers` entries: addresses
+ * (`192.168.1.30`, `fd00::1`) or CIDR ranges (`192.168.1.0/24`). An
+ * IPv4-mapped range in dotted form (`::ffff:10.0.0.0/104`) is taken as the
+ * IPv4 range it maps (`10.0.0.0/8`). Throws on anything else, including an
+ * IPv6 zone id (`fe80::1%eth0`, which no peer address ever matches), so a
+ * typo cannot silently leave the list narrower or wider than intended.
+ */
+function peerListOf(entries: readonly string[]): BlockList {
+  const list = new BlockList();
+  for (const entry of entries) {
+    const invalid = (why = 'is not an IP address or CIDR range'): TypeError =>
+      new TypeError(`EventFunctionProxy allowedPeers: ${JSON.stringify(entry)} ${why}`);
+    const [rawAddress, prefix, ...rest] = typeof entry === 'string' ? entry.trim().split('/') : [];
+    if (typeof entry === 'string' && entry.includes('%')) {
+      throw invalid('has an IPv6 zone id, which no peer address carries; drop the %zone');
+    }
+    const parsed = peerAddressOf(rawAddress);
+    if (!parsed || rest.length > 0 || (prefix !== undefined && !/^\d{1,3}$/.test(prefix))) {
+      throw invalid();
+    }
+    let prefixLength = prefix === undefined ? undefined : Number(prefix);
+    // `peerAddressOf` unwrapped a dotted IPv4-mapped address: its prefix
+    // counts the 96 bits of `::ffff:` too.
+    const mapped = parsed[1] === 'ipv4' && parsed[0] !== rawAddress;
+    if (mapped && prefixLength !== undefined) {
+      if (prefixLength < 96 || prefixLength > 128) {
+        throw invalid(
+          'is an IPv4-mapped range wider than ::ffff:0.0.0.0/96; write IPv4 ranges in IPv4 form (10.0.0.0/8)'
+        );
+      }
+      prefixLength -= 96;
+    }
+    if (prefixLength !== undefined && prefixLength > (parsed[1] === 'ipv4' ? 32 : 128)) {
+      throw invalid();
+    }
+    if (prefixLength === undefined) list.addAddress(parsed[0], parsed[1]);
+    else list.addSubnet(parsed[0], prefixLength, parsed[1]);
+  }
+  return list;
+}
+
+/**
+ * Whether a socket's remote address is loopback or on the `allowedPeers`
+ * list. Fails closed: a missing or unparseable address (or one `BlockList`
+ * cannot check, such as an IPv6 address with a zone id) is not allowed.
+ */
+function isAllowedPeer(remoteAddress: unknown, extraPeers: BlockList | null): boolean {
+  const peer = peerAddressOf(remoteAddress);
+  if (!peer) return false;
+  try {
+    return LOOPBACK_PEERS.check(peer[0], peer[1]) || extraPeers?.check(peer[0], peer[1]) === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * `localhost`, `*.localhost`, `127.0.0.0/8` or `[::1]`. Expects a hostname as
+ * `URL` normalises it (lowercase, IPv4 in dotted-quad, IPv6 bracketed).
+ */
+function isLoopbackHostname(hostname: string): boolean {
+  return (
+    hostname === 'localhost' ||
+    (hostname.endsWith('.localhost') && hostname.length > '.localhost'.length) ||
+    /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname) ||
+    hostname === '[::1]'
+  );
+}
+
+/**
+ * Whether an Origin header names a loopback origin. Parsed defensively: a
+ * malformed value, the opaque `null` origin, a non-http(s) scheme or anything
+ * that is not exactly a serialised origin (path, userinfo, a joined pair of
+ * headers) counts as not loopback.
+ */
+function isLoopbackOrigin(origin: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(origin);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return false;
+  if (url.origin !== origin) return false;
+  return isLoopbackHostname(url.hostname);
+}
+
+/**
+ * Whether a request is same-origin with the backend it reached: the router's
+ * own test (`Sec-Fetch-Site` when present, else Origin host equals Host).
+ *
+ * With the Host check off (`allowedHosts: true`) neither signal can be
+ * trusted for a non-loopback Origin: a DNS-rebinding page is same-origin with
+ * the backend as far as its browser knows, and its Origin host equals the Host
+ * it sends. Only a loopback Origin can then count as same-origin.
+ */
+function isSameOriginLocalRequest(
+  req: IncomingMessage,
+  origin: string,
+  hostCheckOff: boolean
+): boolean {
+  if (hostCheckOff && !isLoopbackOrigin(origin)) return false;
+  return isSameOriginRequest(req.headers, origin);
+}
+
+function hasRequestBody(req: IncomingMessage): boolean {
+  if (req.headers['transfer-encoding'] !== undefined) return true;
+  const length = req.headers['content-length'];
+  return length !== undefined && length.trim() !== '0';
+}
+
+/**
+ * Whether a state-changing (non-GET) request comes from a site that may not
+ * write to the local backend. Only GET is exempt: a cross-site HEAD runs the
+ * handler just as a POST does, so it is checked too.
+ *
+ * - default / `cors: false`: loopback origins may write, nothing else.
+ * - `cors: string[]`: listed origins, or a same-origin request (with
+ *   `allowedHosts: true`, same-origin only for a loopback Origin).
+ *
+ * A browser that sends `Origin` or a cross-site `Sec-Fetch-Site` is judged by
+ * them. With neither header (curl, a server-side client, but also an older
+ * browser posting a cross-site form) the request passes only when it could
+ * not be a form post: a body typed as something a form cannot send
+ * (`application/json`), or no body and no `Content-Type` at all.
+ */
+function isForbiddenCrossOriginWrite(
+  req: IncomingMessage,
+  cors: false | string[],
+  hostCheckOff: boolean
+): boolean {
+  if (req.method === 'GET') return false;
+  const rawOrigin = req.headers.origin;
+  const origin = typeof rawOrigin === 'string' ? rawOrigin : undefined;
+  const fetchSite = req.headers['sec-fetch-site'];
+  const allowed =
+    origin !== undefined &&
+    (Array.isArray(cors)
+      ? cors.includes(origin) || isSameOriginLocalRequest(req, origin, hostCheckOff)
+      : isLoopbackOrigin(origin));
+  if (origin !== undefined && !allowed) return true;
+  // SECURITY (fail closed): a browser that says the request is cross-site or
+  // same-site but sends no Origin we can vouch for is refused as well.
+  if ((fetchSite === 'cross-site' || fetchSite === 'same-site') && !allowed) return true;
+  // SECURITY (fail closed): with neither header, an older browser's
+  // cross-site form post is indistinguishable from curl except by its body.
+  // Form bodies (and bodies with no type, which a no-cors fetch can send)
+  // are refused; a client that means it sets a non-form Content-Type.
+  if (origin === undefined && fetchSite === undefined) {
+    const contentType = req.headers['content-type'];
+    if (isCorsSafelistedContentType(contentType)) return true;
+    if (!contentType && hasRequestBody(req)) return true;
+  }
+  return false;
+}
+
+/**
+ * The event `EventFunctionProxy` synthesises, shaped as an API Gateway HTTP API
  * (payload format 2.0) event.
  *
  * Every field AWS marks required is present, because the wrapped handler is
@@ -42,7 +323,7 @@ interface LambdaProxyRouterOptions {
  * `version`, `routeKey`, `rawQueryString` and `isBase64Encoded`, so passing a
  * conventionally typed handler was a type error.
  */
-export interface LambdaEvent {
+export interface EventFunctionProxyEvent {
   version: string;
   routeKey: string;
   rawPath: string;
@@ -57,7 +338,7 @@ export interface LambdaEvent {
   queryStringParameters: Record<string, string>;
   /**
    * API Gateway v2 sends cookies as `["name=value", ...]`, not as an object.
-   * Emitting an object here meant a wrapped `Router.lambdaEvent` handler ran
+   * Emitting an object here meant a wrapped `Router.eventFunction` handler ran
    * its array guard, found a non-array, and silently discarded every cookie.
    */
   cookies: string[];
@@ -106,10 +387,10 @@ export interface LambdaEvent {
  *   TypeScript only reports the earliest mismatched property, so fixing
  *   `statusCode` alone would just have moved the error one field over.
  *
- * `LambdaProxyRouter` accepts `LambdaResponse | string`; see there for the bare
+ * `EventFunctionProxy` accepts `EventFunctionProxyResult | string`; see there for the bare
  * string return format 2.0 also permits.
  */
-export interface LambdaResponse {
+export interface EventFunctionProxyResult {
   statusCode?: number;
   headers?: Record<string, string | number | boolean>;
   cookies?: string[];
@@ -119,20 +400,34 @@ export interface LambdaResponse {
 
 export default class Local {
   /**
-   * Lambda proxy router for local development
+   * Runs a Lambda Event Function handler locally.
    *
-   * Creates a router that wraps AWS Lambda handlers and allows them to be
-   * run locally with a Node.js HTTP server. Automatically converts between
+   * Wraps a handler written for API Gateway HTTP API (payload format 2.0) so a
+   * plain Node.js HTTP server can drive it. A Web Function needs none of this:
+   * it already is an HTTP server and runs locally as-is. Automatically converts between
    * HTTP requests and Lambda event format.
    *
-   * @param {Function} LambdaHandler - AWS Lambda handler function
+   * @param {Function} eventFunctionHandler - AWS Lambda handler function
    * @param {Object} options - Configuration options
    * @param {Object} options.requestContext - Additional requestContext fields for Lambda event
    * @param {Object} options.event - Additional event fields for Lambda event
+   * @param {boolean|string[]} options.cors - Cross-origin access. Default:
+   *   loopback origins only (reflected, `Vary: Origin`, no credentials).
+   *   `false` sends no CORS headers, `string[]` is an exact-origin allowlist
+   *   (with credentials, as the router does), `true` is a wildcard: any site
+   *   the developer visits can then read the local API.
+   * @param {string[]|true} options.allowedHosts - Extra `Host` names to accept
+   *   (LAN address, tunnel). By default only loopback hosts are served and
+   *   anything else gets 403, which blocks DNS rebinding. `true` disables the
+   *   check.
+   * @param {string[]|true} options.allowedPeers - Client IP addresses or CIDR
+   *   ranges to serve besides loopback peers (decided from the socket, never
+   *   from Host). By default any other peer gets 403 `PEER_NOT_ALLOWED`.
+   *   `true` serves any peer.
    * @returns {Object} Object with request method for handling HTTP requests
    *
    * @example
-   * const handler = Local.LambdaProxyRouter(
+   * const handler = Local.EventFunctionProxy(
    *     async (event) => {
    *         return {
    *             statusCode: 200,
@@ -141,12 +436,27 @@ export default class Local {
    *     },
    *     { requestContext: { stage: 'local' } }
    * );
+   *
+   * SECURITY: an `authorizer` injected through `requestContext` (or derived
+   * from a JWT) applies to every caller that reaches the proxy, not only to
+   * the developer's own frontend. By default other machines are refused
+   * (403 `PEER_NOT_ALLOWED`, from the socket address), and other websites cannot read
+   * responses (CORS is loopback-only), cannot send anything but GET
+   * (403 `CROSS_ORIGIN_FORBIDDEN`), and cannot reach it by DNS rebinding
+   * (403 `HOST_NOT_ALLOWED`). A cross-site GET still runs, so GET routes must
+   * not have side effects. Any loopback origin on any port may write, so
+   * another local app with an XSS hole can drive the proxy; list origins in
+   * `cors` to narrow that. Widen the defaults deliberately.
    */
-  static LambdaProxyRouter(
-    LambdaHandler: (event: LambdaEvent) => Promise<LambdaResponse | string>,
-    options: LambdaProxyRouterOptions = {}
+  static EventFunctionProxy(
+    eventFunctionHandler: (
+      event: EventFunctionProxyEvent
+    ) => Promise<EventFunctionProxyResult | string>,
+    options: EventFunctionProxyOptions = {}
   ) {
     const router = new Router({
+      // Validated by the router: a positive integer, default 1 MiB.
+      ...(options.maxBodyBytes !== undefined ? { maxBodyBytes: options.maxBodyBytes } : {}),
       initRoutes: [
         class LocalRoutes extends Routes {
           constructor(router: Router) {
@@ -156,11 +466,21 @@ export default class Local {
               '*',
               ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'],
               async (request: RouterRequest): Promise<RouterResponse> => {
-                const lambdaOptions =
-                  (request.lambdaOptions as {
+                const proxyOptions =
+                  (request.proxyOptions as {
                     requestContext?: Record<string, unknown>;
                     event?: Record<string, unknown>;
                   }) || {};
+
+                // The body as API Gateway sends it: the raw text, unparsed
+                // (the wrapped handler parses it), or base64 with
+                // `isBase64Encoded` when it is not valid UTF-8. Re-encoding a
+                // parsed body (as this once did with JSON.stringify) turned a
+                // text body into a quoted JSON string and grew its size.
+                const rawBody = Buffer.isBuffer(request.body) ? request.body : null;
+                const text = rawBody ? utf8OrNull(rawBody) : null;
+                const body =
+                  rawBody === null ? undefined : text !== null ? text : rawBody.toString('base64');
 
                 const rawQueryString = new URLSearchParams(request.query).toString();
                 const now = new Date();
@@ -171,7 +491,7 @@ export default class Local {
                   headers[name] = Array.isArray(value) ? value.join(', ') : value;
                 }
 
-                const result: LambdaResponse | string = await LambdaHandler({
+                const result: EventFunctionProxyResult | string = await eventFunctionHandler({
                   version: '2.0',
                   routeKey: `${request.method} ${request.path}`,
                   rawPath: request.path,
@@ -195,20 +515,23 @@ export default class Local {
                       method: request.method,
                       path: request.path,
                       protocol: 'HTTP/1.1',
-                      sourceIp: headers['x-forwarded-for']?.split(',')[0]?.trim() ?? '127.0.0.1',
+                      // The socket address, as API Gateway reports the TCP
+                      // peer. The first X-Forwarded-For value is whatever the
+                      // client chose to send, so it never stands in for this.
+                      sourceIp: request.clientIp || '127.0.0.1',
                       userAgent: headers['user-agent'] ?? '',
                     },
-                    requestId: randomUUID(),
+                    requestId: request.requestId,
                     routeKey: `${request.method} ${request.path}`,
                     stage: '$default',
                     time: now.toISOString(),
                     timeEpoch: now.getTime(),
                     authorizer: request.authorizer || null,
-                    ...(lambdaOptions.requestContext || {}),
-                  } as LambdaEvent['requestContext'],
-                  body: request.body ? JSON.stringify(request.body) : undefined,
-                  isBase64Encoded: false,
-                  ...(lambdaOptions.event || {}),
+                    ...(proxyOptions.requestContext || {}),
+                  } as EventFunctionProxyEvent['requestContext'],
+                  body,
+                  isBase64Encoded: rawBody !== null && text === null,
+                  ...(proxyOptions.event || {}),
                 });
 
                 // Format 2.0 lets a handler skip the response envelope: return
@@ -267,6 +590,39 @@ export default class Local {
       ],
     });
 
+    const allowedHosts = options.allowedHosts;
+    const allowedPeers = options.allowedPeers;
+    // Validated up front: a bad entry throws here, not on the first request.
+    const extraPeers = Array.isArray(allowedPeers) ? peerListOf(allowedPeers) : null;
+
+    // SECURITY: both opt-outs expose the local backend, and its injected
+    // authorizer, beyond this machine's own pages. Say so once, at startup.
+    if (options.cors === true) {
+      logger.warn(
+        'EventFunctionProxy cors: true sends Access-Control-Allow-Origin: * — any website can call this local backend and read its responses',
+        { code: 'LOCAL_CORS_WILDCARD', source: 'Local.EventFunctionProxy' }
+      );
+    }
+    if (allowedPeers === true) {
+      logger.warn(
+        'EventFunctionProxy allowedPeers: true serves any network peer — every machine that can reach this port acts as the injected authorizer',
+        { code: 'LOCAL_PEER_CHECK_DISABLED', source: 'Local.EventFunctionProxy' }
+      );
+    }
+    if (allowedHosts === true) {
+      logger.warn(
+        'EventFunctionProxy allowedHosts: true disables the Host check — a DNS-rebinding page can reach this local backend and read GET responses; cross-origin writes are still limited to loopback or listed cors origins',
+        { code: 'LOCAL_HOST_CHECK_DISABLED', source: 'Local.EventFunctionProxy' }
+      );
+    }
+    const extraHosts = new Set<string>(
+      Array.isArray(allowedHosts)
+        ? allowedHosts
+            .map((entry) => hostnameOf(entry))
+            .filter((entry): entry is string => entry !== null)
+        : []
+    );
+
     return {
       request: (
         req: IncomingMessage,
@@ -276,9 +632,120 @@ export default class Local {
           event?: Record<string, unknown>;
         } = {}
       ) => {
-        return router.nodeJSRequest(req, res, {
-          cors: true,
-          lambdaOptions: {
+        // SECURITY: the proxy acts as the injected authorizer for whoever
+        // reaches it, so by default only this machine may. Decided from the
+        // TCP peer, never from Host: any client on the network can send
+        // `Host: localhost`. Checked first, before Host, CORS, the body or
+        // the handler. A socket with no address (already closed) is refused.
+        if (allowedPeers !== true) {
+          const rawPeer = req.socket?.remoteAddress;
+          if (!isAllowedPeer(rawPeer, extraPeers)) {
+            logger.warn('Rejected request from a non-allowed network peer', {
+              code: 'LOCAL_PEER_NOT_ALLOWED',
+              source: 'Local.EventFunctionProxy',
+              // From the socket, not the client, but bounded all the same.
+              peer: typeof rawPeer === 'string' ? rawPeer.slice(0, 64) : undefined,
+              method: req.method?.slice(0, 16),
+            });
+            res.statusCode = 403;
+            res.setHeader('Content-Type', 'application/json');
+            res.end(
+              JSON.stringify({
+                success: false,
+                error: { code: 'PEER_NOT_ALLOWED', message: 'Peer not allowed' },
+              })
+            );
+            return Promise.resolve();
+          }
+        }
+
+        // SECURITY (DNS rebinding): a browser sends the attacker's own name
+        // as Host after re-pointing it at 127.0.0.1, so only loopback names
+        // (plus any the developer listed) are served.
+        if (allowedHosts !== true) {
+          const rawHost = req.headers.host;
+          const hostname = typeof rawHost === 'string' ? hostnameOf(rawHost) : null;
+          if (!hostname || !(isLoopbackHostname(hostname) || extraHosts.has(hostname))) {
+            logger.warn('Rejected request with a non-allowed Host header', {
+              code: 'LOCAL_HOST_NOT_ALLOWED',
+              source: 'Local.EventFunctionProxy',
+              // Client-controlled: bounded so one header cannot bloat the log.
+              host: typeof rawHost === 'string' ? rawHost.slice(0, 200) : rawHost,
+            });
+            res.statusCode = 403;
+            res.setHeader('Content-Type', 'application/json');
+            res.end(
+              JSON.stringify({
+                success: false,
+                error: { code: 'HOST_NOT_ALLOWED', message: 'Host not allowed' },
+              })
+            );
+            return Promise.resolve();
+          }
+        }
+
+        // SECURITY (CSRF): withholding CORS headers only stops another site
+        // READING the response. A form post or a `no-cors` fetch from a page
+        // the developer has open still reaches the handler, with the injected
+        // authorizer, so a cross-origin request that is not GET from an
+        // origin that is not allowed is refused before the body is read or
+        // the handler runs. Preflights (OPTIONS) are refused too, so the
+        // browser never sends the real request. `cors: true` is the explicit,
+        // startup-warned opt-out.
+        if (
+          options.cors !== true &&
+          isForbiddenCrossOriginWrite(req, options.cors ?? false, allowedHosts === true)
+        ) {
+          const origin = req.headers.origin;
+          const fetchSite = req.headers['sec-fetch-site'];
+          logger.warn('Rejected cross-origin request from a non-allowed origin', {
+            code: 'LOCAL_CROSS_ORIGIN_BLOCKED',
+            source: 'Local.EventFunctionProxy',
+            // Client-controlled: bounded so one header cannot bloat the log.
+            origin: typeof origin === 'string' ? origin.slice(0, 200) : undefined,
+            secFetchSite: typeof fetchSite === 'string' ? fetchSite.slice(0, 32) : undefined,
+            method: req.method?.slice(0, 16),
+          });
+          res.statusCode = 403;
+          res.setHeader('Content-Type', 'application/json');
+          // The answer depends on Origin whenever the mode reflects
+          // origins, so caches must key on it.
+          if (options.cors === undefined || Array.isArray(options.cors)) {
+            res.setHeader('Vary', 'Origin');
+          }
+          res.end(
+            JSON.stringify({
+              success: false,
+              error: {
+                code: 'CROSS_ORIGIN_FORBIDDEN',
+                message: 'Cross-origin request not allowed',
+              },
+            })
+          );
+          return Promise.resolve();
+        }
+
+        // Default CORS: reflect loopback origins only, without credentials.
+        // The router's own modes are wildcard (`true`) or a credentialed
+        // allowlist, neither of which fits, so the headers are set here and
+        // the router is told to add none.
+        if (options.cors === undefined) {
+          res.setHeader('Vary', 'Origin');
+          const origin = req.headers.origin;
+          if (typeof origin === 'string' && isLoopbackOrigin(origin)) {
+            res.setHeader('Access-Control-Allow-Origin', origin);
+            res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+            res.setHeader(
+              'Access-Control-Allow-Headers',
+              'Content-Type, Authorization, X-Requested-With'
+            );
+            res.setHeader('Access-Control-Max-Age', '86400');
+          }
+        }
+
+        const routerOptions = {
+          cors: options.cors === undefined ? false : options.cors,
+          proxyOptions: {
             requestContext: {
               ...options.requestContext,
               ...requestOptions.requestContext,
@@ -288,7 +755,9 @@ export default class Local {
               ...requestOptions.event,
             },
           },
-        });
+        };
+        // Internal flag: hand the route the raw body bytes (see RAW_BODY).
+        return router.nodeJSRequest(req, res, Object.assign(routerOptions, { [RAW_BODY]: true }));
       },
     };
   }

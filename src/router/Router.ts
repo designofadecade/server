@@ -1,7 +1,16 @@
 import { IncomingMessage, ServerResponse } from 'http';
-import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
+import { isIP } from 'node:net';
+import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { logger } from '../logger/Logger.js';
 import RouteError from './RouteError.js';
+import { isCorsSafelistedContentType, isSameOriginRequest } from './origin.js';
+import { checkRequestPath, parseRequestTarget } from './requestTarget.js';
+import {
+  RAW_BODY,
+  answerPayloadTooLarge,
+  isRefusedConnection,
+  payloadTooLargeBody,
+} from './internal.js';
 import type { ContextLike } from '../context/Context.js';
 
 /**
@@ -15,16 +24,22 @@ import type { ContextLike } from '../context/Context.js';
  * that declared one; the router reads only the fields below, so requiring it
  * bought nothing and blocked the primary use case.
  */
-export interface LambdaHttpEvent {
+export interface EventFunctionEvent {
   requestContext: {
     http: {
       method: string;
       path: string;
+      /** Client address as API Gateway saw the TCP connection. */
+      sourceIp?: string;
     };
+    /** API Gateway's request id; becomes `request.requestId`. */
+    requestId?: string;
     authorizer?: unknown;
   };
   headers: Record<string, string | string[] | undefined>;
   body?: string | null;
+  /** Whether `body` is base64; used to measure its decoded size. */
+  isBase64Encoded?: boolean;
   cookies?: string[];
   /**
    * API Gateway omits query parameters that were not supplied, so a lookup
@@ -35,8 +50,8 @@ export interface LambdaHttpEvent {
   queryStringParameters?: Record<string, string | undefined>;
 }
 
-/** The API Gateway HTTP API (payload format 2.0) response `lambdaEvent` returns. */
-export interface LambdaHttpResponse {
+/** The API Gateway HTTP API (payload format 2.0) response `eventFunction` returns. */
+export interface EventFunctionResult {
   statusCode: number;
   headers?: Record<string, string>;
   /**
@@ -88,8 +103,37 @@ export interface RouterRequest {
   params: Record<string, string>;
   query: Record<string, string>;
   headers: Record<string, string | string[] | undefined>;
+  /**
+   * The caller's IP address, from a source that cannot be spoofed by the
+   * caller in the current mode:
+   *
+   * - Event Function: `requestContext.http.sourceIp`, set by API Gateway.
+   * - Web Function: the last `X-Forwarded-For` entry, which Lambda appends
+   *   itself (earlier entries are client-supplied and ignored), or the entry
+   *   `trustedProxies` hops further back when a front door such as CloudFront
+   *   sits in front of the endpoint.
+   * - Plain Node server: the socket's remote address. `X-Forwarded-For` is
+   *   never trusted here, because nothing vouches for it.
+   *
+   * Empty string when no address is known.
+   */
+  clientIp: string;
+  /**
+   * An identifier for this request, for log correlation: API Gateway's request
+   * id, Lambda's `lambda-web-request-id`, or a fresh UUID on a plain server.
+   */
+  requestId: string;
   authorizer?: unknown;
-  lambdaOptions?: unknown;
+  /** Transport-specific options a proxy (see `Local`) passes to its catch-all route. */
+  proxyOptions?: unknown;
+  /**
+   * The registered path pattern of the route that matched (`/users/:id`),
+   * set by the router before middleware runs. Unset when no route matched.
+   * Safe to log where the raw `path` is not: it never contains the
+   * request's own values (ids, reset tokens). Optional so request objects
+   * built by hand, in tests for example, need not supply it.
+   */
+  route?: string;
 }
 
 export interface RouterResponse {
@@ -145,14 +189,68 @@ export interface RouterOptions {
    * is always `null` — an unverified token is never exposed.
    */
   jwt?: JwtOptions;
+  /**
+   * Treat Node requests as arriving through a Lambda Web Function endpoint:
+   * read `clientIp` from `X-Forwarded-For` and `requestId` from
+   * `lambda-web-request-id`. Defaults to whether `AWS_LAMBDA_HTTP_ENDPOINT` is
+   * set. Never enable it on a server clients reach directly — those headers
+   * are only trustworthy because Lambda strips and rewrites them.
+   */
+  webFunction?: boolean;
+  /**
+   * Web Function only: the number of proxies you control in front of the
+   * Lambda endpoint (CloudFront in front of the endpoint = 1). Each one
+   * appends the address it saw, so the client is that many entries before the
+   * last. Default `0`. Has no effect on a plain server or an Event Function.
+   *
+   * Only safe when the endpoint cannot be reached except through those
+   * proxies (for CloudFront: `IamAuth` on the endpoint, with invoke permission
+   * granted only to your distribution). If clients can call the endpoint
+   * directly they choose the entry this reads.
+   */
+  trustedProxies?: number;
+  /**
+   * Also write the raw request path to the router's own error log lines
+   * (handler errors, 404s, request failures). Off by default: a path can
+   * carry secrets (`/reset-password/<token>`) and personal data
+   * (`/users/<email>`), so those lines carry only the matched route pattern
+   * (`route`), and no path at all when no route matched. When on, the path is
+   * logged without its query string and cut at 256 characters. Same rule as
+   * `RequestLogger`'s `logPath`.
+   */
+  logPath?: boolean;
+  /**
+   * Largest request body accepted, in bytes, on both transports. Default
+   * 1 MiB. A larger body is answered `413 PAYLOAD_TOO_LARGE` before any
+   * middleware or route runs: on the Node path as soon as `Content-Length`
+   * (or the bytes read so far) exceeds it, on the Event Function path from
+   * the decoded size of `event.body`.
+   */
+  maxBodyBytes?: number;
 }
 
 export type RouterMiddleware = (request: RouterRequest) => Promise<RouterResponse | void>;
 
+/** A request body over `maxBodyBytes`; answered 413 by `nodeJSRequest`. */
+class BodyTooLargeError extends Error {
+  constructor() {
+    super('Request body too large');
+    this.name = 'BodyTooLargeError';
+  }
+}
+
+/** The client went away before its request body was complete. */
+class ClientAbortedError extends Error {
+  constructor() {
+    super('Client aborted the request');
+    this.name = 'ClientAbortedError';
+  }
+}
+
 export default class Router {
   static MethodsWithBody = ['POST', 'PUT', 'PATCH'];
   static #MAX_CACHE_SIZE = 1000;
-  static #MAX_BODY_SIZE = 1024 * 1024; // 1MB
+  static #DEFAULT_MAX_BODY_BYTES = 1024 * 1024; // 1 MiB
 
   #routes = {
     cache: new Map<string, RouteRegistration | null>(),
@@ -163,6 +261,10 @@ export default class Router {
   #bearerToken: string | null = null;
   #jwt: JwtOptions | null = null;
   #globalMiddleware: RouterMiddleware[] = [];
+  #webFunction: boolean;
+  #trustedProxies: number;
+  #logPath: boolean;
+  #maxBodyBytes: number;
 
   constructor({
     context,
@@ -170,7 +272,21 @@ export default class Router {
     bearerToken = null,
     middleware = [],
     jwt,
+    webFunction = Boolean(process.env.AWS_LAMBDA_HTTP_ENDPOINT),
+    trustedProxies = 0,
+    logPath = false,
+    maxBodyBytes = Router.#DEFAULT_MAX_BODY_BYTES,
   }: RouterOptions = {}) {
+    if (!Number.isSafeInteger(maxBodyBytes) || maxBodyBytes < 1) {
+      throw new Error('maxBodyBytes must be a positive integer');
+    }
+    this.#maxBodyBytes = maxBodyBytes;
+    if (!Number.isInteger(trustedProxies) || trustedProxies < 0) {
+      throw new Error('trustedProxies must be a non-negative integer');
+    }
+    this.#webFunction = webFunction;
+    this.#trustedProxies = trustedProxies;
+    this.#logPath = logPath === true;
     this.#bearerToken = bearerToken;
     this.#jwt = jwt ?? null;
     this.#globalMiddleware = Array.isArray(middleware) ? middleware : [];
@@ -184,6 +300,15 @@ export default class Router {
           .flat()
           .filter((route) => route && route.path && route.handler)
       );
+  }
+
+  /**
+   * The largest request body this router accepts, in bytes (`maxBodyBytes`).
+   * `WebFunction.serve` passes it to `Server`, so an `Expect: 100-continue`
+   * upload over the limit is refused before the client sends it.
+   */
+  get maxBodyBytes(): number {
+    return this.#maxBodyBytes;
   }
 
   #buildRoutesPatterns(routes: RouteRegistration[]): void {
@@ -240,7 +365,10 @@ export default class Router {
     const route = this.#routes.dynamic.get(method)!.find((route) => {
       if (!route.methods.includes(method)) return false;
       if (route.path === normalizedPath) return true;
-      return route.pattern?.test(normalizedPath);
+      // The init form, never a string: a string is parsed as a URL, which
+      // cuts it at `?`/`#`, trims trailing spaces and resolves dot segments,
+      // so an Event Function path `/admin/1#x/y` would match `/admin/:id`.
+      return route.pattern?.test({ pathname: normalizedPath });
     });
 
     this.#routes.cache.set(`${normalizedPath}::${method}`, route || null);
@@ -263,6 +391,37 @@ export default class Router {
     return end === path.length ? path : path.slice(0, end);
   }
 
+  /** Whether a Host header value parses as the authority of an http URL. */
+  static #isParseableHost(host: string): boolean {
+    try {
+      new URL(`http://${host}`);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Longest raw path written to an error log line when `logPath` is on. */
+  static #MAX_LOGGED_PATH = 256;
+
+  /**
+   * Log fields that identify a request without its own values: the matched
+   * route pattern when known, and the raw path only when `logPath` is on
+   * (query string removed, length capped). See `RouterOptions.logPath`.
+   */
+  #requestLogFields(path: unknown, route?: string): Record<string, string> {
+    const fields: Record<string, string> = {};
+    if (typeof route === 'string') fields.route = route.slice(0, Router.#MAX_LOGGED_PATH);
+    if (this.#logPath && typeof path === 'string') {
+      const bare = path.split('?', 1)[0];
+      fields.path =
+        bare.length > Router.#MAX_LOGGED_PATH
+          ? `${bare.slice(0, Router.#MAX_LOGGED_PATH)}…[truncated, ${bare.length} chars]`
+          : bare;
+    }
+    return fields;
+  }
+
   #pruneCache(): void {
     if (this.#routes.cache.size > Router.#MAX_CACHE_SIZE) {
       const firstKey = this.#routes.cache.keys().next().value;
@@ -272,13 +431,64 @@ export default class Router {
     }
   }
 
-  async lambdaEvent(event: LambdaHttpEvent): Promise<LambdaHttpResponse> {
+  /**
+   * Handles an API Gateway HTTP API (payload format 2.0) event — the Lambda
+   * Event Function model. Export it as the Lambda handler:
+   *
+   * ```ts
+   * export const handler = (event: APIGatewayProxyEventV2) => router.eventFunction(event);
+   * ```
+   */
+  async eventFunction(event: EventFunctionEvent): Promise<EventFunctionResult> {
+    // Kept outside the try so the error log can name the matched route.
+    let routerRequest: RouterRequest | undefined;
     try {
+      // SECURITY: the same path rules as the Node transport (see
+      // requestTarget.ts). API Gateway normalises most of these away; this is
+      // defence in depth, so the two transports refuse the same paths.
+      const pathRefused = checkRequestPath(event.requestContext.http.path);
+      if (pathRefused) {
+        logger.warn('Rejected request with an invalid request path', {
+          code: 'ROUTER_INVALID_REQUEST_URL',
+          source: 'Router.eventFunction',
+          reason: pathRefused,
+          method: event.requestContext.http.method?.slice(0, 16),
+        });
+        return {
+          statusCode: 400,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            success: false,
+            error: { code: 'INVALID_REQUEST', message: 'Invalid request URL' },
+          }),
+        };
+      }
+
       let body = Router.MethodsWithBody.includes(event.requestContext.http.method)
         ? event.body
         : null;
 
-      if (event.headers['content-type']?.includes('application/json') && body) {
+      // Same limit as the Node path. API Gateway's own payload limit is far
+      // higher, so without this an Event Function parsed bodies the Node
+      // transport refuses.
+      if (
+        typeof body === 'string' &&
+        Router.#eventBodyBytes(body, event.isBase64Encoded) > this.#maxBodyBytes
+      ) {
+        logger.warn('Refused request body over the size limit', {
+          code: 'ROUTER_PAYLOAD_TOO_LARGE',
+          source: 'Router.eventFunction',
+          method: event.requestContext.http.method,
+          maxBodyBytes: this.#maxBodyBytes,
+        });
+        return Router.#payloadTooLargeResult();
+      }
+
+      if (
+        event.headers['content-type']?.includes('application/json') &&
+        !isCorsSafelistedContentType(event.headers['content-type']) &&
+        body
+      ) {
         try {
           body = JSON.parse(body as string);
         } catch {
@@ -297,7 +507,7 @@ export default class Router {
         }
       }
 
-      const response = await this.#request({
+      routerRequest = {
         path: event.requestContext.http.path,
         method: event.requestContext.http.method,
         body: body,
@@ -305,8 +515,11 @@ export default class Router {
         params: {},
         query: Router.#compactQuery(event?.queryStringParameters),
         headers: event.headers || {},
+        clientIp: event.requestContext.http.sourceIp ?? '',
+        requestId: event.requestContext.requestId || randomUUID(),
         authorizer: event.requestContext.authorizer || null,
-      });
+      };
+      const response = await this.#request(routerRequest);
 
       const { headers, cookies } = Router.#splitResponseHeaders(
         Router.#withDefaultContentType(response.headers)
@@ -327,8 +540,8 @@ export default class Router {
         defaultMessage: 'Request processing failed',
         status: 500,
         context: {
-          source: 'Router.lambdaEvent',
-          path: event.requestContext?.http?.path,
+          source: 'Router.eventFunction',
+          ...this.#requestLogFields(event.requestContext?.http?.path, routerRequest?.route),
           method: event.requestContext?.http?.method,
         },
       });
@@ -346,63 +559,37 @@ export default class Router {
   async nodeJSRequest(
     req: IncomingMessage,
     res: ServerResponse,
-    {
-      cors,
-      lambdaOptions,
-    }: { cors?: boolean | string[]; lambdaOptions?: Record<string, unknown> } = {}
+    options: { cors?: boolean | string[]; proxyOptions?: Record<string, unknown> } = {}
   ): Promise<void> {
-    if (cors) {
-      // SECURITY: Reflecting an arbitrary Origin alongside
-      // Access-Control-Allow-Credentials lets any site make cookie-authenticated
-      // cross-origin calls and read the response. Credentials are therefore only
-      // granted to origins on an explicit allowlist; `cors: true` falls back to
-      // an anonymous wildcard, which browsers already refuse to pair with
-      // credentials.
-      const requestOrigin = req.headers.origin;
+    const { cors, proxyOptions } = options;
+    const rawBody = (options as { [RAW_BODY]?: unknown })[RAW_BODY] === true;
 
-      if (Array.isArray(cors)) {
-        // Vary on Origin so caches never serve one origin's response to another.
-        res.setHeader('Vary', 'Origin');
-        if (requestOrigin && cors.includes(requestOrigin)) {
-          res.setHeader('Access-Control-Allow-Origin', requestOrigin);
-          res.setHeader('Access-Control-Allow-Credentials', 'true');
-        } else if (requestOrigin) {
-          logger.warn('Blocked cross-origin request from non-allowlisted origin', {
-            code: 'ROUTER_CORS_ORIGIN_BLOCKED',
-            source: 'Router.nodeJSRequest',
-            origin: requestOrigin,
-          });
-        }
-      } else {
-        res.setHeader('Access-Control-Allow-Origin', '*');
-      }
-
-      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
-      res.setHeader(
-        'Access-Control-Allow-Headers',
-        'Content-Type, Authorization, X-Requested-With'
-      );
-      res.setHeader('Access-Control-Max-Age', '86400');
-    }
-
-    if (req.method === 'OPTIONS') {
-      res.statusCode = 204;
-      res.end();
+    // SECURITY: a request pipelined behind a refused upload is never served;
+    // its connection is already closing.
+    if (isRefusedConnection(req.socket)) {
+      req.resume?.();
       return;
     }
 
-    // SECURITY: A malformed Host header (e.g. 'a b') makes the URL constructor
-    // throw. This used to sit outside the try below, so the rejection escaped
-    // nodeJSRequest() and took the process down under Node's default
-    // unhandled-rejection policy. Parse defensively and answer 400 instead.
-    let requestUrl: URL;
-    try {
-      requestUrl = new URL(req.url!, `http://${req.headers.host ?? 'localhost'}`);
-    } catch {
-      logger.warn('Rejected request with unparseable URL or Host header', {
+    // SECURITY: the path is taken verbatim from the request target, never by
+    // resolving it as a URL, and any target that a URL parser, a proxy or
+    // the router could read as a different path is refused. See
+    // requestTarget.ts. Checked before CORS, OPTIONS and the body, so a
+    // refused target reaches nothing.
+    const target = parseRequestTarget(req.url);
+    // SECURITY: a malformed Host header (e.g. 'a b') is refused as well. It
+    // used to make the URL constructor throw outside any try, taking the
+    // process down; the path no longer depends on Host, but a Host no URL
+    // parser accepts is still not served.
+    const hostRefused =
+      req.headers.host !== undefined && !Router.#isParseableHost(req.headers.host);
+    if ('refused' in target || hostRefused) {
+      logger.warn('Rejected request with an invalid request target or Host header', {
         code: 'ROUTER_INVALID_REQUEST_URL',
         source: 'Router.nodeJSRequest',
-        host: req.headers.host,
+        // A fixed reason, never the target or Host itself.
+        reason: 'refused' in target ? target.refused : 'host',
+        method: req.method?.slice(0, 16),
       });
       res.statusCode = 400;
       res.setHeader('Content-Type', 'application/json');
@@ -415,20 +602,96 @@ export default class Router {
       return;
     }
 
+    if (cors) {
+      // SECURITY: Reflecting an arbitrary Origin alongside
+      // Access-Control-Allow-Credentials lets any site make cookie-authenticated
+      // cross-origin calls and read the response. Credentials are therefore only
+      // granted to origins on an explicit allowlist; `cors: true` falls back to
+      // an anonymous wildcard, which browsers already refuse to pair with
+      // credentials.
+      const requestOrigin = req.headers.origin;
+      let forbiddenOrigin = false;
+
+      if (Array.isArray(cors)) {
+        // Vary on Origin so caches never serve one origin's response to another.
+        res.setHeader('Vary', 'Origin');
+        if (requestOrigin && cors.includes(requestOrigin)) {
+          res.setHeader('Access-Control-Allow-Origin', requestOrigin);
+          res.setHeader('Access-Control-Allow-Credentials', 'true');
+        } else if (requestOrigin && !isSameOriginRequest(req.headers, requestOrigin)) {
+          forbiddenOrigin = true;
+        }
+      } else {
+        res.setHeader('Access-Control-Allow-Origin', '*');
+      }
+
+      if (forbiddenOrigin) {
+        // SECURITY: Withholding CORS headers only stops the other site
+        // READING the response. A form post or a `no-cors` fetch still
+        // reaches the route with the visitor's cookies, so anything but GET
+        // from an origin off the allowlist is refused here, before the body
+        // is read or a route runs. HEAD is refused too: a HEAD route runs
+        // its handler like any other, and a cross-site page has no use for a
+        // HEAD it cannot read. Preflights are refused as well, so the browser
+        // never sends the real request. Same rule as `Local.EventFunctionProxy`.
+        const safe = req.method === 'GET';
+        logger.warn('Blocked cross-origin request from non-allowlisted origin', {
+          code: 'ROUTER_CORS_ORIGIN_BLOCKED',
+          source: 'Router.nodeJSRequest',
+          // Client-controlled: bounded so one header cannot bloat the log.
+          origin: requestOrigin!.slice(0, 200),
+          method: req.method?.slice(0, 16),
+          rejected: !safe,
+        });
+        if (!safe) {
+          res.statusCode = 403;
+          res.setHeader('Content-Type', 'application/json');
+          res.end(
+            JSON.stringify({
+              success: false,
+              error: {
+                code: 'CORS_ORIGIN_FORBIDDEN',
+                message: 'Cross-origin request from this origin is not allowed',
+              },
+            })
+          );
+          return;
+        }
+      } else {
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+        res.setHeader(
+          'Access-Control-Allow-Headers',
+          'Content-Type, Authorization, X-Requested-With'
+        );
+        res.setHeader('Access-Control-Max-Age', '86400');
+      }
+    }
+
+    if (req.method === 'OPTIONS') {
+      res.statusCode = 204;
+      res.end();
+      return;
+    }
+
+    // Kept outside the try so the error log can name the matched route.
+    let routerRequest: RouterRequest | undefined;
     try {
-      const response = await this.#request({
-        path: requestUrl.pathname,
+      routerRequest = {
+        path: target.path,
         method: req.method!,
         body: Router.MethodsWithBody.includes(req.method!)
-          ? await this.#getNodeJSRequestBody(req)
+          ? await this.#getNodeJSRequestBody(req, rawBody)
           : null,
         cookies: this.#parseCookies(req.headers?.cookie || ''),
         params: {},
-        query: Object.fromEntries(requestUrl.searchParams),
+        query: target.query,
         headers: req.headers as Record<string, string | string[] | undefined>,
+        clientIp: this.#nodeClientIp(req),
+        requestId: this.#nodeRequestId(req),
         authorizer: await this.#createAuthorizerFromHeaders(req.headers),
-        lambdaOptions: lambdaOptions || {},
-      });
+        proxyOptions: proxyOptions || {},
+      };
+      const response = await this.#request(routerRequest);
 
       if (!response || typeof response !== 'object') {
         res.statusCode = 500;
@@ -453,6 +716,27 @@ export default class Router {
         else res.end(JSON.stringify(response.body));
       } else res.end('');
     } catch (error: unknown) {
+      if (error instanceof BodyTooLargeError) {
+        logger.warn('Refused request body over the size limit', {
+          code: 'ROUTER_PAYLOAD_TOO_LARGE',
+          source: 'Router.nodeJSRequest',
+          method: req.method,
+          maxBodyBytes: this.#maxBodyBytes,
+        });
+        answerPayloadTooLarge(req, res);
+        return;
+      }
+      if (error instanceof ClientAbortedError) {
+        // The client hung up mid-upload: there is nobody to answer and
+        // nothing went wrong on this side, so no error log and no 500.
+        logger.debug('Client aborted the request before its body was read', {
+          code: 'ROUTER_CLIENT_ABORTED',
+          source: 'Router.nodeJSRequest',
+          ...this.#requestLogFields(target.path),
+          method: req.method,
+        });
+        return;
+      }
       res.statusCode = 500;
       res.setHeader('Content-Type', 'application/json');
       const errorResponse = RouteError.fromError(error, {
@@ -460,7 +744,7 @@ export default class Router {
         status: 500,
         context: {
           source: 'Router.nodeJSRequest',
-          path: req.url,
+          ...this.#requestLogFields(target.path, routerRequest?.route),
           method: req.method,
         },
       });
@@ -470,6 +754,47 @@ export default class Router {
           : JSON.stringify(errorResponse.body)
       );
     }
+  }
+
+  /**
+   * See `RouterRequest.clientIp`. In a Web Function, Lambda appends the
+   * connecting address as the LAST `X-Forwarded-For` value; everything before
+   * it came from the client. Reading the first value — the common idiom —
+   * hands the client the choice of its own IP.
+   */
+  #nodeClientIp(req: IncomingMessage): string {
+    if (this.#webFunction) {
+      const header = req.headers['x-forwarded-for'];
+      const raw = Array.isArray(header) ? header.join(',') : (header ?? '');
+      const hops = raw
+        .split(',')
+        .map((value) => value.trim())
+        .filter(Boolean);
+      const candidate = hops[hops.length - 1 - this.#trustedProxies] ?? '';
+      // With trustedProxies > 0 the chosen entry was written by a proxy only
+      // if every request really passes through it; a direct call to the
+      // endpoint makes it client text. Accepting only a literal IP keeps that
+      // case from smuggling arbitrary strings (or log-forging characters)
+      // into clientIp.
+      return isIP(candidate) ? candidate : '';
+    }
+    return req.socket?.remoteAddress ?? '';
+  }
+
+  /**
+   * Lambda strips any client-sent `lambda-web-*` header before adding its own
+   * `lambda-web-request-id`, so it is trusted only in Web Function mode. On a
+   * plain server a client could set it to anything, including text crafted
+   * to forge log lines.
+   */
+  #nodeRequestId(req: IncomingMessage): string {
+    if (this.#webFunction) {
+      const id = req.headers['lambda-web-request-id'];
+      // Lambda's ids are short and plain; anything else is not from Lambda
+      // (most likely `webFunction` set on a server clients reach directly).
+      if (typeof id === 'string' && /^[A-Za-z0-9._:-]{1,128}$/.test(id)) return id;
+    }
+    return randomUUID();
   }
 
   #parseCookies(cookieHeader: string): Record<string, string> {
@@ -695,22 +1020,59 @@ export default class Router {
     return { lambda: claims };
   }
 
-  async #getNodeJSRequestBody(req: IncomingMessage): Promise<unknown> {
-    return new Promise((resolve, reject) => {
-      let body = '';
-      let size = 0;
+  /**
+   * Whether a body-read failure is the client going away (connection reset,
+   * aborted upload) rather than a fault on this side.
+   */
+  static #isClientAbort(req: IncomingMessage, error: unknown): boolean {
+    if ((req as { aborted?: boolean }).aborted === true) return true;
+    if (!(error instanceof Error)) return false;
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === 'ECONNRESET' || code === 'ECONNABORTED' || error.message === 'aborted';
+  }
 
-      req.on('data', (chunk) => {
+  async #getNodeJSRequestBody(req: IncomingMessage, raw = false): Promise<unknown> {
+    const limit = this.#maxBodyBytes;
+    const declared = Number(req.headers['content-length']);
+    if (Number.isFinite(declared) && declared > limit) throw new BodyTooLargeError();
+
+    return new Promise((resolve, reject) => {
+      // Collected as bytes and decoded once: decoding chunk by chunk split
+      // multi-byte UTF-8 characters that straddled a chunk boundary.
+      const chunks: Buffer[] = [];
+      let size = 0;
+      let done = false;
+
+      const onData = (data: Buffer | string) => {
+        if (done) return;
+        // A stream with an encoding set (`req.setEncoding`) emits strings.
+        const chunk = typeof data === 'string' ? Buffer.from(data, 'utf8') : data;
         size += chunk.length;
-        if (size > Router.#MAX_BODY_SIZE) {
-          req.destroy();
-          reject(new Error('Request body too large'));
+        if (size > limit) {
+          done = true;
+          // Stop buffering and release what was held; the socket is left to
+          // nodeJSRequest, which answers 413 and then closes it gracefully.
+          chunks.length = 0;
+          req.off?.('data', onData);
+          req.pause?.();
+          reject(new BodyTooLargeError());
           return;
         }
-        body += chunk.toString();
-      });
+        chunks.push(chunk);
+      };
+      req.on('data', onData);
       req.on('end', () => {
-        if (req.headers['content-type']?.includes('application/json')) {
+        if (done) return;
+        done = true;
+        if (raw) {
+          resolve(size > 0 ? Buffer.concat(chunks) : null);
+          return;
+        }
+        const body = Buffer.concat(chunks).toString('utf8');
+        if (
+          req.headers['content-type']?.includes('application/json') &&
+          !isCorsSafelistedContentType(req.headers['content-type'])
+        ) {
           try {
             resolve(JSON.parse(body));
           } catch {
@@ -721,9 +1083,40 @@ export default class Router {
         }
       });
       req.on('error', (err) => {
-        reject(err);
+        if (done) return;
+        done = true;
+        chunks.length = 0;
+        // Only a body-read failure caused by the client hanging up is
+        // classified as an abort; anything else stays a server-side error.
+        reject(Router.#isClientAbort(req, err) ? new ClientAbortedError() : err);
+      });
+      // A connection that closes before 'end' (client gone mid-upload)
+      // would otherwise leave this promise pending for good.
+      req.on?.('close', () => {
+        if (done) return;
+        done = true;
+        chunks.length = 0;
+        reject(new ClientAbortedError());
       });
     });
+  }
+
+  static #eventBodyBytes(body: string, isBase64Encoded: boolean | undefined): number {
+    if (!isBase64Encoded) return Buffer.byteLength(body, 'utf8');
+    // Line breaks (MIME base64 wraps at 76 with CRLF) and other whitespace
+    // carry no data; counting them overstated the size and refused a body
+    // exactly at the limit.
+    const compact = /\s/.test(body) ? body.replace(/\s+/g, '') : body;
+    const padding = compact.endsWith('==') ? 2 : compact.endsWith('=') ? 1 : 0;
+    return Math.max(0, Math.floor((compact.length * 3) / 4) - padding);
+  }
+
+  static #payloadTooLargeResult(): EventFunctionResult {
+    return {
+      statusCode: 413,
+      headers: { 'Content-Type': 'application/json' },
+      body: payloadTooLargeBody(),
+    };
   }
 
   async #request(request: RouterRequest): Promise<RouterResponse> {
@@ -757,18 +1150,33 @@ export default class Router {
     const route = this.#findRouteHandler(request.path, request.method);
 
     if (!route) {
-      const notFoundError = new Error(`Route ${request.method} ${request.path} does not exist`);
+      // The path stays out of the message: it is logged (and its stack with
+      // it), and a path can carry secrets.
+      const notFoundError = new Error('Route not found');
       notFoundError.name = 'NotFoundError';
       return RouteError.fromError(notFoundError, {
         defaultMessage: 'Route not found',
         status: 404,
-        context: { path: request.path, method: request.method },
+        context: { ...this.#requestLogFields(request.path), method: request.method },
       });
     }
 
+    // The matched pattern, for logging without the request's own path values.
+    if ('path' in route && typeof route.path === 'string') {
+      request.route = route.path.replace(/\/+/g, '/');
+    }
+
     // Match dynamic route parameters
-    if ('pattern' in route && route.path !== request.path && route.pattern) {
-      const match = route.pattern.exec(request.path);
+    // The init form, as in #findRouteHandler (a string is parsed as a URL).
+    // The route was found on the path with trailing slashes stripped, so fall
+    // back to that one: matching only the raw `/users/42/` ran `/users/:id`
+    // with no `id`. The raw path goes first so a `*` group keeps its trailing
+    // slash, as it always did.
+    const matchedPath = Router.#stripTrailingSlashes(request.path);
+    if ('pattern' in route && route.path !== matchedPath && route.pattern) {
+      const match =
+        route.pattern.exec({ pathname: request.path }) ??
+        route.pattern.exec({ pathname: matchedPath });
       if (match?.pathname?.groups) {
         // An optional pattern segment that did not match yields undefined. Drop
         // those rather than handing a handler a `params` entry that is typed
@@ -815,7 +1223,7 @@ export default class Router {
         context: {
           source: 'Router.request',
           code: 'ROUTER_HANDLER_ERROR',
-          path: request.path,
+          ...this.#requestLogFields(request.path, request.route),
           method: request.method,
         },
       });

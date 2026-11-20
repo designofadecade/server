@@ -24,7 +24,7 @@ const cookieRoutes = (cookies: string[] | string) =>
     }
   };
 
-const lambdaEvent = {
+const apiGatewayEvent = {
   requestContext: { http: { method: 'GET', path: '/login' } },
   headers: {},
 };
@@ -32,7 +32,7 @@ const lambdaEvent = {
 describe('multi-value response headers', () => {
   it('carries multiple cookies in the format 2.0 cookies field', async () => {
     const router = new Router({ initRoutes: [cookieRoutes(['a=1', 'b=2'])] });
-    const response = await router.lambdaEvent(lambdaEvent);
+    const response = await router.eventFunction(apiGatewayEvent);
 
     expect(response.cookies).toEqual(['a=1', 'b=2']);
     // A header map cannot carry both, so set-cookie must not also appear there.
@@ -42,7 +42,7 @@ describe('multi-value response headers', () => {
 
   it('carries a single cookie the same way', async () => {
     const router = new Router({ initRoutes: [cookieRoutes('a=1')] });
-    const response = await router.lambdaEvent(lambdaEvent);
+    const response = await router.eventFunction(apiGatewayEvent);
 
     expect(response.cookies).toEqual(['a=1']);
   });
@@ -58,7 +58,7 @@ describe('multi-value response headers', () => {
         },
       ],
     });
-    const response = await router.lambdaEvent(lambdaEvent);
+    const response = await router.eventFunction(apiGatewayEvent);
 
     expect(response).not.toHaveProperty('cookies');
   });
@@ -78,7 +78,7 @@ describe('multi-value response headers', () => {
         },
       ],
     });
-    const response = await router.lambdaEvent(lambdaEvent);
+    const response = await router.eventFunction(apiGatewayEvent);
 
     expect(response.headers?.vary).toBe('Origin, Accept-Encoding');
   });

@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import http from 'node:http';
 import net from 'node:net';
 import { createHmac } from 'node:crypto';
@@ -158,6 +158,114 @@ describe('Router integration', () => {
     });
   });
 
+  /**
+   * The path is taken verbatim from the request target. Resolving it as a URL
+   * turned `//x/admin` into `/admin` and removed dot segments, so a proxy in
+   * front guarding `/admin` judged one path and the router served another.
+   * Sent over a raw socket: `http.request` would normalise some of these.
+   */
+  describe('request target', () => {
+    const reached = vi.fn();
+
+    class TargetRoutes extends Routes {
+      constructor(router: Router) {
+        super(router);
+        this.addRoute('/admin', ['GET', 'POST'], async () => {
+          reached('/admin');
+          return { status: 200, body: 'admin' };
+        });
+        this.addRoute('/admin/users', 'GET', async () => {
+          reached('/admin/users');
+          return { status: 200, body: 'admin users' };
+        });
+        this.addRoute('/files/:name', 'GET', async (request) => ({
+          status: 200,
+          body: { name: request.params.name, path: request.path },
+        }));
+        this.addRoute('/search', 'GET', async (request) => ({
+          status: 200,
+          body: { query: request.query, path: request.path },
+        }));
+      }
+    }
+
+    const send = (port: number, target: string, method = 'GET') =>
+      rawRequest(
+        port,
+        `${method} ${target} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n`
+      );
+
+    const statusOf = (raw: string) => Number(/^HTTP\/1\.1 (\d{3})/.exec(raw)?.[1]);
+    const bodyOf = (raw: string) => raw.slice(raw.indexOf('\r\n\r\n') + 4);
+
+    it.each([
+      '//x/admin',
+      '//x/admin/users',
+      '/\\x/admin',
+      '/pub/../admin',
+      '/pub/%2e%2e/admin',
+      '/pub/%2E%2e/admin',
+      '/pub/.%2E/admin',
+      '/./admin',
+      '/admin/.',
+      '/admin/users/..',
+      'http://x/admin',
+      'http://localhost/admin',
+      '*',
+      '/admin%00',
+      '/admin?x=%00',
+      '/admin#frag',
+    ])('refuses %j with 400 and never reaches /admin', async (target) => {
+      reached.mockClear();
+      live = await listen(new Router({ initRoutes: [TargetRoutes] }));
+
+      for (const method of ['GET', 'POST', 'OPTIONS']) {
+        const raw = await send(live.port, target, method);
+        expect(statusOf(raw), `${method} ${target}`).toBe(400);
+        expect(JSON.parse(bodyOf(raw))).toEqual({
+          success: false,
+          error: { code: 'INVALID_REQUEST', message: 'Invalid request URL' },
+        });
+      }
+      expect(reached).not.toHaveBeenCalled();
+    });
+
+    it('serves ordinary paths exactly as before', async () => {
+      live = await listen(new Router({ initRoutes: [TargetRoutes] }));
+
+      expect(statusOf(await send(live.port, '/admin'))).toBe(200);
+      expect(statusOf(await send(live.port, '/admin/'))).toBe(200);
+      expect(statusOf(await send(live.port, '/admin/users/'))).toBe(200);
+
+      // Params stay percent-encoded, as URLPattern always gave them.
+      const spaced = JSON.parse(bodyOf(await send(live.port, '/files/a%20b')));
+      expect(spaced).toEqual({ name: 'a%20b', path: '/files/a%20b' });
+
+      // Characters URL parsing percent-encoded are still encoded.
+      const quoted = JSON.parse(bodyOf(await send(live.port, '/files/a"b{c}')));
+      expect(quoted).toEqual({ name: 'a%22b%7Bc%7D', path: '/files/a%22b%7Bc%7D' });
+
+      // Dots inside a segment are not dot segments.
+      const dotted = JSON.parse(bodyOf(await send(live.port, '/files/.env...')));
+      expect(dotted.name).toBe('.env...');
+
+      const search = JSON.parse(
+        bodyOf(await send(live.port, '/search?next=/a?b=c&q=1&q=2&e=a+b%20c&flag'))
+      );
+      expect(search).toEqual({
+        path: '/search',
+        query: { next: '/a?b=c', q: '2', e: 'a b c', flag: '' },
+      });
+    });
+
+    it('still serves after refusing a target', async () => {
+      live = await listen(new Router({ initRoutes: [TargetRoutes] }));
+      expect(statusOf(await send(live.port, '//x/admin'))).toBe(400);
+      const ok = await request(live.port, '/admin');
+      expect(ok.status).toBe(200);
+    });
+  });
+
   describe('JWT authorizer', () => {
     it('should leave authorizer null when no jwt option is configured', async () => {
       live = await listen(new Router({ initRoutes: [EchoRoutes] }));
@@ -249,6 +357,81 @@ describe('Router integration', () => {
       });
       expect(blocked.headers['access-control-allow-origin']).toBeUndefined();
       expect(blocked.headers['access-control-allow-credentials']).toBeUndefined();
+      // A safe method still runs; only the response is unreadable cross-origin.
+      expect(blocked.status).toBe(200);
+    });
+
+    it('should refuse a forged cross-origin POST before the route runs', async () => {
+      let reached = false;
+      class SpyRoutes extends Routes {
+        constructor(router: Router) {
+          super(router);
+          this.addRoute('/account/email', 'POST', async () => {
+            reached = true;
+            return { status: 200, body: 'changed' };
+          });
+        }
+      }
+      live = await listen(new Router({ initRoutes: [SpyRoutes] }), {
+        cors: ['https://app.example.com'],
+      });
+
+      const forged = await request(live.port, '/account/email', {
+        method: 'POST',
+        headers: {
+          origin: 'https://evil.example',
+          'content-type': 'text/plain;application/json',
+          cookie: 'session=victim',
+        },
+        body: JSON.stringify({ email: 'attacker@evil.test' }),
+      });
+      expect(forged.status).toBe(403);
+      expect(JSON.parse(forged.body).error.code).toBe('CORS_ORIGIN_FORBIDDEN');
+      expect(forged.headers['vary']).toBe('Origin');
+      expect(reached).toBe(false);
+
+      const preflight = await request(live.port, '/account/email', {
+        method: 'OPTIONS',
+        headers: { origin: 'https://evil.example', 'access-control-request-method': 'POST' },
+      });
+      expect(preflight.status).toBe(403);
+      expect(preflight.headers['access-control-allow-methods']).toBeUndefined();
+
+      // The site's own pages: Origin host matches Host.
+      const sameOrigin = await request(live.port, '/account/email', {
+        method: 'POST',
+        headers: { origin: `http://127.0.0.1:${live.port}` },
+        body: '{}',
+      });
+      expect(sameOrigin.status).toBe(200);
+      expect(reached).toBe(true);
+    });
+
+    it('should let an allowlisted origin POST with credentials', async () => {
+      live = await listen(new Router({ initRoutes: [EchoRoutes] }), {
+        cors: ['https://app.example.com'],
+      });
+
+      const response = await request(live.port, '/echo', {
+        method: 'POST',
+        headers: { origin: 'https://app.example.com', 'content-type': 'application/json' },
+        body: JSON.stringify({ a: 1 }),
+      });
+      expect(response.status).toBe(200);
+      expect(JSON.parse(response.body)).toEqual({ received: { a: 1 } });
+      expect(response.headers['access-control-allow-credentials']).toBe('true');
+    });
+
+    it('should leave cors: true permissive for cross-origin POSTs', async () => {
+      live = await listen(new Router({ initRoutes: [EchoRoutes] }), { cors: true });
+
+      const response = await request(live.port, '/echo', {
+        method: 'POST',
+        headers: { origin: 'https://evil.example', 'content-type': 'application/json' },
+        body: '{}',
+      });
+      expect(response.status).toBe(200);
+      expect(response.headers['access-control-allow-origin']).toBe('*');
     });
   });
 

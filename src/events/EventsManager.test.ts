@@ -232,6 +232,26 @@ describe('EventsManager', () => {
       expect(handler).toHaveBeenCalledWith({ type: 'test:event', payload: { data: 'test' } });
     });
 
+    it('should pass the sending socket and upgrade request to handlers', async () => {
+      const handler = vi.fn();
+      eventsManager = new EventsManager({
+        registerWebSocketServer: mockWss,
+      });
+
+      eventsManager.registerEvents([{ type: 'test:event', handler }]);
+
+      const messageListener = mockWss.on.mock.calls.find((call) => call[0] === 'message')[1];
+      const ws = { readyState: 1 };
+      const req = { headers: { cookie: 'session=abc123' } };
+      const message = { type: 'test:event', payload: {} };
+
+      await messageListener(message, ws, req);
+
+      // Handlers need the sender to authorize it; the payload alone is
+      // whatever any client chose to send.
+      expect(handler).toHaveBeenCalledWith(message, ws, req);
+    });
+
     it('should warn if no handlers registered for event type', async () => {
       const loggerSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
       eventsManager = new EventsManager({

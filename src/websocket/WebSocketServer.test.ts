@@ -354,6 +354,7 @@ describe('WebSocketServer', () => {
 
   describe('Message Handling', () => {
     let mockWs;
+    let mockReq;
     let messageHandler;
 
     beforeEach(() => {
@@ -362,12 +363,14 @@ describe('WebSocketServer', () => {
       mockWs = {
         send: vi.fn(),
         on: vi.fn(),
+        readyState: WebSocketMock.OPEN,
       };
+      mockReq = { headers: { cookie: 'session=abc123' } };
 
       wsServer = new WebSocketServer();
 
       const connectionHandler = mockWss.on.mock.calls.find((call) => call[0] === 'connection')[1];
-      connectionHandler(mockWs);
+      connectionHandler(mockWs, mockReq);
 
       messageHandler = mockWs.on.mock.calls.find((call) => call[0] === 'message')[1];
 
@@ -402,8 +405,49 @@ describe('WebSocketServer', () => {
         expect.objectContaining({
           type: 'test:event',
           payload: { data: 'test' },
-        })
+        }),
+        mockWs,
+        mockReq
       );
+
+      consoleSpy.mockRestore();
+    });
+
+    it('should pass the sending socket and upgrade request with each message', async () => {
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const listener = vi.fn();
+      wsServer.on('message', listener);
+
+      await messageHandler(Buffer.from(JSON.stringify({ type: 'doc:update', payload: {} })));
+
+      // Without the sender a handler cannot tell an authenticated connection
+      // from any other, so per-connection authorization is impossible.
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(listener.mock.calls[0][1]).toBe(mockWs);
+      expect(listener.mock.calls[0][2]).toBe(mockReq);
+
+      consoleSpy.mockRestore();
+    });
+
+    it.each([
+      ['CLOSING', WebSocketMock.CLOSING],
+      ['CLOSED', WebSocketMock.CLOSED],
+    ])('should drop frames from a %s socket', async (_state, readyState) => {
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const listener = vi.fn();
+      wsServer.on('message', listener);
+      mockWs.send.mockClear();
+
+      // A 'connection' handler that refused the client called ws.close(); a
+      // hostile peer keeps sending without answering the close frame.
+      mockWs.readyState = readyState;
+
+      await messageHandler(Buffer.from(JSON.stringify({ type: 'doc:update', payload: {} })));
+      await messageHandler(Buffer.from('ws:ping'));
+      await messageHandler(Buffer.from('invalid json'));
+
+      expect(listener).not.toHaveBeenCalled();
+      expect(mockWs.send).not.toHaveBeenCalled();
 
       consoleSpy.mockRestore();
     });
@@ -710,6 +754,82 @@ describe('WebSocketServer', () => {
       );
     });
 
+    it('should install an upgrade gate when authenticate is set', () => {
+      wsServer = new WebSocketServer({ authenticate: () => true });
+
+      expect(WebSocketServerLibraryMock).toHaveBeenCalledWith(
+        expect.objectContaining({ verifyClient: expect.any(Function) })
+      );
+    });
+
+    it('should terminate a connection that has no recorded authenticate result', () => {
+      vi.spyOn(logger, 'error').mockImplementation(() => {});
+      wsServer = new WebSocketServer({ authenticate: () => ({ user: 'a' }) });
+      const emitSpy = vi.spyOn(wsServer, 'emit');
+      const connectionHandler = mockWss.on.mock.calls.find((call) => call[0] === 'connection')[1];
+      const ws = { send: vi.fn(), on: vi.fn(), terminate: vi.fn(), close: vi.fn() };
+
+      // A request the upgrade gate never saw (or refused).
+      connectionHandler(ws, { headers: {} });
+
+      expect(ws.terminate).toHaveBeenCalledTimes(1);
+      expect(ws.close).not.toHaveBeenCalled();
+      expect(ws.on).not.toHaveBeenCalledWith('message', expect.any(Function));
+      expect(emitSpy).not.toHaveBeenCalledWith('connection', expect.anything(), expect.anything());
+    });
+
+    it('should reject a non-function authenticate', () => {
+      expect(() => new WebSocketServer({ authenticate: 'yes' as never })).toThrow(
+        'authenticate must be a function.'
+      );
+      expect(() => new WebSocketServer({ authenticate: null as never })).toThrow(
+        'authenticate must be a function.'
+      );
+    });
+
+    it.each([0, -1, NaN, Infinity, 2_147_483_648, Number.MAX_SAFE_INTEGER])(
+      'should reject upgradeTimeoutMs %s',
+      (timeout) => {
+        expect(() => new WebSocketServer({ upgradeTimeoutMs: timeout })).toThrow(
+          'upgradeTimeoutMs'
+        );
+      }
+    );
+
+    it('should accept upgradeTimeoutMs at the setTimeout maximum', () => {
+      expect(() => {
+        wsServer = new WebSocketServer({ upgradeTimeoutMs: 2_147_483_647 });
+      }).not.toThrow();
+    });
+
+    describe('WEBSOCKET_NO_ORIGIN_ALLOWLIST warning', () => {
+      const warnings = (options: Record<string, unknown>) => {
+        const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+        try {
+          wsServer = new WebSocketServer(options);
+          return warn.mock.calls.filter(
+            (c) => (c[1] as { code?: string } | undefined)?.code === 'WEBSOCKET_NO_ORIGIN_ALLOWLIST'
+          );
+        } finally {
+          warn.mockRestore();
+        }
+      };
+
+      it('warns once when authenticate is set without allowedOrigins', () => {
+        expect(warnings({ authenticate: () => ({ id: 1 }) })).toHaveLength(1);
+      });
+
+      it('does not warn when allowedOrigins is set', () => {
+        expect(
+          warnings({ authenticate: () => ({ id: 1 }), allowedOrigins: ['https://app.example.com'] })
+        ).toHaveLength(0);
+      });
+
+      it('does not warn without authenticate', () => {
+        expect(warnings({})).toHaveLength(0);
+      });
+    });
+
     it('should install an upgrade gate when allowedOrigins is set', () => {
       wsServer = new WebSocketServer({ allowedOrigins: ['https://app.example.com'] });
 
@@ -776,6 +896,87 @@ describe('WebSocketServer', () => {
           ok: false,
           code: 403,
         });
+      });
+
+      it.each([null, false, undefined, 0, ''])(
+        'should refuse a falsy authenticate result (%s) with 401',
+        async (result) => {
+          const check = gate({ authenticate: async () => result });
+
+          await expect(check('https://anywhere.example')).resolves.toEqual({
+            ok: false,
+            code: 401,
+          });
+        }
+      );
+
+      it('should accept a truthy authenticate result', async () => {
+        const check = gate({ authenticate: () => ({ user: 'a' }) });
+
+        await expect(check('https://anywhere.example')).resolves.toEqual({ ok: true });
+      });
+
+      it('should run authenticate only after verifyClient accepts', async () => {
+        const authenticate = vi.fn(() => ({ user: 'a' }));
+        const check = gate({ verifyClient: () => false, authenticate });
+
+        await expect(check('https://anywhere.example')).resolves.toEqual({ ok: false, code: 403 });
+        expect(authenticate).not.toHaveBeenCalled();
+      });
+
+      it('should refuse with 401 when authenticate outlives upgradeTimeoutMs', async () => {
+        vi.useFakeTimers();
+        try {
+          const check = gate({
+            authenticate: () => new Promise(() => {}),
+            upgradeTimeoutMs: 1000,
+          });
+          const pending = check('https://anywhere.example');
+          await vi.advanceTimersByTimeAsync(1000);
+
+          await expect(pending).resolves.toEqual({ ok: false, code: 401 });
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it('should refuse with 403 when verifyClient outlives upgradeTimeoutMs', async () => {
+        vi.useFakeTimers();
+        try {
+          const authenticate = vi.fn(() => ({ user: 'a' }));
+          const check = gate({
+            verifyClient: () => new Promise<boolean>(() => {}),
+            authenticate,
+            upgradeTimeoutMs: 1000,
+          });
+          const pending = check('https://anywhere.example');
+          await vi.advanceTimersByTimeAsync(1000);
+
+          await expect(pending).resolves.toEqual({ ok: false, code: 403 });
+          expect(authenticate).not.toHaveBeenCalled();
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it('should share one deadline across verifyClient and authenticate', async () => {
+        vi.useFakeTimers();
+        try {
+          const check = gate({
+            verifyClient: () =>
+              new Promise<boolean>((resolve) => setTimeout(() => resolve(true), 600)),
+            authenticate: () =>
+              new Promise((resolve) => setTimeout(() => resolve({ user: 'a' }), 600)),
+            upgradeTimeoutMs: 1000,
+          });
+          const pending = check('https://anywhere.example');
+          await vi.advanceTimersByTimeAsync(1000);
+
+          // Each stage alone fits, but together they exceed the deadline.
+          await expect(pending).resolves.toEqual({ ok: false, code: 401 });
+        } finally {
+          vi.useRealTimers();
+        }
       });
 
       it('should apply the origin allowlist before verifyClient', async () => {

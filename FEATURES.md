@@ -1,6 +1,51 @@
 # New Features Summary
 
-This document summarizes the three major features that have been added to the project:
+This document summarizes the major features that have been added to the project:
+
+## 0. Deployment Modes: Lambda Web Functions ✅ (11.0.0)
+
+The same `Router` and route classes now run in three places, with no change to
+the routes themselves.
+
+### What Was Added
+
+- **`WebFunction.serve(router, options)`** - One entry point that is a plain
+  Node server locally and an **AWS Lambda Web Function** when Lambda sets
+  `AWS_LAMBDA_HTTP_ENDPOINT`. Returns a `Server`.
+- **`Server` Web Function support** - Detects the endpoint variable, binds there
+  (ignoring `port`/`host`), drains on `SIGTERM` by default (`handleSignals`,
+  `shutdownTimeoutMs` default 800 ms to fit Lambda's one-second window).
+  New `server.ready` promise, `server.address`, `'listening'`/`'close'`
+  events, `Server.isWebFunction()`, `Server.parseEndpoint()`.
+- **`router.eventFunction(event)`** - The API Gateway HTTP API v2 handler for a
+  **Lambda Event Function** (renamed from `lambdaEvent`).
+- **`request.clientIp` and `request.requestId`** - Present in every mode, from
+  a source the caller cannot forge. New `RouterOptions.webFunction` and
+  `trustedProxies` (set `1` when CloudFront fronts the endpoint).
+- **`Local.EventFunctionProxy`** - Renamed from `LambdaProxyRouter`; `sourceIp`
+  now comes from the socket, not the first `X-Forwarded-For` value.
+- **`RequestLogger` accepts a `RouterRequest`** - `createRequestLogger`,
+  `logRequest` and `logResponse` take the router's request object (preferred)
+  or an API Gateway event, and no longer throw on non-JSON bodies.
+  `logRequest` logs only a body summary and parameter names unless given a
+  `bodyFields` (with `logBody`) or `paramFields` allowlist.
+- **Documentation** in [docs/deployment-modes.md](docs/deployment-modes.md):
+  why choose a Web Function over an Event Function (and when not to), decision
+  table, entry files for all three modes, production checklist.
+
+### How to Use
+
+```typescript
+import { Router, WebFunction } from '@designofadecade/server';
+
+const router = new Router({ initRoutes: [ApiRoutes], trustedProxies: 1 });
+const server = WebFunction.serve(router, { port: 3000, cors: ['https://app.example.com'] });
+await server.ready;
+```
+
+Upgrading from 10.x: see [MIGRATION.md](MIGRATION.md#upgrading-from-10x-to-110).
+
+---
 
 ## 1. Performance Benchmarks ✅
 
@@ -369,14 +414,25 @@ npm test
 
 Results:
 
-- ✅ **19 test files** passed
-- ✅ **558 tests** total (556 passed, 2 skipped)
-- ✅ **10 new tests** for OpenAPI generator
-- ✅ Duration: ~2.8 seconds
+- ✅ **937 tests** as of 11.0.0, covering all three deployment modes
+  (`Server` lifecycle, `WebFunction` end-to-end, `eventFunction`,
+  `Local.EventFunctionProxy`, `clientIp`/`requestId` identity)
+- ✅ **10 tests** for the OpenAPI generator
 
 ---
 
 ## Quick Reference
+
+### Deployment Modes
+
+```typescript
+import { Router, WebFunction } from '@designofadecade/server';
+
+const server = WebFunction.serve(router, { port: 3000 }); // local + Lambda Web Function
+export const handler = (event) => router.eventFunction(event); // Lambda Event Function
+```
+
+See [docs/deployment-modes.md](docs/deployment-modes.md) for the decision table and checklist.
 
 ### Performance Benchmarks
 

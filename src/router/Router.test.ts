@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { createHmac } from 'node:crypto';
 import Router from './Router.ts';
 import Routes from './Routes.ts';
+import { logger } from '../logger/Logger.ts';
 
 describe('Router', () => {
   let router: Router;
@@ -53,7 +54,7 @@ describe('Router', () => {
       token: string
     ): Promise<unknown> => {
       const req = {
-        url: 'http://localhost:3000/whoami',
+        url: '/whoami',
         method: 'GET',
         headers: { host: 'localhost:3000', authorization: `Bearer ${token}` },
         on: vi.fn((event: string, cb: () => void) => {
@@ -246,7 +247,7 @@ describe('Router', () => {
       // URLPattern reports an unmatched optional group as undefined. It used to
       // be assigned straight into params, which is typed Record<string, string>,
       // so a handler could read `undefined` where a string was promised.
-      const response = await router.lambdaEvent({
+      const response = await router.eventFunction({
         requestContext: { http: { method: 'GET', path: '/files' } },
         headers: {},
       });
@@ -260,7 +261,7 @@ describe('Router', () => {
     });
 
     it('should include an optional segment that did match', async () => {
-      const response = await router.lambdaEvent({
+      const response = await router.eventFunction({
         requestContext: { http: { method: 'GET', path: '/files/report.pdf' } },
         headers: {},
       });
@@ -280,7 +281,7 @@ describe('Router', () => {
         headers: {},
       };
 
-      const response = await router.lambdaEvent(event);
+      const response = await router.eventFunction(event);
       expect(response.statusCode).toBe(200);
       expect(response.body).toBe('static');
     });
@@ -296,7 +297,7 @@ describe('Router', () => {
         headers: {},
       };
 
-      const response = await router.lambdaEvent(event);
+      const response = await router.eventFunction(event);
       expect(response.statusCode).toBe(200);
     });
 
@@ -311,7 +312,7 @@ describe('Router', () => {
         headers: {},
       };
 
-      const response = await router.lambdaEvent(event);
+      const response = await router.eventFunction(event);
       expect(response.statusCode).toBe(404);
     });
 
@@ -326,7 +327,7 @@ describe('Router', () => {
         headers: {},
       };
 
-      const response = await router.lambdaEvent(event);
+      const response = await router.eventFunction(event);
       expect(response.statusCode).toBe(200);
     });
 
@@ -350,12 +351,12 @@ describe('Router', () => {
         headers: {},
       };
 
-      const response = await router.lambdaEvent(event);
+      const response = await router.eventFunction(event);
       expect(response.statusCode).toBe(200);
     });
   });
 
-  describe('lambdaEvent', () => {
+  describe('eventFunction', () => {
     beforeEach(() => {
       class TestRoutes extends Routes {
         constructor(router: Router) {
@@ -379,7 +380,7 @@ describe('Router', () => {
         headers: {},
       };
 
-      const response = await router.lambdaEvent(event);
+      const response = await router.eventFunction(event);
       expect(response.statusCode).toBe(200);
       expect(JSON.parse(response.body)).toEqual({ success: true });
     });
@@ -398,7 +399,7 @@ describe('Router', () => {
         body: JSON.stringify({ data: 'test' }),
       };
 
-      const response = await router.lambdaEvent(event);
+      const response = await router.eventFunction(event);
       expect(response.statusCode).toBe(201);
       expect(JSON.parse(response.body)).toEqual({ data: 'test' });
     });
@@ -417,7 +418,7 @@ describe('Router', () => {
         body: 'invalid json',
       };
 
-      const response = await router.lambdaEvent(event);
+      const response = await router.eventFunction(event);
       expect(response.statusCode).toBe(400);
       expect(JSON.parse(response.body)).toHaveProperty('error');
     });
@@ -434,7 +435,7 @@ describe('Router', () => {
         headers: {},
       };
 
-      const response = await router.lambdaEvent(event);
+      const response = await router.eventFunction(event);
       expect(response.statusCode).toBe(200);
     });
 
@@ -449,7 +450,7 @@ describe('Router', () => {
         headers: {},
       };
 
-      const response = await router.lambdaEvent(event);
+      const response = await router.eventFunction(event);
       expect(response.statusCode).toBe(200);
     });
   });
@@ -469,7 +470,7 @@ describe('Router', () => {
       router = new Router({ initRoutes: [TestRoutes] });
 
       mockReq = {
-        url: 'http://localhost:3000/test',
+        url: '/test',
         method: 'GET',
         headers: {
           host: 'localhost:3000',
@@ -579,6 +580,316 @@ describe('Router', () => {
       );
     });
 
+    it('passes proxyOptions through to request.proxyOptions ({} when omitted)', async () => {
+      const seen: unknown[] = [];
+      class ProxyRoutes extends Routes {
+        constructor(r: Router) {
+          super(r);
+          this.addRoute('/test', 'GET', async (request) => {
+            seen.push(request.proxyOptions);
+            return { body: {} };
+          });
+        }
+      }
+      const proxyRouter = new Router({ initRoutes: [ProxyRoutes] });
+      mockReq.on.mockImplementation((event: string, callback: () => void) => {
+        if (event === 'end') callback();
+        return mockReq;
+      });
+      const proxyOptions = { event: { stageVariables: { a: '1' } } };
+
+      await proxyRouter.nodeJSRequest(mockReq, mockRes, { proxyOptions });
+      await proxyRouter.nodeJSRequest(mockReq, mockRes);
+
+      expect(seen).toEqual([proxyOptions, {}]);
+      expect(seen[0]).toBe(proxyOptions);
+    });
+
+    describe('CORS allowlist enforcement', () => {
+      const allowlist = ['https://app.example.com'];
+      let handler: ReturnType<typeof vi.fn>;
+
+      beforeEach(() => {
+        handler = vi.fn(async () => ({ status: 200, body: { ok: true } }));
+        const routeHandler = handler;
+        class WriteRoutes extends Routes {
+          constructor(router: Router) {
+            super(router);
+            this.addRoute('/test', ['GET', 'POST', 'DELETE'], routeHandler);
+          }
+        }
+        router = new Router({ initRoutes: [WriteRoutes] });
+        mockReq.headers.host = 'api.example.com';
+        mockReq.on.mockImplementation((event: string, callback: (chunk?: Buffer) => void) => {
+          if (event === 'data') callback(Buffer.from('{"email":"attacker@evil.test"}'));
+          if (event === 'end') callback();
+          return mockReq;
+        });
+      });
+
+      const errorBody = () => JSON.parse(mockRes.end.mock.calls[0][0]);
+
+      it('refuses a POST from a non-allowlisted origin before reading the body', async () => {
+        mockReq.method = 'POST';
+        mockReq.headers.origin = 'https://evil.example';
+        mockReq.headers['content-type'] = 'application/json';
+
+        await router.nodeJSRequest(mockReq, mockRes, { cors: allowlist });
+
+        expect(mockRes.statusCode).toBe(403);
+        expect(errorBody()).toEqual({
+          success: false,
+          error: { code: 'CORS_ORIGIN_FORBIDDEN', message: expect.any(String) },
+        });
+        expect(handler).not.toHaveBeenCalled();
+        expect(mockReq.on).not.toHaveBeenCalled();
+        expect(mockRes.setHeader).not.toHaveBeenCalledWith(
+          'Access-Control-Allow-Origin',
+          expect.anything()
+        );
+      });
+
+      it('refuses a DELETE from a non-allowlisted origin', async () => {
+        mockReq.method = 'DELETE';
+        mockReq.headers.origin = 'https://evil.example';
+
+        await router.nodeJSRequest(mockReq, mockRes, { cors: allowlist });
+
+        expect(mockRes.statusCode).toBe(403);
+        expect(handler).not.toHaveBeenCalled();
+      });
+
+      it('answers a preflight from a non-allowlisted origin with 403', async () => {
+        mockReq.method = 'OPTIONS';
+        mockReq.headers.origin = 'https://evil.example';
+        mockReq.headers['access-control-request-method'] = 'POST';
+
+        await router.nodeJSRequest(mockReq, mockRes, { cors: allowlist });
+
+        expect(mockRes.statusCode).toBe(403);
+        expect(errorBody().error.code).toBe('CORS_ORIGIN_FORBIDDEN');
+        expect(mockRes.setHeader).not.toHaveBeenCalledWith(
+          'Access-Control-Allow-Methods',
+          expect.anything()
+        );
+      });
+
+      it('treats Origin "null" (sandboxed frame, file://) as cross-origin', async () => {
+        mockReq.method = 'POST';
+        mockReq.headers.origin = 'null';
+
+        await router.nodeJSRequest(mockReq, mockRes, { cors: allowlist });
+
+        expect(mockRes.statusCode).toBe(403);
+        expect(handler).not.toHaveBeenCalled();
+      });
+
+      it('still runs a GET from a non-allowlisted origin, without CORS headers', async () => {
+        mockReq.headers.origin = 'https://evil.example';
+
+        await router.nodeJSRequest(mockReq, mockRes, { cors: allowlist });
+
+        expect(mockRes.statusCode).toBe(200);
+        expect(handler).toHaveBeenCalledTimes(1);
+        expect(mockRes.setHeader).not.toHaveBeenCalledWith(
+          'Access-Control-Allow-Origin',
+          expect.anything()
+        );
+        expect(mockRes.setHeader).not.toHaveBeenCalledWith(
+          'Access-Control-Allow-Credentials',
+          'true'
+        );
+      });
+
+      it('refuses a HEAD from a non-allowlisted origin, as Local does (only GET is exempt)', async () => {
+        vi.spyOn(logger, 'warn').mockImplementation(() => {});
+        mockReq.method = 'HEAD';
+        mockReq.headers.origin = 'https://evil.example';
+
+        await router.nodeJSRequest(mockReq, mockRes, { cors: allowlist });
+
+        expect(mockRes.statusCode).toBe(403);
+        expect(errorBody().error.code).toBe('CORS_ORIGIN_FORBIDDEN');
+        expect(handler).not.toHaveBeenCalled();
+        expect(mockRes.setHeader).toHaveBeenCalledWith('Vary', 'Origin');
+      });
+
+      it('logs ROUTER_CORS_ORIGIN_BLOCKED, flagging whether the request was refused', async () => {
+        const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+        mockReq.headers.origin = 'https://evil.example';
+
+        await router.nodeJSRequest(mockReq, mockRes, { cors: allowlist });
+        mockReq.method = 'POST';
+        await router.nodeJSRequest(mockReq, mockRes, { cors: allowlist });
+
+        expect(warn).toHaveBeenNthCalledWith(1, expect.any(String), {
+          code: 'ROUTER_CORS_ORIGIN_BLOCKED',
+          source: 'Router.nodeJSRequest',
+          origin: 'https://evil.example',
+          method: 'GET',
+          rejected: false,
+        });
+        expect(warn).toHaveBeenNthCalledWith(
+          2,
+          expect.any(String),
+          expect.objectContaining({ method: 'POST', rejected: true })
+        );
+      });
+
+      it('bounds the logged origin and method', async () => {
+        const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+        mockReq.method = 'POST';
+        mockReq.headers.origin = `https://${'a'.repeat(500)}.example`;
+
+        await router.nodeJSRequest(mockReq, mockRes, { cors: allowlist });
+
+        const fields = warn.mock.calls[0][1] as { origin: string };
+        expect(fields.origin).toHaveLength(200);
+      });
+
+      it('runs a POST from an allowlisted origin with credentialed CORS headers', async () => {
+        mockReq.method = 'POST';
+        mockReq.headers.origin = 'https://app.example.com';
+        mockReq.headers['content-type'] = 'application/json';
+
+        await router.nodeJSRequest(mockReq, mockRes, { cors: allowlist });
+
+        expect(mockRes.statusCode).toBe(200);
+        expect(handler).toHaveBeenCalledWith(
+          expect.objectContaining({ body: { email: 'attacker@evil.test' } })
+        );
+        expect(mockRes.setHeader).toHaveBeenCalledWith(
+          'Access-Control-Allow-Origin',
+          'https://app.example.com'
+        );
+        expect(mockRes.setHeader).toHaveBeenCalledWith('Access-Control-Allow-Credentials', 'true');
+      });
+
+      it('answers a preflight from an allowlisted origin with 204', async () => {
+        mockReq.method = 'OPTIONS';
+        mockReq.headers.origin = 'https://app.example.com';
+
+        await router.nodeJSRequest(mockReq, mockRes, { cors: allowlist });
+
+        expect(mockRes.statusCode).toBe(204);
+        expect(mockRes.setHeader).toHaveBeenCalledWith(
+          'Access-Control-Allow-Methods',
+          expect.any(String)
+        );
+      });
+
+      it('runs a same-origin POST whose Origin host matches the Host header', async () => {
+        mockReq.method = 'POST';
+        mockReq.headers.host = 'API.Example.com:8443';
+        mockReq.headers.origin = 'https://api.example.com:8443';
+
+        await router.nodeJSRequest(mockReq, mockRes, { cors: allowlist });
+
+        expect(mockRes.statusCode).toBe(200);
+        expect(handler).toHaveBeenCalledTimes(1);
+        // Same-origin needs no CORS grant.
+        expect(mockRes.setHeader).not.toHaveBeenCalledWith(
+          'Access-Control-Allow-Origin',
+          expect.anything()
+        );
+      });
+
+      it('does not treat a different port on the same host as same-origin', async () => {
+        mockReq.method = 'POST';
+        mockReq.headers.host = 'api.example.com:8443';
+        mockReq.headers.origin = 'https://api.example.com:9443';
+
+        await router.nodeJSRequest(mockReq, mockRes, { cors: allowlist });
+
+        expect(mockRes.statusCode).toBe(403);
+        expect(handler).not.toHaveBeenCalled();
+      });
+
+      it('runs a POST the browser marks Sec-Fetch-Site: same-origin', async () => {
+        mockReq.method = 'POST';
+        // e.g. a proxy in front rewrote Host to the upstream name.
+        mockReq.headers.host = 'internal-upstream:3000';
+        mockReq.headers.origin = 'https://www.example.com';
+        mockReq.headers['sec-fetch-site'] = 'same-origin';
+
+        await router.nodeJSRequest(mockReq, mockRes, { cors: allowlist });
+
+        expect(mockRes.statusCode).toBe(200);
+        expect(handler).toHaveBeenCalledTimes(1);
+      });
+
+      it('does not accept Sec-Fetch-Site: same-site as same-origin', async () => {
+        mockReq.method = 'POST';
+        mockReq.headers.origin = 'https://sibling.example.com';
+        mockReq.headers['sec-fetch-site'] = 'same-site';
+
+        await router.nodeJSRequest(mockReq, mockRes, { cors: allowlist });
+
+        expect(mockRes.statusCode).toBe(403);
+        expect(handler).not.toHaveBeenCalled();
+      });
+
+      it('lets Sec-Fetch-Site: cross-site override a matching Host', async () => {
+        mockReq.method = 'POST';
+        mockReq.headers.origin = 'https://api.example.com';
+        mockReq.headers['sec-fetch-site'] = 'cross-site';
+
+        await router.nodeJSRequest(mockReq, mockRes, { cors: allowlist });
+
+        expect(mockRes.statusCode).toBe(403);
+        expect(handler).not.toHaveBeenCalled();
+      });
+
+      it('treats an unparseable Origin as cross-origin', async () => {
+        mockReq.method = 'POST';
+        mockReq.headers.origin = 'not a url';
+
+        await router.nodeJSRequest(mockReq, mockRes, { cors: allowlist });
+
+        expect(mockRes.statusCode).toBe(403);
+      });
+
+      it('sends Vary: Origin on the 403 and never echoes the Origin', async () => {
+        mockReq.method = 'POST';
+        mockReq.headers.origin = 'https://evil.example';
+
+        await router.nodeJSRequest(mockReq, mockRes, { cors: allowlist });
+
+        expect(mockRes.setHeader).toHaveBeenCalledWith('Vary', 'Origin');
+        expect(mockRes.end.mock.calls[0][0]).not.toContain('evil.example');
+      });
+
+      it('runs a POST with no Origin header (non-browser client)', async () => {
+        mockReq.method = 'POST';
+
+        await router.nodeJSRequest(mockReq, mockRes, { cors: allowlist });
+
+        expect(mockRes.statusCode).toBe(200);
+        expect(handler).toHaveBeenCalledTimes(1);
+      });
+
+      it('leaves cors: true permissive for a POST from any origin', async () => {
+        mockReq.method = 'POST';
+        mockReq.headers.origin = 'https://evil.example';
+
+        await router.nodeJSRequest(mockReq, mockRes, { cors: true });
+
+        expect(mockRes.statusCode).toBe(200);
+        expect(handler).toHaveBeenCalledTimes(1);
+        expect(mockRes.setHeader).toHaveBeenCalledWith('Access-Control-Allow-Origin', '*');
+      });
+
+      it('applies no origin check without cors', async () => {
+        mockReq.method = 'POST';
+        mockReq.headers.origin = 'https://evil.example';
+
+        await router.nodeJSRequest(mockReq, mockRes);
+
+        expect(mockRes.statusCode).toBe(200);
+        expect(handler).toHaveBeenCalledTimes(1);
+      });
+    });
+
     it('should handle OPTIONS preflight requests', async () => {
       mockReq.method = 'OPTIONS';
 
@@ -638,6 +949,35 @@ describe('Router', () => {
       expect(mockRes.statusCode).toBe(500);
     });
 
+    it('treats an ECONNRESET while reading the body as a client abort (debug, no 500)', async () => {
+      const debug = vi.spyOn(logger, 'debug').mockImplementation(() => {});
+      const error = vi.spyOn(logger, 'error').mockImplementation(() => {});
+      class PostRoutes extends Routes {
+        constructor(router: Router) {
+          super(router);
+          this.addRoute('/test', 'POST', async () => ({ status: 200, body: {} }));
+        }
+      }
+      router = new Router({ initRoutes: [PostRoutes] });
+      mockReq.method = 'POST';
+      mockReq.on.mockImplementation((event: string, callback: (error?: Error) => void) => {
+        if (event === 'error') {
+          callback(Object.assign(new Error('aborted'), { code: 'ECONNRESET' }));
+        }
+        return mockReq;
+      });
+
+      await router.nodeJSRequest(mockReq, mockRes);
+
+      expect(mockRes.end).not.toHaveBeenCalled();
+      expect(mockRes.statusCode).toBe(0);
+      expect(error).not.toHaveBeenCalled();
+      expect(debug).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ code: 'ROUTER_CLIENT_ABORTED', method: 'POST' })
+      );
+    });
+
     it('should handle Buffer responses', async () => {
       class BufferRoutes extends Routes {
         constructor(router: Router) {
@@ -650,7 +990,7 @@ describe('Router', () => {
       }
 
       router = new Router({ initRoutes: [BufferRoutes] });
-      mockReq.url = 'http://localhost:3000/buffer';
+      mockReq.url = '/buffer';
 
       mockReq.on.mockImplementation((event: string, callback: () => void) => {
         if (event === 'end') callback();
@@ -675,7 +1015,7 @@ describe('Router', () => {
       }
 
       router = new Router({ initRoutes: [Base64Routes] });
-      mockReq.url = 'http://localhost:3000/base64';
+      mockReq.url = '/base64';
 
       mockReq.on.mockImplementation((event: string, callback: () => void) => {
         if (event === 'end') callback();
@@ -684,7 +1024,7 @@ describe('Router', () => {
 
       await router.nodeJSRequest(mockReq, mockRes);
 
-      expect(mockRes.end).toHaveBeenCalled();
+      expect(mockRes.end).toHaveBeenCalledWith(Buffer.from('test'));
     });
   });
 
@@ -717,7 +1057,7 @@ describe('Router', () => {
         headers: {},
       };
 
-      const response = await router.lambdaEvent(event);
+      const response = await router.eventFunction(event);
       expect(response.statusCode).toBe(401);
     });
 
@@ -734,7 +1074,7 @@ describe('Router', () => {
         },
       };
 
-      const response = await router.lambdaEvent(event);
+      const response = await router.eventFunction(event);
       expect(response.statusCode).toBe(403);
     });
 
@@ -751,7 +1091,7 @@ describe('Router', () => {
         },
       };
 
-      const response = await router.lambdaEvent(event);
+      const response = await router.eventFunction(event);
       expect(response.statusCode).toBe(200);
     });
 
@@ -768,7 +1108,7 @@ describe('Router', () => {
         },
       };
 
-      const response = await router.lambdaEvent(event);
+      const response = await router.eventFunction(event);
       expect(response.statusCode).toBe(200);
     });
   });
@@ -804,7 +1144,7 @@ describe('Router', () => {
         headers: {},
       };
 
-      const response = await router.lambdaEvent(event);
+      const response = await router.eventFunction(event);
       expect(globalMiddleware).toHaveBeenCalled();
       expect(response.statusCode).toBe(200);
     });
@@ -842,7 +1182,7 @@ describe('Router', () => {
         headers: {},
       };
 
-      const response = await router.lambdaEvent(event);
+      const response = await router.eventFunction(event);
       expect(middleware).toHaveBeenCalled();
       expect(handler).not.toHaveBeenCalled();
       expect(response.statusCode).toBe(403);
@@ -872,7 +1212,7 @@ describe('Router', () => {
         headers: {},
       };
 
-      const response = await router.lambdaEvent(event);
+      const response = await router.eventFunction(event);
       expect(response.statusCode).toBe(500);
       expect(JSON.parse(response.body)).toHaveProperty('error');
     });
@@ -898,13 +1238,13 @@ describe('Router', () => {
         headers: {},
       };
 
-      const response = await router.lambdaEvent(event);
+      const response = await router.eventFunction(event);
       expect(response.statusCode).toBe(500);
     });
   });
 });
 
-describe('Router lambdaEvent query parameters', () => {
+describe('Router eventFunction query parameters', () => {
   let capturedQuery: Record<string, string> | undefined;
   let router: Router;
 
@@ -923,7 +1263,7 @@ describe('Router lambdaEvent query parameters', () => {
   });
 
   it('passes through query parameters that have values', async () => {
-    const response = await router.lambdaEvent({
+    const response = await router.eventFunction({
       requestContext: { http: { method: 'GET', path: '/search' } },
       headers: {},
       queryStringParameters: { q: 'hello', page: '2' },
@@ -940,7 +1280,7 @@ describe('Router lambdaEvent query parameters', () => {
    * string was promised.
    */
   it('drops query parameters sent without a value', async () => {
-    await router.lambdaEvent({
+    await router.eventFunction({
       requestContext: { http: { method: 'GET', path: '/search' } },
       headers: {},
       queryStringParameters: { q: 'hello', empty: undefined },
@@ -951,11 +1291,97 @@ describe('Router lambdaEvent query parameters', () => {
   });
 
   it('defaults to an empty object when the event has no query parameters', async () => {
-    await router.lambdaEvent({
+    await router.eventFunction({
       requestContext: { http: { method: 'GET', path: '/search' } },
       headers: {},
     });
 
     expect(capturedQuery).toEqual({});
+  });
+});
+
+describe('RouterRequest.route', () => {
+  const seen: { route?: string | undefined; middleware?: string | undefined } = {};
+  let router: Router;
+
+  beforeEach(() => {
+    delete seen.route;
+    delete seen.middleware;
+    class TestRoutes extends Routes {
+      constructor(r: Router) {
+        super(r);
+        const capture = async (request: { route?: string }) => {
+          seen.route = request.route;
+          return { status: 200, body: 'ok' };
+        };
+        this.addRoute('/static', 'GET', capture);
+        this.addRoute('/users/:id', 'GET', capture);
+        this.addRoute('//double//slash', 'GET', capture);
+      }
+    }
+    router = new Router({
+      initRoutes: [TestRoutes],
+      middleware: [
+        async (request) => {
+          seen.middleware = request.route;
+          return null;
+        },
+      ],
+    });
+  });
+
+  const viaEvent = (path: string) =>
+    router.eventFunction({ requestContext: { http: { method: 'GET', path } }, headers: {} });
+
+  const viaNode = async (path: string) => {
+    const req = {
+      url: path,
+      method: 'GET',
+      headers: { host: 'localhost:3000' },
+      on: vi.fn((event: string, cb: () => void) => {
+        if (event === 'end') cb();
+        return req;
+      }),
+    };
+    const res = { setHeader: vi.fn(), end: vi.fn(), statusCode: 0 };
+    await router.nodeJSRequest(req as never, res as never);
+    return res;
+  };
+
+  it.each([
+    ['/users/abc-secret', '/users/:id'],
+    ['/static', '/static'],
+    ['/static/', '/static'],
+    ['/double/slash', '/double/slash'],
+  ])('eventFunction %s -> route %s, set before middleware', async (path, route) => {
+    const response = await viaEvent(path);
+    expect(response.statusCode).toBe(200);
+    expect(seen.route).toBe(route);
+    expect(seen.middleware).toBe(route);
+  });
+
+  it.each([
+    ['/users/abc-secret?x=1', '/users/:id'],
+    ['/static', '/static'],
+  ])('nodeJSRequest %s -> route %s', async (path, route) => {
+    const res = await viaNode(path);
+    expect(res.statusCode).toBe(200);
+    expect(seen.route).toBe(route);
+    expect(seen.middleware).toBe(route);
+  });
+
+  it('is unset when no route matched', async () => {
+    const response = await viaEvent('/missing');
+    expect(response.statusCode).toBe(404);
+    expect(seen).not.toHaveProperty('route');
+  });
+
+  it('ignores an event routeKey such as $default', async () => {
+    await router.eventFunction({
+      routeKey: '$default',
+      requestContext: { http: { method: 'GET', path: '/users/7' } },
+      headers: {},
+    } as never);
+    expect(seen.route).toBe('/users/:id');
   });
 });

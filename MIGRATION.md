@@ -5,6 +5,452 @@ change, see [CHANGELOG.md](./CHANGELOG.md).
 
 ---
 
+## Upgrading from 10.x to 11.0
+
+11.0 adds AWS Lambda **Web Function** support (the function is a real HTTP
+server) and renames everything that was called "Lambda" after the model it
+actually implements, the Lambda **Event Function** (API Gateway HTTP API v2).
+The renames are mechanical. The behavioural changes are security defaults:
+the client IP and request id are taken only from sources the caller cannot
+forge, the CORS allowlist refuses cross-origin writes, `logRequest` logs only
+the values you name, WebSocket checks have a deadline, the local Event Function proxy serves
+loopback only and passes the raw request body, request bodies are capped at
+1 MiB on every transport, a plain Node `Server` times out slow clients, and
+request targets that URL resolution would rewrite are refused
+(items 6 and 10 to 17).
+
+Work through the greps. Nothing returned means that item does not apply.
+
+### 1. `router.lambdaEvent()` -> `router.eventFunction()`
+
+```bash
+grep -rn "lambdaEvent" --include="*.ts" --include="*.js" src packages | grep -v node_modules
+```
+
+Same behaviour, same signature, new name. There is no alias.
+
+```typescript
+// Before
+export const handler = (event: APIGatewayProxyEventV2) => router.lambdaEvent(event);
+
+// After
+export const handler = (event: APIGatewayProxyEventV2) => router.eventFunction(event);
+```
+
+### 2. `LambdaHttpEvent` / `LambdaHttpResponse` -> `EventFunctionEvent` / `EventFunctionResult`
+
+```bash
+grep -rn "LambdaHttpEvent\|LambdaHttpResponse" --include="*.ts" src packages | grep -v node_modules
+```
+
+```typescript
+// Before
+import type { LambdaHttpEvent, LambdaHttpResponse } from '@designofadecade/server';
+
+// After
+import type { EventFunctionEvent, EventFunctionResult } from '@designofadecade/server';
+```
+
+Most handlers are typed with `APIGatewayProxyEventV2` from `@types/aws-lambda`
+and never name these; they are unaffected.
+
+### 3. `Local.LambdaProxyRouter` -> `Local.EventFunctionProxy`
+
+```bash
+grep -rn "LambdaProxyRouter\|LambdaEvent\b\|LambdaResponse\b" --include="*.ts" --include="*.js" src packages | grep -v node_modules
+```
+
+The types it uses were renamed with it: `LambdaEvent` -> `EventFunctionProxyEvent`,
+`LambdaResponse` -> `EventFunctionProxyResult`.
+
+```typescript
+// Before
+const local = Local.LambdaProxyRouter(handler, { requestContext: { stage: 'dev' } });
+
+// After
+const local = Local.EventFunctionProxy(handler, { requestContext: { stage: 'dev' } });
+```
+
+**Behaviour change:** the synthesised `requestContext.http.sourceIp` is now the
+socket's remote address, as API Gateway reports it. It used to be the first
+`X-Forwarded-For` value, which the client controls. Local tests that forged an
+IP through that header must set it another way (the `requestContext` option
+overrides `http.sourceIp`). Note that a local socket address is usually `::1`
+or `::ffff:127.0.0.1`, not `127.0.0.1`; a test asserting the literal
+`127.0.0.1` will need to accept any loopback form or set the override.
+
+### 4. `lambdaOptions` -> `proxyOptions`
+
+```bash
+grep -rn "lambdaOptions" --include="*.ts" --include="*.js" src packages | grep -v node_modules
+```
+
+Both the `nodeJSRequest` option and the `RouterRequest` field were renamed.
+Ordinary applications never used either; only a transport shim does.
+
+```typescript
+// Before
+router.nodeJSRequest(req, res, { lambdaOptions: { requestContext } });
+const extra = request.lambdaOptions;
+
+// After
+router.nodeJSRequest(req, res, { proxyOptions: { requestContext } });
+const extra = request.proxyOptions;
+```
+
+### 5. `RouterRequest` gained two **required** fields: `clientIp` and `requestId`
+
+```bash
+grep -rn "RouterRequest = {\|: RouterRequest = \|as RouterRequest\|satisfies RouterRequest" --include="*.ts" src packages test tests | grep -v node_modules
+```
+
+Both are `string` and both are required, not optional. Code that constructs a
+`RouterRequest` literal by hand — unit tests that call a handler directly,
+custom transports, fixtures — fails to typecheck (TS2741, "Property 'clientIp'
+is missing") until it supplies them. Handlers and middleware that only _read_
+the request need no change and may start using the new fields.
+
+```typescript
+// Before
+const request: RouterRequest = {
+  path: '/x',
+  method: 'GET',
+  body: null,
+  cookies: {},
+  params: {},
+  query: {},
+  headers: {},
+};
+
+// After
+const request: RouterRequest = {
+  path: '/x',
+  method: 'GET',
+  body: null,
+  cookies: {},
+  params: {},
+  query: {},
+  headers: {},
+  clientIp: '127.0.0.1',
+  requestId: 'test-1',
+};
+```
+
+### 6. Client IP is no longer read from the first `X-Forwarded-For` value
+
+```bash
+grep -rn "x-forwarded-for\|X-Forwarded-For" --include="*.ts" --include="*.js" src packages | grep -v node_modules
+```
+
+If your middleware read the header itself, delete that code and use
+`request.clientIp`. It is `requestContext.http.sourceIp` in an Event Function,
+the **last** `X-Forwarded-For` entry (the one Lambda appends) in a Web
+Function, and the socket address on a plain server. If CloudFront fronts a Web
+Function endpoint, tell the router:
+
+```typescript
+const router = new Router({ initRoutes: [Routes], trustedProxies: 1 });
+```
+
+**Set `trustedProxies` above `0` only if the endpoint is unreachable except
+through those proxies** — for CloudFront, `IamAuth` on the Web Function
+endpoint with invoke permission granted only to your distribution. If a client
+can call the endpoint directly, the entry the router walks back to is text the
+client sent. The selected entry is also accepted only if it is a literal IP
+(`net.isIP`); anything else gives `clientIp: ''`.
+
+Anything that keyed rate limits, allowlists or audit logs on a client-supplied
+`X-Forwarded-For` value was spoofable; after this change those keys are stable
+and may differ from what the old code recorded.
+
+### 7. `RequestLogger` helpers take a `RouterRequest`
+
+```bash
+grep -rn "createRequestLogger\|logRequest\|logResponse" --include="*.ts" --include="*.js" src packages | grep -v node_modules
+```
+
+They still accept an API Gateway event, so existing calls compile. Prefer the
+`RouterRequest` now: it carries the trustworthy `clientIp` and `requestId`, and
+works identically in all three modes. `logResponse` accepts either `status`
+(a `RouterResponse`) or `statusCode` (an Event Function result). `logRequest`
+no longer throws when a body is not JSON.
+
+```typescript
+// Before (event-only)
+logRequest(event);
+logResponse(event, { statusCode: 200 }, ms);
+
+// After (either; RouterRequest preferred)
+logRequest(request);
+logResponse(request, response, ms);
+```
+
+### 8. Optional: adopt `WebFunction.serve`
+
+Not required, but the reason for the major. One file now runs locally and as a
+Lambda Web Function:
+
+```typescript
+// Before: a local dev server, plus a separate Event Function handler
+const server = new Server({ port: 3000 }, (req, res) => router.nodeJSRequest(req, res, { cors }));
+export const handler = (event) => router.eventFunction(event);
+
+// After: a Web Function. Same Router; drop the handler and the API Gateway.
+const server = WebFunction.serve(router, { port: 3000, cors });
+await server.ready;
+```
+
+Before switching a deployed function, read
+[docs/deployment-modes.md](https://github.com/designofadecade/server/blob/main/docs/deployment-modes.md): a Web Function
+environment serves many requests concurrently, so module-level per-request state
+that was safe in an Event Function is not safe any more.
+
+### 9. `Server` behaviour under Lambda
+
+```bash
+grep -rn "new Server(\|handleSignals\|SIGTERM" --include="*.ts" --include="*.js" src packages | grep -v node_modules
+```
+
+When `AWS_LAMBDA_HTTP_ENDPOINT` is set to a `host:port` value, `Server` binds
+to that address and ignores `port`/`host`, and installs a `SIGTERM` handler
+that calls `close()` (default `shutdownTimeoutMs` 800 ms). An empty variable
+counts as unset; a malformed one throws from the constructor. If you already
+handle `SIGTERM` yourself, either remove your handler or pass
+`handleSignals: false`; two handlers are harmless (`close()` is idempotent and
+concurrent calls share one promise) but one of them is redundant. Outside
+Lambda nothing changes unless you opt in with `handleSignals: true`.
+
+`close()` also changed in ways that only remove sharp edges: calling it before
+the server is listening now waits for startup, calling it after it has
+finished resolves immediately, and `server.server` is `null` after close.
+Code that called `close()` twice and swallowed `ERR_SERVER_NOT_RUNNING` can
+drop the catch.
+
+### 10. WebSocket `message` listeners receive the sender
+
+```bash
+grep -rn "on('message'\|EventsManager\|registerEvents(\|addListener(" --include="*.ts" --include="*.js" src packages | grep -v node_modules
+```
+
+`WebSocketServer` now emits `message` as `(parsed, ws, req)`, and
+`EventsManager` calls handlers as `handler(msg, ws, req)`. One-argument
+listeners are unaffected; a handler that already took an optional second
+parameter, or logs all its arguments, now receives the socket there. Frames
+from a socket the server has started closing are dropped.
+
+Authenticate with the new `authenticate` option, not in the `connection`
+handler. Frames sent while an asynchronous check in `connection` is pending
+are dispatched to handlers:
+
+```ts
+// Before
+wss.on('connection', async (ws, req) => {
+  if (!(await sessionFrom(req))) ws.close(4401);
+});
+
+// After
+const wss = new WebSocketServer({
+  port: 8080,
+  allowedOrigins: ['https://app.example.com'],
+  authenticate: (req) => sessionFrom(req), // null -> 401, no socket opens
+});
+wss.on('message', (parsed, ws, req, session) => {
+  /* authorize from session */
+});
+```
+
+A check kept in the `connection` handler must be synchronous and use
+`ws.terminate()`, not `ws.close()`. `verifyClient` and `authenticate` now share
+a 10 s `upgradeTimeoutMs`; an upgrade whose checks take longer is refused (403
+while `verifyClient` is pending, 401 while `authenticate` is). Raise
+`upgradeTimeoutMs` if your checks are slow (at most `2147483647`; a larger
+value now throws). `authenticate` without `allowedOrigins` logs
+`WEBSOCKET_NO_ORIGIN_ALLOWLIST` once: with cookie auth, set `allowedOrigins`.
+See [docs/websocket.md](https://github.com/designofadecade/server/blob/main/docs/websocket.md).
+
+### 11. `logRequest` logs values only for fields you name
+
+`logRequest(req)` now logs the body's content type and size, and only the
+names of query and path parameters. Text and binary bodies are never logged.
+To keep logging values, list them:
+
+```ts
+logRequest(req, {
+  logBody: true,
+  bodyFields: ['orderId', 'items', 'sku', 'qty'],
+  paramFields: ['page', 'id'],
+});
+```
+
+Unlisted fields become `'[REDACTED]'`. Nested keys must be listed too, so
+`{ order: { id } }` needs `'order'` and `'id'`. Sensitive keys stay redacted
+even when listed. `logBody: true` without a non-empty `bodyFields` logs only
+the summary and warns once. `queryParams` and `pathParams` in log lines are now
+arrays of names unless `paramFields` is set, so update any log queries that
+read their values. Log lines carry `route` (the matched pattern, e.g.
+`/users/:id`) instead of `path`; pass `{ logPath: true }` to `logRequest`,
+`createRequestLogger` or `logResponse` to log the raw path too, and update log
+queries that filter on `path`. `route`, `path` and `userAgent` are cut at 256
+characters. The router's own error lines (`ROUTER_HANDLER_ERROR`, 404s,
+request failures) follow the same rule: `route`, and no path unless
+`new Router({ logPath: true })` (query removed, 256 characters). The 404
+message is now `Route not found`; update anything that matched
+`Route GET /x does not exist`.
+
+### 12. CORS-safelisted content types are not JSON-parsed
+
+A body sent as `text/plain`, `application/x-www-form-urlencoded` or
+`multipart/form-data` reaches the route as a string even if the header also
+contains `application/json` (for example `text/plain;application/json`).
+Legitimate JSON clients send `application/json` and are unaffected.
+
+### 13. The CORS allowlist rejects cross-origin writes
+
+If you pass `cors: [...]`, non-safe requests (POST/PUT/PATCH/DELETE, and
+preflights) from an origin that is neither on the list nor same-origin now get
+403 `CORS_ORIGIN_FORBIDDEN` instead of reaching the route. Add every browser
+origin that legitimately calls the API to the list. The site's own pages pass
+automatically (`Sec-Fetch-Site: same-origin`, or Origin host = `Host`). If a
+proxy rewrites `Host` and you must support browsers without `Sec-Fetch-Site`,
+add the public origin too. Non-browser clients that send no Origin are
+unaffected.
+
+`HEAD` counts as a write here: a cross-origin `HEAD` from an origin that is
+neither listed nor same-origin also gets `403 CORS_ORIGIN_FORBIDDEN`, as
+`Local.EventFunctionProxy` already did. Only `GET` still runs (without CORS
+headers), so keep GET routes free of side effects. A page that issues
+cross-origin `HEAD` requests (link checkers, `fetch(url, { method: 'HEAD' })`)
+needs its origin on the list.
+
+### 14. `Local.EventFunctionProxy` is loopback-only by default and passes the raw body
+
+Nothing changes if you open your frontend at `localhost`, `127.0.0.1` or
+`*.localhost` on the same machine and point it at the proxy on a loopback
+address. Bind the proxy's server to loopback too:
+`server.listen(3000, '127.0.0.1')` (`listen(3000)` alone binds every
+interface). Otherwise:
+
+- **Requests from another machine** (a phone or laptop on your LAN, a VM or
+  container reaching the host's address) now answer `403 PEER_NOT_ALLOWED`,
+  whatever `Host` they send: the proxy decides who is local from the TCP peer
+  address, not from the client-chosen `Host` header. List the devices'
+  addresses or a range, and the name they use in `allowedHosts`:
+  `Local.EventFunctionProxy(handler, { allowedPeers: ['192.168.1.0/24'], allowedHosts: ['192.168.1.20'] })`,
+  and listen on an interface they can reach (`listen(3000, '0.0.0.0')`).
+  `allowedPeers: true` admits any peer and warns at startup. An entry that is
+  not an IP address or CIDR range throws when the proxy is created.
+- **Proxy reached by a custom hostname or a tunnel** now answers
+  `403 HOST_NOT_ALLOWED`. Add the names:
+  `Local.EventFunctionProxy(handler, { allowedHosts: ['my-app.tunnel.example'] })`.
+  Tunnels (cloudflared, ngrok) connect from this machine, so they need no
+  `allowedPeers`.
+- **Tests that call `request(req, res)` with a mock `IncomingMessage`** must
+  give it a loopback socket address (`socket: { remoteAddress: '127.0.0.1' }`)
+  or the request is refused with `403 PEER_NOT_ALLOWED`.
+- **Frontend served from a non-loopback origin** (LAN IP, custom host, tunnel,
+  `file:`/`null`) no longer gets CORS. List it:
+  `cors: ['http://192.168.1.20:5173']`. This allowlist also sends
+  `Access-Control-Allow-Credentials: true`, as the router does.
+- **Cross-origin writes are refused.** Any method but GET (HEAD and
+  preflights included) from an origin the `cors` mode does not allow
+  (default and `false`: non-loopback; `string[]`: unlisted and not
+  same-origin) gets `403 CROSS_ORIGIN_FORBIDDEN`, form posts and `no-cors`
+  fetches included. A request with no `Origin` and no `Sec-Fetch-Site` is
+  refused too when it sends a form `Content-Type` (`text/plain`,
+  `application/x-www-form-urlencoded`, `multipart/form-data`) or a body
+  without a `Content-Type`: from curl or a script, send
+  `Content-Type: application/json`. With `allowedHosts: true`, a non-loopback
+  same-origin frontend must be listed in `cors`. A cross-site GET still runs,
+  so keep GET routes free of side effects.
+- **To restore the old behaviour exactly:**
+  `{ cors: true, allowedHosts: true, allowedPeers: true }`. This is unsafe:
+  any website you visit and any machine that can reach the port can use the
+  proxy with its injected authorizer. All three settings log a warning at
+  startup.
+- **`event.body` is the raw request text**, as API Gateway sends it, not
+  `JSON.stringify` of the router's parsed body. `JSON.parse(event.body)` still
+  works for JSON bodies (and so does `router.eventFunction(event)`). Code that
+  relied on a text body arriving JSON-quoted (`"say \"hi\""` instead of
+  `say "hi"`), or that parsed it twice, must change. A body that is not
+  valid UTF-8 arrives base64-encoded with `isBase64Encoded: true`; decode it
+  with `Buffer.from(event.body, 'base64')`. An empty body is still omitted.
+- **Match the wrapped router's body limit.** The proxy refuses bodies over its
+  own `maxBodyBytes` (default 1 MiB) with `413`. If the router you wrap raised
+  its limit, pass the same value:
+  `Local.EventFunctionProxy(handler, { maxBodyBytes: router.maxBodyBytes })`.
+
+### 15. Event Functions refuse bodies over 1 MiB
+
+The router's body limit now applies to `eventFunction` as well as the Node
+transport: a body over `maxBodyBytes` (default 1 MiB, measured after base64
+decoding) gets `413 PAYLOAD_TOO_LARGE`. Before, an Event Function accepted
+anything API Gateway passed. If a route takes larger bodies, raise the limit
+(`new Router({ maxBodyBytes: 5 * 1024 * 1024 })`) or move the upload to a
+pre-signed S3 URL. On the Node transport an oversized body now gets a `413`
+response instead of a dropped connection.
+
+### 16. `Server` slow-client timeouts
+
+```bash
+grep -rn "new Server(\|WebFunction.serve(" --include="*.ts" --include="*.js" src packages | grep -v node_modules
+```
+
+Off Lambda, a `Server` now gives a client 30 s (`requestTimeout`,
+`Server.DEFAULT_REQUEST_TIMEOUT_MS`) to send the whole request, headers and
+body, and 10 s (`headersTimeout`, `Server.DEFAULT_HEADERS_TIMEOUT_MS`) for the
+headers; a slower client gets `408` and the connection is closed. This is the
+defence against slow uploads holding sockets open. It does not limit how long
+a handler runs or how long a response streams. In a Lambda Web Function
+Node's own defaults (300 s / 60 s) stay unless you set the options.
+
+- **Long uploads on a slow link** (large files, mobile clients): raise
+  `requestTimeout`, for example `new Server({ port, requestTimeout: 120_000 }, handler)`,
+  or pass `0` to disable it.
+- `headersTimeout` must not exceed a non-zero `requestTimeout`; the
+  constructor throws otherwise. Lowering only `requestTimeout` below 10 s
+  lowers the default `headersTimeout` with it.
+- Node checks both every 30 s, so a request can outlive them by up to that.
+
+`Expect: 100-continue` uploads over the body limit are now refused with `413`
+before the client sends the body, when `Server` knows the limit. With
+`WebFunction.serve` there is nothing to do: it passes the router's
+`maxBodyBytes`. A hand-built `Server` in front of a router can opt in with
+`new Server({ port, maxBodyBytes: router.maxBodyBytes }, handler)`.
+
+### 17. Request targets are taken verbatim; rewritable ones get `400`
+
+```bash
+grep -rn "url: *['\"\`]https\?://" --include="*.ts" --include="*.js" src test tests | grep -v node_modules
+```
+
+`request.path` is now the request target up to the first `?`, exactly as the
+client sent it, instead of `new URL(req.url, base).pathname`. URL resolution
+read `//x/admin` as `/admin` and removed dot segments, so a proxy in front
+and the router could disagree about the path. These targets now get
+`400 INVALID_REQUEST`, on the Node transport and (by path) in an Event
+Function:
+
+- not starting with exactly one `/`: `//x/...`, `/\x/...`, absolute-form
+  `http://host/path`, `*` (`OPTIONS *` included);
+- a backslash, a `.` or `..` segment (raw or `%2e`/`%2E`), a control
+  character or `%00`; on the Node transport also `#`.
+
+Real clients (browsers, `fetch`, curl) already normalise these before
+sending, so nothing changes for them. What to check:
+
+- **Unit tests that build a mock `IncomingMessage`** with an absolute
+  `url` (`'http://localhost:3000/users'`) now get `400`: use the path
+  (`'/users'`). Node itself always passes origin-form for ordinary requests.
+- **Links or clients that rely on `..` being resolved server-side**
+  (`/assets/../index.html`) must send the resolved path.
+- **A forward proxy** sending absolute-form targets to the app directly is
+  not supported; put a reverse proxy in front.
+
+Path parameters, trailing slashes, percent-encoded characters and query
+strings are unchanged.
+
+---
+
 ## Upgrading from 6.x to 10.x
 
 Six releases sit between 6.1.0 and 10.2.0, four of them breaking. This is the
@@ -59,9 +505,9 @@ const router = new Router({
 });
 ```
 
-**Not affected: AWS Lambda behind API Gateway.** `lambdaEvent()` passes through
-`event.requestContext.authorizer`, which the gateway populates _after_ it has
-validated the token. If your `.authorizer` hits are on the Lambda event rather
+**Not affected: AWS Lambda behind API Gateway.** `lambdaEvent()` (now
+`eventFunction()`) passes through `event.requestContext.authorizer`, which the
+gateway populates _after_ it has validated the token. If your `.authorizer` hits are on the Lambda event rather
 than on `request.authorizer` from `nodeJSRequest`, there is nothing to do.
 
 ### 3. `HtmlRenderer` escapes by default (8.0.0, softened in 10.2.0)

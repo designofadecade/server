@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import Local from './Local.ts';
 
 describe('Local', () => {
-  describe('LambdaProxyRouter', () => {
+  describe('EventFunctionProxy', () => {
     let mockLambdaHandler;
     let localProxy;
     let mockReq;
@@ -16,7 +16,8 @@ describe('Local', () => {
       }));
 
       mockReq = {
-        url: 'http://localhost:3000/test',
+        url: '/test',
+        socket: { remoteAddress: '127.0.0.1' },
         method: 'GET',
         headers: {
           'content-type': 'application/json',
@@ -35,13 +36,13 @@ describe('Local', () => {
     });
 
     it('should create a local proxy router', () => {
-      localProxy = Local.LambdaProxyRouter(mockLambdaHandler);
+      localProxy = Local.EventFunctionProxy(mockLambdaHandler);
       expect(localProxy).toHaveProperty('request');
       expect(typeof localProxy.request).toBe('function');
     });
 
     it('should forward GET request to Lambda handler', async () => {
-      localProxy = Local.LambdaProxyRouter(mockLambdaHandler);
+      localProxy = Local.EventFunctionProxy(mockLambdaHandler);
 
       // Simulate request body handling for GET
       mockReq.on.mockImplementation((event, callback) => {
@@ -67,7 +68,7 @@ describe('Local', () => {
 
     it('should forward POST request with body to Lambda handler', async () => {
       mockReq.method = 'POST';
-      mockReq.url = 'http://localhost:3000/api/users';
+      mockReq.url = '/api/users';
 
       const requestBody = { name: 'John Doe' };
 
@@ -81,7 +82,7 @@ describe('Local', () => {
         return mockReq;
       });
 
-      localProxy = Local.LambdaProxyRouter(mockLambdaHandler);
+      localProxy = Local.EventFunctionProxy(mockLambdaHandler);
       await localProxy.request(mockReq, mockRes);
 
       expect(mockLambdaHandler).toHaveBeenCalledWith(
@@ -99,14 +100,14 @@ describe('Local', () => {
     });
 
     it('should parse query string parameters', async () => {
-      mockReq.url = 'http://localhost:3000/test?foo=bar&baz=qux';
+      mockReq.url = '/test?foo=bar&baz=qux';
 
       mockReq.on.mockImplementation((event, callback) => {
         if (event === 'end') callback();
         return mockReq;
       });
 
-      localProxy = Local.LambdaProxyRouter(mockLambdaHandler);
+      localProxy = Local.EventFunctionProxy(mockLambdaHandler);
       await localProxy.request(mockReq, mockRes);
 
       expect(mockLambdaHandler).toHaveBeenCalledWith(
@@ -132,7 +133,7 @@ describe('Local', () => {
         return mockReq;
       });
 
-      localProxy = Local.LambdaProxyRouter(mockLambdaHandler);
+      localProxy = Local.EventFunctionProxy(mockLambdaHandler);
       await localProxy.request(mockReq, mockRes);
 
       expect(mockRes.statusCode).toBe(200);
@@ -154,7 +155,7 @@ describe('Local', () => {
         return mockReq;
       });
 
-      localProxy = Local.LambdaProxyRouter(mockLambdaHandler);
+      localProxy = Local.EventFunctionProxy(mockLambdaHandler);
       await localProxy.request(mockReq, mockRes);
 
       expect(mockRes.statusCode).toBe(200);
@@ -170,7 +171,7 @@ describe('Local', () => {
         return mockReq;
       });
 
-      localProxy = Local.LambdaProxyRouter(mockLambdaHandler);
+      localProxy = Local.EventFunctionProxy(mockLambdaHandler);
       await localProxy.request(mockReq, mockRes);
 
       expect(mockRes.statusCode).toBe(200);
@@ -195,7 +196,7 @@ describe('Local', () => {
         return mockReq;
       });
 
-      localProxy = Local.LambdaProxyRouter(mockLambdaHandler);
+      localProxy = Local.EventFunctionProxy(mockLambdaHandler);
       await localProxy.request(mockReq, mockRes);
 
       expect(mockRes.setHeader).toHaveBeenCalledWith('content-length', '2');
@@ -214,7 +215,7 @@ describe('Local', () => {
         return mockReq;
       });
 
-      localProxy = Local.LambdaProxyRouter(mockLambdaHandler);
+      localProxy = Local.EventFunctionProxy(mockLambdaHandler);
       await localProxy.request(mockReq, mockRes);
 
       expect(mockRes.statusCode).toBe(204);
@@ -239,7 +240,7 @@ describe('Local', () => {
         return mockReq;
       });
 
-      localProxy = Local.LambdaProxyRouter(mockLambdaHandler);
+      localProxy = Local.EventFunctionProxy(mockLambdaHandler);
       await localProxy.request(mockReq, mockRes);
 
       expect(mockRes.setHeader).toHaveBeenCalledWith('set-cookie', [
@@ -261,7 +262,7 @@ describe('Local', () => {
         return mockReq;
       });
 
-      localProxy = Local.LambdaProxyRouter(mockLambdaHandler);
+      localProxy = Local.EventFunctionProxy(mockLambdaHandler);
       await localProxy.request(mockReq, mockRes);
 
       expect(mockRes.setHeader).toHaveBeenCalledWith('set-cookie', ['first=1', 'second=2']);
@@ -287,7 +288,7 @@ describe('Local', () => {
         return mockReq;
       });
 
-      localProxy = Local.LambdaProxyRouter(mockLambdaHandler);
+      localProxy = Local.EventFunctionProxy(mockLambdaHandler);
       await localProxy.request(mockReq, mockRes);
 
       expect(mockRes.end).toHaveBeenCalledWith(body);
@@ -307,7 +308,7 @@ describe('Local', () => {
         return mockReq;
       });
 
-      localProxy = Local.LambdaProxyRouter(mockLambdaHandler);
+      localProxy = Local.EventFunctionProxy(mockLambdaHandler);
       await localProxy.request(mockReq, mockRes);
 
       expect(mockRes.end).toHaveBeenCalledWith(body);
@@ -326,7 +327,7 @@ describe('Local', () => {
         return mockReq;
       });
 
-      localProxy = Local.LambdaProxyRouter(mockLambdaHandler);
+      localProxy = Local.EventFunctionProxy(mockLambdaHandler);
       await localProxy.request(mockReq, mockRes);
 
       expect(mockRes.statusCode).toBe(200);
@@ -342,7 +343,7 @@ describe('Local', () => {
         return mockReq;
       });
 
-      localProxy = Local.LambdaProxyRouter(mockLambdaHandler, customContext);
+      localProxy = Local.EventFunctionProxy(mockLambdaHandler, customContext);
       await localProxy.request(mockReq, mockRes);
 
       expect(mockLambdaHandler).toHaveBeenCalledWith(
@@ -356,7 +357,7 @@ describe('Local', () => {
 
     it('should handle PUT requests', async () => {
       mockReq.method = 'PUT';
-      mockReq.url = 'http://localhost:3000/api/users/1';
+      mockReq.url = '/api/users/1';
 
       mockReq.on.mockImplementation((event, callback) => {
         if (event === 'data') callback('{"name":"Updated"}');
@@ -364,7 +365,7 @@ describe('Local', () => {
         return mockReq;
       });
 
-      localProxy = Local.LambdaProxyRouter(mockLambdaHandler);
+      localProxy = Local.EventFunctionProxy(mockLambdaHandler);
       await localProxy.request(mockReq, mockRes);
 
       expect(mockLambdaHandler).toHaveBeenCalledWith(
@@ -380,7 +381,7 @@ describe('Local', () => {
 
     it('should handle PATCH requests', async () => {
       mockReq.method = 'PATCH';
-      mockReq.url = 'http://localhost:3000/api/users/1';
+      mockReq.url = '/api/users/1';
 
       mockReq.on.mockImplementation((event, callback) => {
         if (event === 'data') callback('{"status":"active"}');
@@ -388,7 +389,7 @@ describe('Local', () => {
         return mockReq;
       });
 
-      localProxy = Local.LambdaProxyRouter(mockLambdaHandler);
+      localProxy = Local.EventFunctionProxy(mockLambdaHandler);
       await localProxy.request(mockReq, mockRes);
 
       expect(mockLambdaHandler).toHaveBeenCalledWith(
@@ -404,14 +405,14 @@ describe('Local', () => {
 
     it('should handle DELETE requests', async () => {
       mockReq.method = 'DELETE';
-      mockReq.url = 'http://localhost:3000/api/users/1';
+      mockReq.url = '/api/users/1';
 
       mockReq.on.mockImplementation((event, callback) => {
         if (event === 'end') callback();
         return mockReq;
       });
 
-      localProxy = Local.LambdaProxyRouter(mockLambdaHandler);
+      localProxy = Local.EventFunctionProxy(mockLambdaHandler);
       await localProxy.request(mockReq, mockRes);
 
       expect(mockLambdaHandler).toHaveBeenCalledWith(
@@ -433,7 +434,7 @@ describe('Local', () => {
         return mockReq;
       });
 
-      localProxy = Local.LambdaProxyRouter(mockLambdaHandler);
+      localProxy = Local.EventFunctionProxy(mockLambdaHandler);
       await localProxy.request(mockReq, mockRes);
 
       expect(mockLambdaHandler).toHaveBeenCalledWith(
@@ -457,7 +458,7 @@ describe('Local', () => {
         return mockReq;
       });
 
-      localProxy = Local.LambdaProxyRouter(mockLambdaHandler, globalContext);
+      localProxy = Local.EventFunctionProxy(mockLambdaHandler, globalContext);
       await localProxy.request(mockReq, mockRes, requestContext);
 
       expect(mockLambdaHandler).toHaveBeenCalledWith(

@@ -1,7 +1,7 @@
 {
   "name": "@designofadecade/server",
-  "version": "10.4.1",
-  "description": "Type-safe ESM server framework for Node 24+. The same routes run on AWS Lambda (API Gateway HTTP API v2) and a plain Node HTTP server, with WebSockets, middleware, routing and HTML sanitization built in.",
+  "version": "11.0.0",
+  "description": "Type-safe ESM server framework for Node 24+. The same routes run as an AWS Lambda Web Function, a Lambda Event Function (API Gateway HTTP API v2) and a plain Node HTTP server, with WebSockets, middleware, routing and HTML sanitization built in.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -94,6 +94,7 @@
     "lambda",
     "serverless",
     "api-gateway",
+    "lambda-web-functions",
     "router",
     "routing",
     "middleware",
@@ -123,8 +124,8 @@
     "@types/aws-lambda": "^8.10.163",
     "@types/node": "^24.13.4",
     "@types/ws": "^8.5.10",
-    "@vitest/coverage-v8": "^5.0.0",
-    "@vitest/ui": "^5.0.0",
+    "@vitest/coverage-v8": "^5.1.1",
+    "@vitest/ui": "^5.1.1",
     "eslint": "^10.10.0",
     "globals": "^17.12.0",
     "husky": "^9.1.7",
@@ -132,7 +133,7 @@
     "prettier": "^3.2.5",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.70.0",
-    "vitest": "^5.0.0"
+    "vitest": "^5.1.1"
   },
   "repository": {
     "type": "git",

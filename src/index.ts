@@ -1,5 +1,8 @@
 // Server Core
 export { default as Server } from './server/Server.js';
+export type { ServerOptions, ServerAddress } from './server/Server.js';
+export { default as WebFunction } from './server/WebFunction.js';
+export type { WebFunctionOptions } from './server/WebFunction.js';
 export { default as Router } from './router/Router.js';
 export { default as Routes } from './router/Routes.js';
 export { default as StaticFileHandler } from './router/StaticFileHandler.js';
@@ -13,8 +16,10 @@ export type {
   RouterMiddleware,
   RouteRegistration,
   RoutesConstructor,
-  LambdaHttpEvent,
-  LambdaHttpResponse,
+  EventFunctionEvent,
+  EventFunctionResult,
+  JwtOptions,
+  JwtHmacAlgorithm,
 } from './router/Router.js';
 
 // Context Types
@@ -40,7 +45,11 @@ export { logger } from './logger/Logger.js';
 export { default as ApiClient } from './client/ApiClient.js';
 export { default as RouteError } from './router/RouteError.js';
 export type { FromErrorOptions, RouteErrorResponse, RouteErrorBody } from './router/RouteError.js';
-export type { LambdaEvent, LambdaResponse } from './local/Local.js';
+export type {
+  EventFunctionProxyEvent,
+  EventFunctionProxyOptions,
+  EventFunctionProxyResult,
+} from './local/Local.js';
 
 // Documentation
 export { OpenApiGenerator, generateSwaggerUI } from './docs/OpenApiGenerator.js';

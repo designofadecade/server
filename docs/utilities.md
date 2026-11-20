@@ -330,24 +330,19 @@ class PageRoutes extends Routes {
 
 ## RequestLogger
 
-Request logging middleware with context tracking.
+Request-scoped logging helpers that attach method, matched route pattern,
+client IP, request id and user agent to every line.
 
 ### Installation
 
 ```typescript
-import RequestLogger from '@designofadecade/server/middleware';
+import { createRequestLogger, logRequest, logResponse } from '@designofadecade/server';
 ```
 
 ### Quick Start
 
 ```typescript
-import RequestLogger from '@designofadecade/server/middleware';
-
-const requestLogger = new RequestLogger({
-  method: 'POST',
-  path: '/api/users',
-  requestId: '123-456',
-});
+const requestLogger = createRequestLogger(req); // req: RouterRequest
 
 requestLogger.info('Processing user creation');
 requestLogger.error('Validation failed', { errors });
@@ -355,38 +350,107 @@ requestLogger.error('Validation failed', { errors });
 
 ### API Reference
 
-#### Constructor
+`request` is a `LoggableRequest` (any `RouterRequest`, or an object with its
+`method`, `path` and `headers`) or an API Gateway HTTP API v2 event, such as an
+`EventFunctionEvent` or `@types/aws-lambda`'s `APIGatewayProxyEventV2` (a
+format 1.0 event is also accepted).
 
 ```typescript
-new RequestLogger(requestContext: Record<string, any>)
+createRequestLogger(request: LoggableRequest | EventFunctionEvent, options?: RequestLogOptions): {
+  info(message: string, context?: Record<string, any>): void;
+  error(message: string, context?: Record<string, any>): void;
+  warn(message: string, context?: Record<string, any>): void;
+  debug(message: string, context?: Record<string, any>): void;
+}
+
+logRequest(request: LoggableRequest | EventFunctionEvent, options?: LogRequestOptions): void;
+logResponse(request: LoggableRequest | EventFunctionEvent, response: { status?: number; statusCode?: number }, durationMs: number, options?: RequestLogOptions): void;
+
+interface RequestLogOptions {
+  /** Also log the raw request path (cut at 256 characters). Default false. */
+  logPath?: boolean;
+}
 ```
 
-**Parameters:**
+Pass the `RouterRequest` the router hands to middleware and handlers
+(preferred). It already carries `clientIp` and `requestId` from a source the
+caller cannot forge, in all three deployment modes. Any object with a string
+`method` property is treated as a `RouterRequest`; API Gateway events have no
+top-level `method`, so the two are told apart by that. A raw API Gateway event
+(format 2.0 or 1.0) is also accepted; its `sourceIp` is read from
+`requestContext.http.sourceIp` / `requestContext.identity.sourceIp`, never from
+`X-Forwarded-For`.
 
-- `requestContext` (object) - Context information (method, path, requestId, etc.)
+All three helpers log `route`, the pattern the router matched
+(`/reset-password/:token`, see [`RouterRequest.route`](./router.md)), not the
+raw path, because a path can carry secrets and personal data
+(`/reset-password/<token>`, `/users/<email>`). Pass `{ logPath: true }` to add
+the raw `path` as well. When no route matched (a 404) or the request is a raw
+API Gateway event, which has no router match, no path of any kind is logged
+unless `logPath` is set. `route`, `path` and `userAgent` are cut at 256
+characters.
 
-#### Methods
+By default `logRequest` logs no request data values at all:
+
+- the body as a summary only: `{ contentType, bytes }` for a raw body,
+  `{ contentType, fields }` for a parsed object, `{ contentType, items }` for
+  an array;
+- query and path parameters as their names only, e.g.
+  `queryParams: ['page', 'email']` (at most 50 names, each cut at 256
+  characters).
+
+A body or query string can hold personal data under any name (`dob`,
+`diagnosis`, `address`), and a list of names to redact can never be complete,
+so logging values means naming the fields you want:
 
 ```typescript
-info(message: string, context?: Record<string, any>): void
-error(message: string, context?: Record<string, any>): void
-warn(message: string, context?: Record<string, any>): void
-debug(message: string, context?: Record<string, any>): void
+interface LogRequestOptions extends RequestLogOptions {
+  /** Log body content. Default false. Needs a non-empty bodyFields. */
+  logBody?: boolean;
+  /** Body field names to log; every other field becomes '[REDACTED]'. */
+  bodyFields?: readonly string[];
+  /** Query and path parameter names whose values are logged. */
+  paramFields?: readonly string[];
+}
+
+logRequest(req, {
+  logBody: true,
+  bodyFields: ['orderId', 'items', 'sku', 'qty'],
+  paramFields: ['page', 'id'],
+});
 ```
+
+`logBody: true` without a non-empty `bodyFields` logs the summary only and
+writes one `REQUEST_LOGGER_BODY_FIELDS_REQUIRED` warning per process (it never
+throws at request time).
+
+The allowlists follow the same rules:
+
+- Every key not listed is `[REDACTED]`, at any depth. Names match exactly. A
+  nested object or array is walked only when its own key is listed, so
+  `{ order: { id } }` needs both `order` and `id`. Primitives in a top-level
+  array have no field name and are redacted.
+- Keys matching the logger's sensitive list (`password`, `token`, `secret`,
+  `apiKey`, `authorization`, `cookie`, `session`, `cardNumber`, `cvv`, `ssn`,
+  ...) are always `[REDACTED]`, even when listed.
+- String values are cut at 256 characters and nesting at 10 levels.
+- A raw event body is parsed as JSON (never thrown on). A body that is text
+  rather than JSON (form posts, multipart, plain text, base64) is never logged,
+  because redaction cannot see inside a string; it appears as
+  `[text body omitted, N chars]`.
+
+`logResponse` accepts a
+`RouterResponse` (`status`) or an Event Function result (`statusCode`) and logs
+at `error` level for 4xx/5xx.
 
 ### Example
 
 ```typescript
 class UserRoutes extends Routes {
   async createUser(req: RouterRequest): Promise<RouterResponse> {
-    const logger = new RequestLogger({
-      method: req.method,
-      path: req.path,
-      requestId: req.headers['x-request-id'],
-      userId: req.authorizer?.sub,
-    });
+    const logger = createRequestLogger(req);
 
-    logger.info('Creating user');
+    logger.info('Creating user', { userId: req.authorizer?.sub });
 
     try {
       const user = await db.users.create(req.body);

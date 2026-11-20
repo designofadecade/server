@@ -44,7 +44,10 @@ describe('Server', () => {
       server = new Server({}, mockRequestHandler);
 
       expect(server).toBeInstanceOf(Server);
-      expect(Http.createServer).toHaveBeenCalledWith(mockRequestHandler);
+      expect(Http.createServer).toHaveBeenCalledWith(
+        { requestTimeout: 30_000, headersTimeout: 10_000 },
+        expect.any(Function)
+      );
       expect(mockHttpServer.listen).toHaveBeenCalledWith(3000, '0.0.0.0', expect.any(Function));
 
       consoleSpy.mockRestore();
@@ -315,7 +318,7 @@ describe('Server', () => {
       consoleSpy.mockRestore();
     });
 
-    it('should be callable multiple times', async () => {
+    it('should be callable multiple times, closing only once', async () => {
       const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
       mockHttpServer.close = vi.fn((callback) => {
@@ -327,7 +330,10 @@ describe('Server', () => {
       await server.close();
       await server.close();
 
-      expect(mockHttpServer.close).toHaveBeenCalledTimes(2);
+      // The second call finds the server already stopped and resolves without
+      // re-closing it, which Node would reject with ERR_SERVER_NOT_RUNNING.
+      expect(mockHttpServer.close).toHaveBeenCalledTimes(1);
+      expect(server.server).toBeNull();
 
       consoleSpy.mockRestore();
     });
@@ -343,7 +349,12 @@ describe('Server', () => {
 
       server = new Server({}, customHandler);
 
-      expect(Http.createServer).toHaveBeenCalledWith(customHandler);
+      expect(Http.createServer).toHaveBeenCalledWith(expect.any(Object), expect.any(Function));
+      const dispatch = Http.createServer.mock.calls[0][1];
+      const req = { socket: {} };
+      const res = { end: vi.fn() };
+      dispatch(req, res);
+      expect(customHandler).toHaveBeenCalledWith(req, res);
 
       consoleSpy.mockRestore();
     });
@@ -353,10 +364,14 @@ describe('Server', () => {
 
       server = new Server({}, mockRequestHandler);
 
-      // Get the handler that was passed to createServer
-      const handler = Http.createServer.mock.calls[0][0];
+      // The function given to createServer dispatches to the handler (after
+      // the refused-connection guard).
+      const dispatch = Http.createServer.mock.calls[0][1];
+      const req = { socket: {} };
+      const res = { end: vi.fn() };
+      dispatch(req, res);
 
-      expect(handler).toBe(mockRequestHandler);
+      expect(mockRequestHandler).toHaveBeenCalledWith(req, res);
 
       consoleSpy.mockRestore();
     });

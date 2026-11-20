@@ -462,10 +462,23 @@ export default class HtmlSanitizer {
 
       if (allowedAttrsForTag) {
         // Extract all attributes from the tag
-        const attrRegex = /([a-z][a-z0-9-]*)\s*=\s*["']([^"']*)["']/gi;
+        //
+        // SECURITY: the `="value"` part is optional so that a name with no
+        // value still matches, consuming its whole run of name characters.
+        // With the value required, a run with no '=' after it failed from
+        // every start position inside it and was rescanned each time — a
+        // quadratic ReDoS ('<span ' + 'a'.repeat(n) + '>'). A failure at a
+        // run's first letter means every later start in that run fails too,
+        // so skipping the run finds exactly the same attributes, in linear time.
+        const attrRegex = /([a-z][a-z0-9-]*)(?:\s*=\s*["']([^"']*)["'])?/gi;
         let attrMatch: RegExpExecArray | null;
 
         while ((attrMatch = attrRegex.exec(match)) !== null) {
+          // A bare name without a quoted value is not an attribute to keep.
+          if (attrMatch[2] === undefined) {
+            continue;
+          }
+
           const attrName = attrMatch[1].toLowerCase();
           const attrValue = attrMatch[2];
 

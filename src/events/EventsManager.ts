@@ -23,6 +23,7 @@
  * ]);
  */
 
+import type { IncomingMessage } from 'http';
 import WebSocketMessageFormatter from '../websocket/WebSocketMessageFormatter.js';
 import { logger } from '../logger/Logger.js';
 import type Events from './Events.js';
@@ -33,6 +34,24 @@ interface ParsedMessage {
   payload: any;
 }
 
+/**
+ * The sender arguments that follow the message on a WebSocketServer 'message'
+ * event: the `ws` WebSocket that sent the frame, its upgrade request and, when
+ * the server has an `authenticate` option, that connection's authenticate
+ * result. `ws` is typed loosely so these typings do not require `@types/ws`.
+ */
+type MessageSender = [ws?: any, req?: IncomingMessage, auth?: unknown];
+
+/**
+ * Handles one message type. `ws` and `req` identify the connection that sent
+ * it, and `auth` is its `authenticate` result, so a handler can authorize the
+ * sender. They are undefined if the registered server does not supply them.
+ */
+type EventHandler = (
+  parsedMessage: ParsedMessage,
+  ...sender: MessageSender
+) => void | Promise<void>;
+
 interface EventsManagerOptions {
   registerWebSocketServer?: any;
   initEvents?: (new (manager: EventsManager) => Events)[];
@@ -40,8 +59,9 @@ interface EventsManagerOptions {
 
 export default class EventsManager {
   #wss: any;
-  #events = new Map<string, ((parsedMessage: ParsedMessage) => void | Promise<void>)[]>();
-  #messageListener: ((parsedMessage: ParsedMessage) => Promise<void>) | null = null;
+  #events = new Map<string, EventHandler[]>();
+  #messageListener:
+    ((parsedMessage: ParsedMessage, ...args: MessageSender) => Promise<void>) | null = null;
 
   constructor({ registerWebSocketServer = null, initEvents = [] }: EventsManagerOptions = {}) {
     if (Array.isArray(initEvents) && initEvents.length > 0)
@@ -52,9 +72,7 @@ export default class EventsManager {
     if (registerWebSocketServer) this.#registerWebSocketServer(registerWebSocketServer);
   }
 
-  registerEvents(
-    events: { type: string; handler: (parsedMessage: ParsedMessage) => void | Promise<void> }[]
-  ): void {
+  registerEvents(events: { type: string; handler: EventHandler }[]): void {
     if (!Array.isArray(events)) {
       throw new Error('Events must be an array');
     }
@@ -107,7 +125,9 @@ export default class EventsManager {
   #registerWebSocketServer(wss: any): void {
     this.#wss = wss;
 
-    this.#messageListener = async (parsedMessage: ParsedMessage) => {
+    // `args` is the sender (ws, req[, auth]), forwarded to handlers exactly as the
+    // server emitted it.
+    this.#messageListener = async (parsedMessage: ParsedMessage, ...args: MessageSender) => {
       try {
         // Message is already parsed from WebSocketServer
         logger.debug('Received message', {
@@ -120,7 +140,7 @@ export default class EventsManager {
           const handlers = this.#events.get(parsedMessage.type)!;
 
           // Execute handlers with proper error handling
-          await Promise.allSettled(handlers.map((handler) => handler(parsedMessage))).then(
+          await Promise.allSettled(handlers.map((handler) => handler(parsedMessage, ...args))).then(
             (results) => {
               results.forEach((result, index) => {
                 if (result.status === 'rejected') {

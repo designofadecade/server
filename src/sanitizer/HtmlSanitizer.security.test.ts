@@ -47,6 +47,52 @@ describe('HtmlSanitizer ReDoS resistance', () => {
     const payload = '<b>ok</b>' + '<'.repeat(N);
     expect(timed(() => HtmlSanitizer.clean(payload, ['b']))).toBeLessThan(BUDGET_MS);
   });
+
+  /**
+   * Attribute extraction used to require `="value"` after every name, so a long
+   * run of name characters with no '=' was rescanned from every position inside
+   * it. Against the unfixed code this payload takes tens of seconds.
+   */
+  it('extracts attributes from a long valueless attribute name in linear time', () => {
+    const payload = '<span ' + 'a'.repeat(N) + '>';
+    const allowedAttributes = { span: ['class'], a: ['href', 'target', 'rel'] };
+    expect(
+      timed(() => HtmlSanitizer.clean(payload, ['span', 'a'], allowedAttributes))
+    ).toBeLessThan(BUDGET_MS);
+    expect(HtmlSanitizer.clean(payload, ['span', 'a'], allowedAttributes)).toBe('<span>');
+  });
+
+  it('extracts attributes after a long valueless attribute name in linear time', () => {
+    const payload = '<a ' + 'a1-'.repeat(N / 3) + ' href="/x" class="c">t</a>';
+    const allowedAttributes = { a: ['href', 'class'] };
+    expect(timed(() => HtmlSanitizer.clean(payload, ['a'], allowedAttributes))).toBeLessThan(
+      BUDGET_MS
+    );
+    expect(HtmlSanitizer.clean(payload, ['a'], allowedAttributes)).toBe(
+      '<a href="/x" class="c">t</a>'
+    );
+  });
+
+  /**
+   * The linear extraction skips a whole run of name characters when it has no
+   * value. That must not drop attributes that follow a bare name, or change
+   * which name a value is attributed to.
+   */
+  it('keeps attribute extraction unchanged around valueless names', () => {
+    const allowed = { a: ['href', 'class', 'title'], span: ['class', 'data-x'] };
+    expect(HtmlSanitizer.clean('<a download href="/x" class=\'c\'>t</a>', ['a'], allowed)).toBe(
+      '<a href="/x" class="c">t</a>'
+    );
+    expect(
+      HtmlSanitizer.clean('<span hidden data-x = "1" class="k">t</span>', ['span'], allowed)
+    ).toBe('<span data-x="1" class="k">t</span>');
+    expect(HtmlSanitizer.clean('<span xclass="k">t</span>', ['span'], allowed)).toBe(
+      '<span>t</span>'
+    );
+    expect(HtmlSanitizer.clean('<span onclick="x" class="k">t</span>', ['span'], allowed)).toBe(
+      '<span class="k">t</span>'
+    );
+  });
 });
 
 /**
