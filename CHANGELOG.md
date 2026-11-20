@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **`WebSocketServer` messages could not be tied to the connection that sent
+  them (moderate).** Every client's frames were emitted as a bare `message` event,
+  so authentication done in the `connection` handler could not keep a refused
+  client's frames away from `message` listeners or `EventsManager` handlers, and no
+  handler could authorize the sender. Worse, `ws` keeps delivering frames from a
+  socket after `ws.close()` until the peer answers the close frame (up to 30 s), so
+  a client refused with `close()` could keep reaching handlers. Now:
+  - `message` is emitted as `(parsed, ws, req)` — the sending socket and its
+    upgrade request — and `EventsManager` passes them to every handler as
+    `handler(msg, ws, req)`. Existing one-argument listeners are unaffected.
+  - Frames from a socket that is no longer `OPEN` are dropped, so closing or
+    terminating a client in the `connection` handler stops its messages at once.
+    **Behaviour change:** frames that arrive after the server has started closing
+    a socket are no longer emitted.
+
+### Documentation
+
+- `docs/websocket.md` and `docs/events-manager.md` describe the new `message` /
+  handler arguments, and name `verifyClient` as the place for asynchronous
+  authentication: frames that arrive while an asynchronous check in the
+  `connection` handler is pending are still delivered.
+
 ## [11.0.0] - 2026-11-19
 
 Adds the AWS Lambda **Web Function** deployment model and renames the existing

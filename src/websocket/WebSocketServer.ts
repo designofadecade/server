@@ -195,7 +195,10 @@ export default class WebSocketServer extends EventEmitter {
       });
 
       // Re-emitted with the upgrade request so consumers can read headers and
-      // cookies for their own authentication.
+      // cookies for their own authentication. A listener that refuses the
+      // client must close or terminate it synchronously: frames that arrive
+      // while an asynchronous check here is pending are still delivered, so
+      // asynchronous authentication belongs in `verifyClient`.
       this.emit('connection', ws, req);
 
       ws.send(
@@ -205,6 +208,14 @@ export default class WebSocketServer extends EventEmitter {
       );
 
       ws.on('message', async (message: Buffer) => {
+        // SECURITY: a socket that is closing - refused by the application's
+        // 'connection' handler, for example - must not reach message handlers.
+        // `ws` keeps emitting frames after close() until the peer answers the
+        // close frame (up to 30 s), and a hostile peer never answers.
+        if (ws.readyState !== WebSocket.OPEN) {
+          return;
+        }
+
         const messageString = message.toString();
 
         if (messageString.includes('ws:ping')) {
@@ -224,7 +235,10 @@ export default class WebSocketServer extends EventEmitter {
             return;
           }
 
-          this.emit('message', parsed);
+          // The sending socket and its upgrade request travel with every
+          // message, so handlers can tell connections apart and authorize the
+          // sender instead of acting on any client's frame.
+          this.emit('message', parsed, ws, req);
         } catch (error: any) {
           logger.error('Message handling error', {
             code: 'WEBSOCKET_MESSAGE_ERROR',

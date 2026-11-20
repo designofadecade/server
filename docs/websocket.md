@@ -173,15 +173,27 @@ wss.on('connection', (ws, req) => {
 });
 ```
 
+A `connection` listener that refuses a client must call `ws.terminate()` (or
+`ws.close()`) **synchronously**. Frames from a socket that is no longer open are
+dropped, but frames that arrive while an asynchronous check here is still pending
+are delivered. Do asynchronous authentication in `verifyClient`, which runs before
+the socket exists.
+
 #### 'message'
 
-Emitted when a valid message is received from any client.
+Emitted when a valid message is received from an open client socket, with the
+socket that sent it and that socket's HTTP upgrade request.
 
 ```typescript
-wss.on('message', (parsed: ParsedMessage) => {
-  // Handle message
+wss.on('message', (parsed: ParsedMessage, ws: WebSocket, req: IncomingMessage) => {
+  // Handle message; `ws` and `req` identify the sender
 });
 ```
+
+Listeners that take only `parsed` keep working unchanged. Use `ws` or `req` to
+authorize the sender rather than trusting anything in the payload. `req` is the
+same object `verifyClient` received, so state recorded there is available here
+(see [Security Considerations](#security-considerations)).
 
 **ParsedMessage Format:**
 
@@ -354,8 +366,33 @@ Individual client errors are logged but don't affect other connections:
 1. **Message Size:** Frames are capped at 1 MiB by default; tune with `maxPayload`
 2. **Origin:** Set `allowedOrigins` so other sites cannot open sockets on a
    visitor's behalf
-3. **Authentication:** Validate clients at upgrade time with `verifyClient`, or from
-   the request passed to the `connection` event
+3. **Authentication:** Validate clients at upgrade time with `verifyClient`; it may
+   be async and runs before any frame can arrive. If you authenticate in the
+   `connection` event instead, decide synchronously and `ws.terminate()` refused
+   clients. Authorize each message against its sender (`ws` / `req`), never against
+   identifiers in the payload:
+
+   ```typescript
+   const sessions = new WeakMap<IncomingMessage, Session>();
+
+   const wss = new WebSocketServer({
+     port: 8080,
+     allowedOrigins: ['https://app.example.com'],
+     verifyClient: async ({ req }) => {
+       const session = await sessionFrom(req);
+       if (!session) return false;
+       sessions.set(req, session); // same `req` object arrives with every message
+       return true;
+     },
+   });
+
+   wss.on('message', (parsed, ws, req) => {
+     const session = sessions.get(req);
+     if (!session || !session.canEdit(parsed.payload.docId)) return;
+     // ...
+   });
+   ```
+
 4. **Rate Limiting:** Add rate limiting for message handling
 5. **Message Validation:** Always validate message payloads
 

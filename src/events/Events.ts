@@ -25,9 +25,18 @@
  * });
  */
 
+import type { IncomingMessage } from 'http';
+
+/**
+ * `ws` (the `ws` WebSocket, typed loosely so these typings do not require
+ * `@types/ws`) and `req` identify the connection that sent the message, so a
+ * handler can authorize the sender. See EventsManager.
+ */
+type EventHandler = (parsedMessage: any, ws?: any, req?: IncomingMessage) => void | Promise<void>;
+
 interface EventRegistration {
   type: string;
-  handler: (parsedMessage: any) => void | Promise<void>;
+  handler: EventHandler;
 }
 
 export default class Events {
@@ -67,7 +76,7 @@ export default class Events {
    * @param {string} type - Event type to listen for
    * @param {Function} handler - Handler function to execute
    */
-  addListener(type: string, handler: (parsedMessage: any) => void | Promise<void>): void {
+  addListener(type: string, handler: EventHandler): void {
     // Validate inputs
     if (typeof type !== 'string' || !type.trim()) {
       throw new Error('Event type must be a non-empty string');

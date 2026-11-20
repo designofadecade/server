@@ -354,6 +354,7 @@ describe('WebSocketServer', () => {
 
   describe('Message Handling', () => {
     let mockWs;
+    let mockReq;
     let messageHandler;
 
     beforeEach(() => {
@@ -362,12 +363,14 @@ describe('WebSocketServer', () => {
       mockWs = {
         send: vi.fn(),
         on: vi.fn(),
+        readyState: WebSocketMock.OPEN,
       };
+      mockReq = { headers: { cookie: 'session=abc123' } };
 
       wsServer = new WebSocketServer();
 
       const connectionHandler = mockWss.on.mock.calls.find((call) => call[0] === 'connection')[1];
-      connectionHandler(mockWs);
+      connectionHandler(mockWs, mockReq);
 
       messageHandler = mockWs.on.mock.calls.find((call) => call[0] === 'message')[1];
 
@@ -402,8 +405,49 @@ describe('WebSocketServer', () => {
         expect.objectContaining({
           type: 'test:event',
           payload: { data: 'test' },
-        })
+        }),
+        mockWs,
+        mockReq
       );
+
+      consoleSpy.mockRestore();
+    });
+
+    it('should pass the sending socket and upgrade request with each message', async () => {
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const listener = vi.fn();
+      wsServer.on('message', listener);
+
+      await messageHandler(Buffer.from(JSON.stringify({ type: 'doc:update', payload: {} })));
+
+      // Without the sender a handler cannot tell an authenticated connection
+      // from any other, so per-connection authorization is impossible.
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(listener.mock.calls[0][1]).toBe(mockWs);
+      expect(listener.mock.calls[0][2]).toBe(mockReq);
+
+      consoleSpy.mockRestore();
+    });
+
+    it.each([
+      ['CLOSING', WebSocketMock.CLOSING],
+      ['CLOSED', WebSocketMock.CLOSED],
+    ])('should drop frames from a %s socket', async (_state, readyState) => {
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const listener = vi.fn();
+      wsServer.on('message', listener);
+      mockWs.send.mockClear();
+
+      // A 'connection' handler that refused the client called ws.close(); a
+      // hostile peer keeps sending without answering the close frame.
+      mockWs.readyState = readyState;
+
+      await messageHandler(Buffer.from(JSON.stringify({ type: 'doc:update', payload: {} })));
+      await messageHandler(Buffer.from('ws:ping'));
+      await messageHandler(Buffer.from('invalid json'));
+
+      expect(listener).not.toHaveBeenCalled();
+      expect(mockWs.send).not.toHaveBeenCalled();
 
       consoleSpy.mockRestore();
     });
