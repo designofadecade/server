@@ -45,14 +45,18 @@ export interface EventFunctionProxyOptions {
    *   responses, under whatever authorizer the proxy injects. Opt in only
    *   when nothing sensitive is reachable.
    *
-   * Except with `true`, a cross-origin request that is not GET/HEAD (OPTIONS
-   * preflights included) from an origin the mode does not allow is refused
-   * with 403 `CROSS_ORIGIN_FORBIDDEN` before the handler runs: the default
-   * and `false` allow loopback origins, `string[]` allows listed origins and
-   * same-origin requests. Requests with no `Origin` and no cross-site
-   * `Sec-Fetch-Site` (curl, server-to-server) are not affected. A cross-site
-   * GET still runs (only reading the reply is blocked), so GET routes must
-   * not have side effects.
+   * Except with `true`, a cross-origin request that is not GET (HEAD and
+   * OPTIONS preflights included) from an origin the mode does not allow is
+   * refused with 403 `CROSS_ORIGIN_FORBIDDEN` before the handler runs: the
+   * default and `false` allow loopback origins (any port, so any other local
+   * app can write too), `string[]` allows listed origins and same-origin
+   * requests (with `allowedHosts: true`, same-origin counts only for a
+   * loopback Origin). A request with no `Origin` and no `Sec-Fetch-Site`
+   * passes (curl, server-to-server) unless it looks like an older browser's
+   * form post: a form `Content-Type` (`application/x-www-form-urlencoded`,
+   * `multipart/form-data`, `text/plain`), or a body with no `Content-Type`.
+   * Only GET is exempt: a cross-site GET still runs (only reading the reply
+   * is blocked), so GET routes must not have side effects.
    */
   cors?: boolean | string[];
   /**
@@ -123,8 +127,14 @@ function isLoopbackOrigin(origin: string): boolean {
  * Whether a request is same-origin with the backend it reached. A browser's
  * `Sec-Fetch-Site` is authoritative when present; otherwise the Origin's host
  * must equal the Host header. Mirrors the router's same-origin test.
+ *
+ * With the Host check off (`allowedHosts: true`) neither signal can be
+ * trusted for a non-loopback Origin: a DNS-rebinding page is same-origin with
+ * the backend as far as its browser knows, and its Origin host equals the Host
+ * it sends. Only a loopback Origin can then count as same-origin.
  */
-function isSameOriginRequest(req: IncomingMessage, origin: string): boolean {
+function isSameOriginRequest(req: IncomingMessage, origin: string, hostCheckOff: boolean): boolean {
+  if (hostCheckOff && !isLoopbackOrigin(origin)) return false;
   const fetchSite = req.headers['sec-fetch-site'];
   if (fetchSite !== undefined) return fetchSite === 'same-origin';
   const host = req.headers.host;
@@ -137,29 +147,70 @@ function isSameOriginRequest(req: IncomingMessage, origin: string): boolean {
 }
 
 /**
- * Whether a state-changing (non-GET/HEAD) request comes from a site that may
- * not write to the local backend. A browser always sends `Origin` on such a
- * cross-origin request and `Sec-Fetch-Site` on every request, so either one
- * pointing elsewhere is enough. A request with neither (curl, a server-side
- * client) is not a browser cross-origin request and is let through.
+ * Request body types a page can send cross-site without a CORS preflight
+ * (an HTML form, or a `no-cors` fetch). Compared on the MIME essence, as the
+ * router does.
+ */
+const CORS_SAFELISTED_CONTENT_TYPES = new Set([
+  'application/x-www-form-urlencoded',
+  'multipart/form-data',
+  'text/plain',
+]);
+
+function isCorsSafelistedContentType(contentType: string | undefined): boolean {
+  if (typeof contentType !== 'string') return false;
+  const essence = contentType.split(';', 1)[0].trim().toLowerCase();
+  return CORS_SAFELISTED_CONTENT_TYPES.has(essence);
+}
+
+function hasRequestBody(req: IncomingMessage): boolean {
+  if (req.headers['transfer-encoding'] !== undefined) return true;
+  const length = req.headers['content-length'];
+  return length !== undefined && length.trim() !== '0';
+}
+
+/**
+ * Whether a state-changing (non-GET) request comes from a site that may not
+ * write to the local backend. Only GET is exempt: a cross-site HEAD runs the
+ * handler just as a POST does, so it is checked too.
  *
  * - default / `cors: false`: loopback origins may write, nothing else.
- * - `cors: string[]`: listed origins, or a same-origin request.
+ * - `cors: string[]`: listed origins, or a same-origin request (with
+ *   `allowedHosts: true`, same-origin only for a loopback Origin).
+ *
+ * A browser that sends `Origin` or a cross-site `Sec-Fetch-Site` is judged by
+ * them. With neither header (curl, a server-side client, but also an older
+ * browser posting a cross-site form) the request passes only when it could
+ * not be a form post: a body typed as something a form cannot send
+ * (`application/json`), or no body and no `Content-Type` at all.
  */
-function isForbiddenCrossOriginWrite(req: IncomingMessage, cors: false | string[]): boolean {
-  if (req.method === 'GET' || req.method === 'HEAD') return false;
+function isForbiddenCrossOriginWrite(
+  req: IncomingMessage,
+  cors: false | string[],
+  hostCheckOff: boolean
+): boolean {
+  if (req.method === 'GET') return false;
   const rawOrigin = req.headers.origin;
   const origin = typeof rawOrigin === 'string' ? rawOrigin : undefined;
   const fetchSite = req.headers['sec-fetch-site'];
   const allowed =
     origin !== undefined &&
     (Array.isArray(cors)
-      ? cors.includes(origin) || isSameOriginRequest(req, origin)
+      ? cors.includes(origin) || isSameOriginRequest(req, origin, hostCheckOff)
       : isLoopbackOrigin(origin));
   if (origin !== undefined && !allowed) return true;
   // SECURITY (fail closed): a browser that says the request is cross-site or
   // same-site but sends no Origin we can vouch for is refused as well.
   if ((fetchSite === 'cross-site' || fetchSite === 'same-site') && !allowed) return true;
+  // SECURITY (fail closed): with neither header, an older browser's
+  // cross-site form post is indistinguishable from curl except by its body.
+  // Form bodies (and bodies with no type, which a no-cors fetch can send)
+  // are refused; a client that means it sets a non-form Content-Type.
+  if (origin === undefined && fetchSite === undefined) {
+    const contentType = req.headers['content-type'];
+    if (isCorsSafelistedContentType(contentType)) return true;
+    if (!contentType && hasRequestBody(req)) return true;
+  }
   return false;
 }
 
@@ -287,10 +338,12 @@ export default class Local {
    * SECURITY: an `authorizer` injected through `requestContext` (or derived
    * from a JWT) applies to every caller that reaches the proxy, not only to
    * the developer's own frontend. By default other websites cannot read
-   * responses (CORS is loopback-only), cannot send anything but GET/HEAD
+   * responses (CORS is loopback-only), cannot send anything but GET
    * (403 `CROSS_ORIGIN_FORBIDDEN`), and cannot reach it by DNS rebinding
    * (403 `HOST_NOT_ALLOWED`). A cross-site GET still runs, so GET routes must
-   * not have side effects. Widen the defaults deliberately.
+   * not have side effects. Any loopback origin on any port may write, so
+   * another local app with an XSS hole can drive the proxy; list origins in
+   * `cors` to narrow that. Widen the defaults deliberately.
    */
   static EventFunctionProxy(
     eventFunctionHandler: (
@@ -434,7 +487,7 @@ export default class Local {
     }
     if (allowedHosts === true) {
       logger.warn(
-        'EventFunctionProxy allowedHosts: true disables the Host check — DNS rebinding can reach this local backend',
+        'EventFunctionProxy allowedHosts: true disables the Host check — a DNS-rebinding page can reach this local backend and read GET responses; cross-origin writes are still limited to loopback or listed cors origins',
         { code: 'LOCAL_HOST_CHECK_DISABLED', source: 'Local.EventFunctionProxy' }
       );
     }
@@ -483,12 +536,15 @@ export default class Local {
         // SECURITY (CSRF): withholding CORS headers only stops another site
         // READING the response. A form post or a `no-cors` fetch from a page
         // the developer has open still reaches the handler, with the injected
-        // authorizer, so a cross-origin request that is not GET/HEAD from an
+        // authorizer, so a cross-origin request that is not GET from an
         // origin that is not allowed is refused before the body is read or
         // the handler runs. Preflights (OPTIONS) are refused too, so the
         // browser never sends the real request. `cors: true` is the explicit,
         // startup-warned opt-out.
-        if (options.cors !== true && isForbiddenCrossOriginWrite(req, options.cors ?? false)) {
+        if (
+          options.cors !== true &&
+          isForbiddenCrossOriginWrite(req, options.cors ?? false, allowedHosts === true)
+        ) {
           const origin = req.headers.origin;
           const fetchSite = req.headers['sec-fetch-site'];
           logger.warn('Rejected cross-origin request from a non-allowed origin', {
