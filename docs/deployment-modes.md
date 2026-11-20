@@ -378,6 +378,14 @@ are "the default does this; do not undo it".
 - [ ] Do not `await` network calls at module top level before `WebFunction.serve`. The 10-second init budget starts when the process does.
 - [ ] Attach an `'error'` listener to the returned `Server` and decide what a failed bind means for you (`process.exit(1)` is reasonable: Lambda will retry the environment).
 - [ ] Do not pass `host`/`port` expecting them to apply under Lambda; they are ignored there and only matter locally.
+- [ ] Use AWS's documented execution-role trust policy (`lambda.amazonaws.com`, `sts:AssumeRole`) without an `aws:SourceAccount` condition. Web Functions refuse a role whose trust policy carries one ("cannot be assumed by lambda.amazonaws.com"), although Event Functions accept the same role.
+- [ ] Send a real request after every deploy. Lambda marks a revision `Active` without checking that your server bound `AWS_LAMBDA_HTTP_ENDPOINT`.
+
+**Scaling and throttling**
+
+- [ ] Expect `429` while a new Web Function learns. Lambda starts each new function with a low per-environment concurrency limit (about 2 requests in our 11.0.0 test) and raises it from observed resource use; with a tight `maxEnvironments` the first burst is throttled (`lambda-web-error-type: Platform.EndpointMaxEnvThrottle`). Lambda does not queue throttled requests. Run a warm-up load before a launch, and judge load tests on the second run.
+- [ ] `rateLimit` throttles on requests per second regardless of spare capacity (`Platform.EndpointRequestThrottle`). Set it from the traffic you expect, not as a cost cap alone.
+- [ ] Clients should retry `429` with backoff. Brief platform `503`s can also occur while Lambda cycles environments (we saw them right after changing an endpoint's scaling); they never reach your code.
 
 **Request handling**
 
