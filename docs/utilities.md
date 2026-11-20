@@ -358,7 +358,7 @@ createRequestLogger(request: RouterRequest | ApiGatewayEvent): {
   debug(message: string, context?: Record<string, any>): void;
 }
 
-logRequest(request: RouterRequest | ApiGatewayEvent): void;
+logRequest(request: RouterRequest | ApiGatewayEvent, options?: LogRequestOptions): void;
 logResponse(request: RouterRequest | ApiGatewayEvent, response: { status?: number; statusCode?: number }, durationMs: number): void;
 ```
 
@@ -371,11 +371,42 @@ top-level `method`, so the two are told apart by that. A raw API Gateway event
 `requestContext.http.sourceIp` / `requestContext.identity.sourceIp`, never from
 `X-Forwarded-For`.
 
-`logRequest` logs the body (parsed as JSON when it is JSON, never thrown on),
-query and path parameters. Object and array bodies go through the logger's
-key-based redaction. A body that is text rather than JSON (form posts,
-multipart, plain text, base64) is not logged, because redaction cannot see
-inside a string; it appears as `[text body omitted, N chars]`. `logResponse` accepts a
+`logRequest` logs query and path parameters and a summary of the body, never
+its content by default: `{ contentType, bytes }` for a raw body,
+`{ contentType, fields }` for a parsed object, `{ contentType, items }` for an
+array. A body can hold personal data under any field name (`dob`, `diagnosis`,
+`address`), and a list of names to redact can never be complete, so logging
+content is an explicit choice:
+
+```typescript
+interface LogRequestOptions {
+  /** Log body content. Default false. */
+  logBody?: boolean;
+  /** With logBody: field names logged verbatim; all others become '[REDACTED]'. */
+  bodyFields?: readonly string[];
+}
+
+// Recommended when you need body content: name the fields.
+logRequest(req, { logBody: true, bodyFields: ['orderId', 'items', 'sku', 'qty'] });
+```
+
+With `logBody: true`:
+
+- A raw event body is parsed as JSON (never thrown on). A body that is text
+  rather than JSON (form posts, multipart, plain text, base64) is still not
+  logged, because redaction cannot see inside a string; it appears as
+  `[text body omitted, N chars]`.
+- Keys matching the logger's sensitive list (`password`, `token`, `secret`,
+  `apiKey`, `authorization`, `cookie`, `session`, `cardNumber`, `cvv`, `ssn`,
+  ...) are always `[REDACTED]`, even when listed in `bodyFields`.
+- With `bodyFields`, every key not listed is `[REDACTED]`, at any depth. Names
+  match exactly. A nested object or array is walked only when its own key is
+  listed, so `{ order: { id } }` needs both `order` and `id`. Primitives in a
+  top-level array have no field name and are redacted.
+- Without `bodyFields`, every other field is logged. Prefer an allowlist.
+- String values are cut at 256 characters and nesting at 10 levels.
+
+`logResponse` accepts a
 `RouterResponse` (`status`) or an Event Function result (`statusCode`) and logs
 at `error` level for 4xx/5xx.
 

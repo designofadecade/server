@@ -56,6 +56,8 @@
  * });
  */
 
+import { isSensitiveKey } from './sensitiveKeys.js';
+
 /**
  * Log level enumeration
  * Lower values indicate higher priority
@@ -155,34 +157,6 @@ const LOG_LEVEL_MAP: Record<LogLevelString, LogLevel> = {
  */
 export class Logger {
   private readonly level: LogLevel;
-  // Sensitive field patterns - more specific to avoid false positives
-  private readonly sensitiveKeys = [
-    'password',
-    'passwd',
-    'pwd',
-    'token',
-    'accesstoken',
-    'refreshtoken',
-    'bearertoken',
-    'apikey',
-    'api_key',
-    'secret',
-    'secretkey',
-    'clientsecret',
-    'authorization',
-    'auth',
-    'cookie',
-    'session',
-    'sessionid',
-    'creditcard',
-    'cardnumber',
-    'cvv',
-    'ccv',
-    'ssn',
-    'socialsecurity',
-    'privatekey',
-    'private_key',
-  ];
   private isColdStart = true; // Track Lambda cold starts
   private readonly maxLogSize = 256000; // CloudWatch limit is 256KB per log event
 
@@ -270,12 +244,7 @@ export class Logger {
     const redacted: Record<string, unknown> = {};
 
     for (const [key, value] of Object.entries(obj)) {
-      const lowerKey = key.toLowerCase();
-      const isSensitive = this.sensitiveKeys.some((sensitive) =>
-        lowerKey.includes(sensitive.toLowerCase())
-      );
-
-      if (isSensitive) {
+      if (isSensitiveKey(key)) {
         redacted[key] = '[REDACTED]';
       } else {
         // Always recursively process values to handle BigInt, Symbol, Function, etc.

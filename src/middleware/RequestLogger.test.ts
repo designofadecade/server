@@ -290,7 +290,7 @@ describe('RequestLogger', () => {
         headers: {},
       };
 
-      logRequest(event);
+      logRequest(event, { logBody: true });
 
       expect(logger.info).toHaveBeenCalledWith(
         'Incoming request',
@@ -338,7 +338,7 @@ describe('RequestLogger', () => {
         headers: {},
       };
 
-      expect(() => logRequest(event)).not.toThrow();
+      expect(() => logRequest(event, { logBody: true })).not.toThrow();
       expect(logger.info).toHaveBeenCalledWith(
         'Incoming request',
         expect.objectContaining({ body: '[text body omitted, 12 chars]' })
@@ -347,16 +347,18 @@ describe('RequestLogger', () => {
 
     it('never logs a form-encoded body, which key-based redaction cannot reach', () => {
       const body = 'email=user%40example.com&password=hunter2';
-      logRequest({
+      const event = {
         requestContext: { requestId: 'test-id', http: { method: 'POST', path: '/login' } },
         headers: { 'content-type': 'application/x-www-form-urlencoded' },
         body,
-      });
+      };
+      logRequest(event, { logBody: true });
 
       expect(logger.info).toHaveBeenCalledWith(
         'Incoming request',
         expect.objectContaining({ body: `[text body omitted, ${body.length} chars]` })
       );
+      logRequest(event);
       const logged = JSON.stringify(vi.mocked(logger.info).mock.calls);
       expect(logged).not.toContain('hunter2');
       expect(logged).not.toContain('example.com');
@@ -364,21 +366,26 @@ describe('RequestLogger', () => {
 
     it('never logs a base64-encoded event body', () => {
       const body = Buffer.from('password=hunter2').toString('base64');
-      logRequest({
+      const event = {
         requestContext: { requestId: 'test-id', http: { method: 'POST', path: '/login' } },
         headers: {},
         body,
-      });
+      };
+      logRequest(event);
+      logRequest(event, { logBody: true });
 
       expect(JSON.stringify(vi.mocked(logger.info).mock.calls)).not.toContain(body);
     });
 
     it('omits a body that is a bare JSON string', () => {
-      logRequest({
-        requestContext: { requestId: 'test-id', http: { method: 'POST', path: '/x' } },
-        headers: {},
-        body: '"hunter2"',
-      });
+      logRequest(
+        {
+          requestContext: { requestId: 'test-id', http: { method: 'POST', path: '/x' } },
+          headers: {},
+          body: '"hunter2"',
+        },
+        { logBody: true }
+      );
 
       expect(logger.info).toHaveBeenCalledWith(
         'Incoming request',
@@ -529,25 +536,37 @@ describe('RequestLogger with a RouterRequest', () => {
     );
   });
 
-  it('logs the parsed body, query and params', () => {
+  it('logs a body summary, query and params by default', () => {
     logRequest(request);
     expect(logger.info).toHaveBeenCalledWith(
       'Incoming request',
       expect.objectContaining({
-        body: { name: 'John' },
+        body: { contentType: undefined, fields: 1 },
         queryParams: { q: '1' },
         pathParams: { id: '7' },
       })
+    );
+    expect(JSON.stringify(vi.mocked(logger.info).mock.calls)).not.toContain('John');
+  });
+
+  it('logs the parsed body when opted in', () => {
+    logRequest(request, { logBody: true });
+    expect(logger.info).toHaveBeenCalledWith(
+      'Incoming request',
+      expect.objectContaining({ body: { name: 'John' } })
     );
   });
 
   it('omits a string body the router left unparsed (non-JSON content type)', () => {
     const body = 'username=demo&pass=hunter2';
-    logRequest({
-      ...request,
-      headers: { 'content-type': 'application/x-www-form-urlencoded' },
-      body,
-    });
+    logRequest(
+      {
+        ...request,
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body,
+      },
+      { logBody: true }
+    );
     expect(logger.info).toHaveBeenCalledWith(
       'Incoming request',
       expect.objectContaining({ body: `[text body omitted, ${body.length} chars]` })
@@ -588,5 +607,163 @@ describe('RequestLogger with a RouterRequest', () => {
       'test',
       expect.objectContaining({ sourceIp: '198.51.100.1' })
     );
+  });
+});
+
+describe('logRequest body logging options', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const loggedBody = () =>
+    (vi.mocked(logger.info).mock.calls[0][1] as Record<string, unknown>).body;
+
+  const event = (body: unknown, contentType = 'application/json') => ({
+    method: 'POST',
+    path: '/patients',
+    headers: { 'content-type': contentType },
+    body,
+  });
+
+  const patient = {
+    name: 'Ana',
+    ssn: '123-45-6789',
+    dob: '1990-01-01',
+    cardNumber: '4111111111111111',
+    diagnosis: 'private',
+  };
+
+  it('logs no body content by default, only content type and size', () => {
+    const raw = JSON.stringify(patient);
+    logRequest({
+      requestContext: { requestId: 'r', http: { method: 'POST', path: '/patients' } },
+      headers: { 'content-type': 'application/json' },
+      body: raw,
+    });
+
+    expect(loggedBody()).toEqual({
+      contentType: 'application/json',
+      bytes: Buffer.byteLength(raw),
+    });
+    const logged = JSON.stringify(vi.mocked(logger.info).mock.calls);
+    for (const value of ['Ana', '1990-01-01', 'private', '123-45-6789']) {
+      expect(logged).not.toContain(value);
+    }
+  });
+
+  it('summarises a parsed array body by item count', () => {
+    logRequest(event([1, 2, 3]));
+    expect(loggedBody()).toEqual({ contentType: 'application/json', items: 3 });
+  });
+
+  it('counts bytes, not characters, for a raw body', () => {
+    logRequest({ ...event('é'), headers: { 'content-type': 'text/plain' } });
+    expect(loggedBody()).toEqual({ contentType: 'text/plain', bytes: 2 });
+  });
+
+  it('truncates a long Content-Type in the summary', () => {
+    logRequest(event({ a: 1 }, 'application/json;' + 'x'.repeat(500)));
+    expect((loggedBody() as { contentType: string }).contentType).toHaveLength(100);
+  });
+
+  it('with logBody and no allowlist, redacts sensitive keys but logs other fields', () => {
+    logRequest(event(patient), { logBody: true });
+    expect(loggedBody()).toEqual({
+      name: 'Ana',
+      ssn: '[REDACTED]',
+      dob: '1990-01-01',
+      cardNumber: '[REDACTED]',
+      diagnosis: 'private',
+    });
+  });
+
+  it('with bodyFields, logs only the listed fields', () => {
+    logRequest(event(patient), { logBody: true, bodyFields: ['name'] });
+    expect(loggedBody()).toEqual({
+      name: 'Ana',
+      ssn: '[REDACTED]',
+      dob: '[REDACTED]',
+      cardNumber: '[REDACTED]',
+      diagnosis: '[REDACTED]',
+    });
+  });
+
+  it('ignores bodyFields unless logBody is on', () => {
+    logRequest(event(patient), { bodyFields: ['name'] });
+    expect(loggedBody()).toEqual({ contentType: 'application/json', fields: 5 });
+  });
+
+  it('applies the allowlist recursively through nested objects and arrays', () => {
+    logRequest(
+      event({
+        order: {
+          id: 7,
+          items: [
+            { sku: 'A1', qty: 2, note: 'leave at door' },
+            { sku: 'B2', qty: 1 },
+          ],
+          shipping: { street: '1 Main St' },
+        },
+        tags: ['x', 'y'],
+        owner: { id: 9, email: 'a@b.test' },
+      }),
+      { logBody: true, bodyFields: ['order', 'id', 'items', 'sku', 'qty', 'tags', 'owner'] }
+    );
+    expect(loggedBody()).toEqual({
+      order: {
+        id: 7,
+        items: [
+          { sku: 'A1', qty: 2, note: '[REDACTED]' },
+          { sku: 'B2', qty: 1 },
+        ],
+        shipping: '[REDACTED]',
+      },
+      tags: ['x', 'y'],
+      owner: { id: 9, email: '[REDACTED]' },
+    });
+  });
+
+  it('redacts primitives in a top-level array, which have no field name', () => {
+    logRequest(event(['secret-ish', 3]), { logBody: true, bodyFields: ['id'] });
+    expect(loggedBody()).toEqual(['[REDACTED]', '[REDACTED]']);
+  });
+
+  it('keeps sensitive keys redacted even when allowlisted, at any depth', () => {
+    logRequest(event({ password: 'hunter2', user: { apiKey: 'k-123', name: 'Ana' } }), {
+      logBody: true,
+      bodyFields: ['password', 'user', 'apiKey', 'name'],
+    });
+    expect(loggedBody()).toEqual({
+      password: '[REDACTED]',
+      user: { apiKey: '[REDACTED]', name: 'Ana' },
+    });
+    expect(JSON.stringify(vi.mocked(logger.info).mock.calls)).not.toContain('hunter2');
+  });
+
+  it('parses a raw JSON event body before applying the allowlist', () => {
+    logRequest(
+      {
+        requestContext: { requestId: 'r', http: { method: 'POST', path: '/x' } },
+        headers: {},
+        body: JSON.stringify(patient),
+      },
+      { logBody: true, bodyFields: ['dob'] }
+    );
+    expect(loggedBody()).toEqual(
+      expect.objectContaining({ dob: '1990-01-01', name: '[REDACTED]' })
+    );
+  });
+
+  it('caps long string values', () => {
+    logRequest(event({ note: 'a'.repeat(1000) }), { logBody: true, bodyFields: ['note'] });
+    const note = (loggedBody() as { note: string }).note;
+    expect(note.startsWith('a'.repeat(256))).toBe(true);
+    expect(note).toContain('[truncated, 1000 chars]');
+    expect(note.length).toBeLessThan(300);
+  });
+
+  it('stops at a depth limit', () => {
+    let deep: Record<string, unknown> = { leaf: 1 };
+    for (let i = 0; i < 20; i++) deep = { n: deep };
+    logRequest(event(deep), { logBody: true });
+    expect(JSON.stringify(loggedBody())).toContain('[MAX_DEPTH]');
   });
 });
