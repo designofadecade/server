@@ -854,3 +854,25 @@ describe('Local.EventFunctionProxy Host refusal log', () => {
     }
   });
 });
+
+describe('Local.EventFunctionProxy fails closed on unparseable values', () => {
+  it('refuses a Host whose port the URL parser rejects', async () => {
+    const { handler, res } = await run({ headers: { host: 'localhost:99999' } });
+    expect(res.statusCode).toBe(403);
+    expect(String(res.body)).toContain('HOST_NOT_ALLOWED');
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('refuses a write whose Origin cannot be parsed, in allowlist mode', async () => {
+    const { handler, res } = await run(
+      {
+        method: 'POST',
+        headers: { origin: 'http://[', 'content-type': 'application/json' },
+      },
+      { cors: ['http://localhost:5173'] }
+    );
+    expect(res.statusCode).toBe(403);
+    expect(String(res.body)).toContain('CROSS_ORIGIN_FORBIDDEN');
+    expect(handler).not.toHaveBeenCalled();
+  });
+});

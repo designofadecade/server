@@ -938,3 +938,37 @@ describe('logRequest body logging options', () => {
     expect(JSON.stringify(loggedBody())).toContain('[MAX_DEPTH]');
   });
 });
+
+describe('RequestLogger body summary for non-JSON-shaped bodies', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('summarises a primitive body by content type only, without its value', () => {
+    logRequest({
+      path: '/x',
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: 424242,
+    } as never);
+    const logged = JSON.stringify(vi.mocked(logger.info).mock.calls);
+    expect(logged).not.toContain('424242');
+    expect(logged).toContain('application/json');
+  });
+
+  it('redacts an allowlisted field holding a non-JSON value (bigint)', () => {
+    logRequest(
+      {
+        path: '/x',
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: { amount: BigInt(99), note: 'ok' },
+      } as never,
+      { logBody: true, bodyFields: ['amount', 'note'] }
+    );
+    const logged = JSON.stringify(vi.mocked(logger.info).mock.calls);
+    expect(logged).not.toContain('99');
+    expect(logged).toContain('[REDACTED]');
+    expect(logged).toContain('"note":"ok"');
+  });
+});

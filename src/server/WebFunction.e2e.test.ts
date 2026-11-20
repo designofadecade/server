@@ -189,6 +189,36 @@ describe('WebFunction over real sockets', () => {
       expect(body.requestId).toMatch(/^[0-9a-f-]{36}$/);
     });
 
+    it('answers 500 and keeps serving when nodeJSRequest itself rejects', async () => {
+      vi.stubEnv(ENV, '');
+      const port = await freePort();
+      const router = new Router({ initRoutes: [EchoRoutes] });
+      const real = router.nodeJSRequest.bind(router);
+      const spy = vi
+        .spyOn(router, 'nodeJSRequest')
+        .mockRejectedValueOnce(new Error('bug inside nodeJSRequest'))
+        .mockImplementation(real);
+      const unhandled = vi.fn();
+      process.on('unhandledRejection', unhandled);
+
+      try {
+        server = WebFunction.serve(router, { port, host: '127.0.0.1' });
+        await server.ready;
+
+        const failed = await get(port, '/echo');
+        expect(failed.status).toBe(500);
+        expect(failed.body).toBe('');
+
+        // The environment survives: the next request is served normally.
+        expect((await get(port, '/echo')).status).toBe(200);
+        expect(spy).toHaveBeenCalledTimes(2);
+        await new Promise((resolve) => setImmediate(resolve));
+        expect(unhandled).not.toHaveBeenCalled();
+      } finally {
+        process.off('unhandledRejection', unhandled);
+      }
+    });
+
     it('rejects ready when the port is taken', async () => {
       vi.stubEnv(ENV, '');
       const port = await freePort();
