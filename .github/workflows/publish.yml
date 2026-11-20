@@ -13,10 +13,12 @@ permissions:
 # Actions are pinned to full commit SHAs (the comment names the release) so a
 # moved or compromised tag cannot change what runs with publish credentials.
 #
-# The job that installs dependencies never holds publish credentials: `npm ci`
-# runs every dependency's install scripts, so it runs in `build` with a
-# read-only token and no OIDC. `publish` gets `id-token: write` but installs
-# nothing and runs no scripts; it only publishes the tarball `build` packed.
+# The job that installs and runs third-party code never holds publish
+# credentials: `build` installs (without install scripts), tests and packs with
+# a read-only token and no OIDC. `publish-npm` gets `id-token: write` but
+# installs nothing and runs no scripts; it only publishes the tarball `build`
+# packed. It runs in the `npm-publish` environment, which needs required
+# reviewers configured in the repository settings to act as an approval gate.
 jobs:
   build:
     runs-on: ubuntu-latest
