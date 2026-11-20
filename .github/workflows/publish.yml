@@ -89,8 +89,10 @@ jobs:
           name: package
           path: pack
 
+      # The leading ./ matters: npm reads a bare "dir/file.tgz" as a GitHub
+      # "user/repo" shorthand and tries to clone it.
       - name: Publish to npm (Trusted Publishing)
-        run: npm publish pack/*.tgz --provenance --access public --ignore-scripts
+        run: npm publish ./pack/*.tgz --provenance --access public --ignore-scripts
 
   github-release:
     needs: publish-npm
