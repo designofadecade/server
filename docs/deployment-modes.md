@@ -128,19 +128,19 @@ with other handlers (static files, a health check that bypasses the router).
 
 ## Decision table
 
-| Need                                                     | Web Function                                               | Event Function                                             | Plain server                      |
-| -------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------- | --------------------------------- |
-| Response streaming, Server-Sent Events                   | Yes, from a raw handler (see below)                        | No (whole response is one return value)                    | Yes, from a raw handler           |
-| Requests longer than ~30 s                               | Yes, up to 15 min per request (configure `timeoutSeconds`) | No: API Gateway HTTP API integrations time out at ~30 s    | Yes                               |
-| Several requests sharing one process (caches, pools)     | Yes, 64 by default                                         | No; one event per environment at a time                    | Yes                               |
-| Binary request/response bodies                           | Native                                                     | Base64 through `isBase64Encoded`                           | Native                            |
-| Multiple `Set-Cookie` headers                            | Native                                                     | Via the format 2.0 `cookies` array (handled for you)       | Native                            |
-| WebSockets                                               | No                                                         | No (API Gateway WebSocket APIs are a separate event shape) | Yes (`WebSocketServer`)           |
-| Triggered by SQS, S3, EventBridge, Step Functions        | No                                                         | Yes                                                        | No                                |
-| API Gateway authorizers, usage plans, request validation | No (CloudFront + your own middleware)                      | Yes                                                        | No                                |
-| Custom domain, WAF                                       | Via CloudFront in front of the endpoint                    | Via API Gateway or CloudFront                              | Your load balancer                |
-| Runs locally unchanged                                   | Yes                                                        | Through `Local.EventFunctionProxy`                         | Yes                               |
-| Request bodies over 1 MB                                 | Capped at 1 MB by `nodeJSRequest`                          | API Gateway payload limit (6 MB) applies first             | Capped at 1 MB by `nodeJSRequest` |
+| Need                                                     | Web Function                                               | Event Function                                                 | Plain server                  |
+| -------------------------------------------------------- | ---------------------------------------------------------- | -------------------------------------------------------------- | ----------------------------- |
+| Response streaming, Server-Sent Events                   | Yes, from a raw handler (see below)                        | No (whole response is one return value)                        | Yes, from a raw handler       |
+| Requests longer than ~30 s                               | Yes, up to 15 min per request (configure `timeoutSeconds`) | No: API Gateway HTTP API integrations time out at ~30 s        | Yes                           |
+| Several requests sharing one process (caches, pools)     | Yes, 64 by default                                         | No; one event per environment at a time                        | Yes                           |
+| Binary request/response bodies                           | Native                                                     | Base64 through `isBase64Encoded`                               | Native                        |
+| Multiple `Set-Cookie` headers                            | Native                                                     | Via the format 2.0 `cookies` array (handled for you)           | Native                        |
+| WebSockets                                               | No                                                         | No (API Gateway WebSocket APIs are a separate event shape)     | Yes (`WebSocketServer`)       |
+| Triggered by SQS, S3, EventBridge, Step Functions        | No                                                         | Yes                                                            | No                            |
+| API Gateway authorizers, usage plans, request validation | No (CloudFront + your own middleware)                      | Yes                                                            | No                            |
+| Custom domain, WAF                                       | Via CloudFront in front of the endpoint                    | Via API Gateway or CloudFront                                  | Your load balancer            |
+| Runs locally unchanged                                   | Yes                                                        | Through `Local.EventFunctionProxy`                             | Yes                           |
+| Request bodies over 1 MiB                                | `413` (router `maxBodyBytes`, default 1 MiB)               | `413` (same `maxBodyBytes`; API Gateway's own limit is higher) | `413` (router `maxBodyBytes`) |
 
 Numbers in this table come from the AWS Lambda Developer Guide pages
 "Lambda quotas" (`gettingstarted-limits.html`), "HTTP requests and responses"
@@ -384,7 +384,7 @@ are "the default does this; do not undo it".
 - [ ] Grep for module-level mutable state that assumes one request at a time (see [Concurrency](#concurrency-inside-one-environment)).
 - [ ] Size connection pools for 64 concurrent requests per environment (or whatever you configure), not for one.
 - [ ] Set `cors` to an explicit origin allowlist if browsers send credentials. Lambda adds no CORS headers of its own. Non-safe methods and preflights from an origin off the list (and not same-origin) get a `403`; see [CORS](router.md#cors).
-- [ ] Keep request bodies under 1 MB or handle large uploads out of band (pre-signed S3 URLs). `nodeJSRequest` rejects larger bodies.
+- [ ] Keep request bodies under 1 MiB or handle large uploads out of band (pre-signed S3 URLs). The router answers `413` above `maxBodyBytes` (default 1 MiB) on every transport.
 - [ ] Only `GET HEAD POST PUT PATCH OPTIONS DELETE` reach the function; Lambda answers 400 to anything else before your code runs.
 - [ ] Request line plus headers must fit in 128 KiB (Lambda answers 431 otherwise). Large cookies and bearer tokens count.
 

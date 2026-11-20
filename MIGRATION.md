@@ -13,8 +13,9 @@ actually implements, the Lambda **Event Function** (API Gateway HTTP API v2).
 The renames are mechanical. The behavioural changes are security defaults:
 the client IP and request id are taken only from sources the caller cannot
 forge, the CORS allowlist refuses cross-origin writes, `logRequest` logs only
-the values you name, WebSocket checks have a deadline, and the local Event
-Function proxy serves loopback only (items 6 and 10 to 14).
+the values you name, WebSocket checks have a deadline, the local Event Function proxy serves
+loopback only, and request bodies are capped at 1 MiB on every transport
+(items 6 and 10 to 15).
 
 Work through the greps. Nothing returned means that item does not apply.
 
@@ -338,6 +339,16 @@ Nothing changes if you open your frontend at `localhost`, `127.0.0.1` or
 - **To restore the old behaviour exactly:** `{ cors: true, allowedHosts: true }`.
   This is unsafe: any website you visit can use the proxy with its injected
   authorizer. Both settings log a warning at startup.
+
+### 15. Event Functions refuse bodies over 1 MiB
+
+The router's body limit now applies to `eventFunction` as well as the Node
+transport: a body over `maxBodyBytes` (default 1 MiB, measured after base64
+decoding) gets `413 PAYLOAD_TOO_LARGE`. Before, an Event Function accepted
+anything API Gateway passed. If a route takes larger bodies, raise the limit
+(`new Router({ maxBodyBytes: 5 * 1024 * 1024 })`) or move the upload to a
+pre-signed S3 URL. On the Node transport an oversized body now gets a `413`
+response instead of a dropped connection.
 
 ---
 

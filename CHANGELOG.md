@@ -276,6 +276,18 @@ Every item is a rename unless marked otherwise. There are no aliases.
 
 ### Fixed
 
+- **Request bodies over the size limit get `413`, on every transport.** Found
+  by running the package in the Lambda Node 24 image. The Node transport
+  destroyed the socket instead of answering, so clients saw a dropped
+  connection with no status; it now answers `413 PAYLOAD_TOO_LARGE` (refusing
+  an oversized `Content-Length` without reading the body) with
+  `Connection: close`. The Event Function transport had no limit at all and
+  now applies the same one. New `RouterOptions.maxBodyBytes`, default 1 MiB.
+  **Behaviour change:** Event Functions now refuse bodies over 1 MiB that API
+  Gateway used to let through; raise `maxBodyBytes` if you rely on them.
+- **Request bodies are decoded once, as UTF-8 bytes.** They were decoded chunk
+  by chunk, so a multi-byte character (accented letters, emoji, CJK) that
+  straddled a chunk boundary was corrupted in bodies larger than one chunk.
 - **`Server.close()` is safe to call concurrently, early, or late.** Calls made
   while a close is in progress share the same promise, so a second call no
   longer races the first on the underlying `http.Server`. A call after close

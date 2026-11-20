@@ -30,6 +30,8 @@ export interface EventFunctionEvent {
   };
   headers: Record<string, string | string[] | undefined>;
   body?: string | null;
+  /** Whether `body` is base64; used to measure its decoded size. */
+  isBase64Encoded?: boolean;
   cookies?: string[];
   /**
    * API Gateway omits query parameters that were not supplied, so a lookup
@@ -209,14 +211,30 @@ export interface RouterOptions {
    * `RequestLogger`'s `logPath`.
    */
   logPath?: boolean;
+  /**
+   * Largest request body accepted, in bytes, on both transports. Default
+   * 1 MiB. A larger body is answered `413 PAYLOAD_TOO_LARGE` before any
+   * middleware or route runs: on the Node path as soon as `Content-Length`
+   * (or the bytes read so far) exceeds it, on the Event Function path from
+   * the decoded size of `event.body`.
+   */
+  maxBodyBytes?: number;
 }
 
 export type RouterMiddleware = (request: RouterRequest) => Promise<RouterResponse | void>;
 
+/** A request body over `maxBodyBytes`; answered 413 by `nodeJSRequest`. */
+class BodyTooLargeError extends Error {
+  constructor() {
+    super('Request body too large');
+    this.name = 'BodyTooLargeError';
+  }
+}
+
 export default class Router {
   static MethodsWithBody = ['POST', 'PUT', 'PATCH'];
   static #MAX_CACHE_SIZE = 1000;
-  static #MAX_BODY_SIZE = 1024 * 1024; // 1MB
+  static #DEFAULT_MAX_BODY_BYTES = 1024 * 1024; // 1 MiB
 
   #routes = {
     cache: new Map<string, RouteRegistration | null>(),
@@ -230,6 +248,7 @@ export default class Router {
   #webFunction: boolean;
   #trustedProxies: number;
   #logPath: boolean;
+  #maxBodyBytes: number;
 
   constructor({
     context,
@@ -240,7 +259,12 @@ export default class Router {
     webFunction = Boolean(process.env.AWS_LAMBDA_HTTP_ENDPOINT),
     trustedProxies = 0,
     logPath = false,
+    maxBodyBytes = Router.#DEFAULT_MAX_BODY_BYTES,
   }: RouterOptions = {}) {
+    if (!Number.isSafeInteger(maxBodyBytes) || maxBodyBytes < 1) {
+      throw new Error('maxBodyBytes must be a positive integer');
+    }
+    this.#maxBodyBytes = maxBodyBytes;
     if (!Number.isInteger(trustedProxies) || trustedProxies < 0) {
       throw new Error('trustedProxies must be a non-negative integer');
     }
@@ -412,6 +436,16 @@ export default class Router {
       let body = Router.MethodsWithBody.includes(event.requestContext.http.method)
         ? event.body
         : null;
+
+      // Same limit as the Node path. API Gateway's own payload limit is far
+      // higher, so without this an Event Function parsed bodies the Node
+      // transport refuses.
+      if (
+        typeof body === 'string' &&
+        Router.#eventBodyBytes(body, event.isBase64Encoded) > this.#maxBodyBytes
+      ) {
+        return Router.#payloadTooLargeResult();
+      }
 
       if (
         event.headers['content-type']?.includes('application/json') &&
@@ -654,6 +688,22 @@ export default class Router {
         else res.end(JSON.stringify(response.body));
       } else res.end('');
     } catch (error: unknown) {
+      if (error instanceof BodyTooLargeError) {
+        logger.warn('Refused request body over the size limit', {
+          code: 'ROUTER_PAYLOAD_TOO_LARGE',
+          source: 'Router.nodeJSRequest',
+          method: req.method,
+          maxBodyBytes: this.#maxBodyBytes,
+        });
+        res.statusCode = 413;
+        res.setHeader('Content-Type', 'application/json');
+        // The rest of the upload is never read, so the connection cannot be
+        // reused: say so, and drop it once the answer is out.
+        res.setHeader('Connection', 'close');
+        res.on('finish', () => req.destroy());
+        res.end(Router.#payloadTooLargeBody());
+        return;
+      }
       res.statusCode = 500;
       res.setHeader('Content-Type', 'application/json');
       const errorResponse = RouteError.fromError(error, {
@@ -938,20 +988,38 @@ export default class Router {
   }
 
   async #getNodeJSRequestBody(req: IncomingMessage): Promise<unknown> {
-    return new Promise((resolve, reject) => {
-      let body = '';
-      let size = 0;
+    const limit = this.#maxBodyBytes;
+    const declared = Number(req.headers['content-length']);
+    if (Number.isFinite(declared) && declared > limit) throw new BodyTooLargeError();
 
-      req.on('data', (chunk) => {
+    return new Promise((resolve, reject) => {
+      // Collected as bytes and decoded once: decoding chunk by chunk split
+      // multi-byte UTF-8 characters that straddled a chunk boundary.
+      const chunks: Buffer[] = [];
+      let size = 0;
+      let done = false;
+
+      const onData = (data: Buffer | string) => {
+        if (done) return;
+        // A stream with an encoding set (`req.setEncoding`) emits strings.
+        const chunk = typeof data === 'string' ? Buffer.from(data, 'utf8') : data;
         size += chunk.length;
-        if (size > Router.#MAX_BODY_SIZE) {
-          req.destroy();
-          reject(new Error('Request body too large'));
+        if (size > limit) {
+          done = true;
+          // Stop buffering but leave the socket alone, so the 413 can still
+          // be written; nodeJSRequest closes the connection after it.
+          req.off?.('data', onData);
+          req.pause?.();
+          reject(new BodyTooLargeError());
           return;
         }
-        body += chunk.toString();
-      });
+        chunks.push(chunk);
+      };
+      req.on('data', onData);
       req.on('end', () => {
+        if (done) return;
+        done = true;
+        const body = Buffer.concat(chunks).toString('utf8');
         if (
           req.headers['content-type']?.includes('application/json') &&
           !Router.#isCorsSafelistedContentType(req.headers['content-type'])
@@ -966,9 +1034,32 @@ export default class Router {
         }
       });
       req.on('error', (err) => {
+        if (done) return;
+        done = true;
         reject(err);
       });
     });
+  }
+
+  static #eventBodyBytes(body: string, isBase64Encoded: boolean | undefined): number {
+    if (!isBase64Encoded) return Buffer.byteLength(body, 'utf8');
+    const padding = body.endsWith('==') ? 2 : body.endsWith('=') ? 1 : 0;
+    return Math.max(0, Math.floor((body.length * 3) / 4) - padding);
+  }
+
+  static #payloadTooLargeBody(): string {
+    return JSON.stringify({
+      success: false,
+      error: { code: 'PAYLOAD_TOO_LARGE', message: 'Request body too large' },
+    });
+  }
+
+  static #payloadTooLargeResult(): EventFunctionResult {
+    return {
+      statusCode: 413,
+      headers: { 'Content-Type': 'application/json' },
+      body: Router.#payloadTooLargeBody(),
+    };
   }
 
   async #request(request: RouterRequest): Promise<RouterResponse> {

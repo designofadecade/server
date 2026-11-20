@@ -97,6 +97,16 @@ new Router(options?: RouterOptions)
   a path can carry secrets and personal data, so those lines carry only
   `route`, the matched pattern, and no path when no route matched. When on,
   the path is logged without its query string and cut at 256 characters.
+- `maxBodyBytes` (number, optional) - Largest request body accepted, in
+  bytes, on both transports. Default: `1048576` (1 MiB). A larger body gets
+  `413` with `{ success: false, error: { code: 'PAYLOAD_TOO_LARGE' } }` before
+  any middleware or route runs. On the Node transport a `Content-Length` over
+  the limit is refused without reading the body, and a body that grows past it
+  stops being read; the response carries `Connection: close` and the
+  connection is dropped once it is sent. On the Event Function transport the
+  decoded size of `event.body` is measured (base64 bodies by their decoded
+  bytes). Raise it for routes that take large uploads, or better, upload to S3
+  with a pre-signed URL.
 
 **Example:**
 
