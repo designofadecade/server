@@ -109,15 +109,22 @@ export function createRequestLogger(
  * A raw event body is a string that is usually, but not always, JSON. It used
  * to go through a bare `JSON.parse`, so any non-JSON body made the logging
  * call itself throw and take the request down with it.
+ *
+ * A body that is still text after that — a form post
+ * (`email=…&password=…`), multipart, plain text, base64 — is not logged: the
+ * logger redacts secrets by object key, and a string has none, so credentials
+ * in it would reach the log verbatim. Only its length is kept.
  */
 function bodyForLog(body: unknown): unknown {
   if (typeof body !== 'string') return body ?? undefined;
   if (body === '') return undefined;
   try {
-    return JSON.parse(body);
+    const parsed: unknown = JSON.parse(body);
+    if (typeof parsed !== 'string') return parsed;
   } catch {
-    return body;
+    // Not JSON.
   }
+  return `[text body omitted, ${body.length} chars]`;
 }
 
 /**

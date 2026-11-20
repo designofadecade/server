@@ -24,6 +24,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     **Behaviour change:** frames that arrive after the server has started closing
     a socket are no longer emitted.
 
+- **`logRequest` no longer logs text bodies.** A body that was not JSON (a
+  form-encoded login, multipart, plain text, a base64 event body) was logged
+  as a raw string. The logger redacts secrets by object key, and a string has
+  no keys, so passwords and tokens in such a body reached the log verbatim. It
+  is now logged as `[text body omitted, N chars]`. JSON object and array
+  bodies are logged and redacted as before.
+
 ### Documentation
 
 - `docs/websocket.md` and `docs/events-manager.md` describe the new `message` /

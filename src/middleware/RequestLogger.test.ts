@@ -325,7 +325,7 @@ describe('RequestLogger', () => {
       );
     });
 
-    it('logs a non-JSON body as text instead of throwing', () => {
+    it('omits a non-JSON body, keeping only its length, instead of throwing', () => {
       const event = {
         requestContext: {
           requestId: 'test-id',
@@ -341,7 +341,48 @@ describe('RequestLogger', () => {
       expect(() => logRequest(event)).not.toThrow();
       expect(logger.info).toHaveBeenCalledWith(
         'Incoming request',
-        expect.objectContaining({ body: 'invalid json' })
+        expect.objectContaining({ body: '[text body omitted, 12 chars]' })
+      );
+    });
+
+    it('never logs a form-encoded body, which key-based redaction cannot reach', () => {
+      const body = 'email=user%40example.com&password=hunter2';
+      logRequest({
+        requestContext: { requestId: 'test-id', http: { method: 'POST', path: '/login' } },
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body,
+      });
+
+      expect(logger.info).toHaveBeenCalledWith(
+        'Incoming request',
+        expect.objectContaining({ body: `[text body omitted, ${body.length} chars]` })
+      );
+      const logged = JSON.stringify(vi.mocked(logger.info).mock.calls);
+      expect(logged).not.toContain('hunter2');
+      expect(logged).not.toContain('example.com');
+    });
+
+    it('never logs a base64-encoded event body', () => {
+      const body = Buffer.from('password=hunter2').toString('base64');
+      logRequest({
+        requestContext: { requestId: 'test-id', http: { method: 'POST', path: '/login' } },
+        headers: {},
+        body,
+      });
+
+      expect(JSON.stringify(vi.mocked(logger.info).mock.calls)).not.toContain(body);
+    });
+
+    it('omits a body that is a bare JSON string', () => {
+      logRequest({
+        requestContext: { requestId: 'test-id', http: { method: 'POST', path: '/x' } },
+        headers: {},
+        body: '"hunter2"',
+      });
+
+      expect(logger.info).toHaveBeenCalledWith(
+        'Incoming request',
+        expect.objectContaining({ body: '[text body omitted, 9 chars]' })
       );
     });
   });
@@ -498,6 +539,20 @@ describe('RequestLogger with a RouterRequest', () => {
         pathParams: { id: '7' },
       })
     );
+  });
+
+  it('omits a string body the router left unparsed (non-JSON content type)', () => {
+    const body = 'username=demo&pass=hunter2';
+    logRequest({
+      ...request,
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body,
+    });
+    expect(logger.info).toHaveBeenCalledWith(
+      'Incoming request',
+      expect.objectContaining({ body: `[text body omitted, ${body.length} chars]` })
+    );
+    expect(JSON.stringify(vi.mocked(logger.info).mock.calls)).not.toContain('hunter2');
   });
 
   it('reads status from a RouterResponse, defaulting to 200', () => {

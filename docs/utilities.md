@@ -371,8 +371,11 @@ top-level `method`, so the two are told apart by that. A raw API Gateway event
 `requestContext.http.sourceIp` / `requestContext.identity.sourceIp`, never from
 `X-Forwarded-For`.
 
-`logRequest` logs the body (parsed as JSON when it is JSON; left as a string
-otherwise, never thrown on), query and path parameters. `logResponse` accepts a
+`logRequest` logs the body (parsed as JSON when it is JSON, never thrown on),
+query and path parameters. Object and array bodies go through the logger's
+key-based redaction. A body that is text rather than JSON (form posts,
+multipart, plain text, base64) is not logged, because redaction cannot see
+inside a string; it appears as `[text body omitted, N chars]`. `logResponse` accepts a
 `RouterResponse` (`status`) or an Event Function result (`statusCode`) and logs
 at `error` level for 4xx/5xx.
 
