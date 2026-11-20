@@ -440,6 +440,31 @@ export default class Router {
     }
   }
 
+  /**
+   * Browsers send `Origin` on same-origin POSTs too, so an allowlist that
+   * lacks the site's own origin must not refuse its own pages. A request is
+   * same-origin when the browser says so (`Sec-Fetch-Site`, which page script
+   * cannot set) or when the Origin's host:port equals the Host header. A
+   * cross-site page cannot make the two match: its visitor's browser sends
+   * the target's Host and the page's own Origin.
+   *
+   * Fails closed: when the browser sent `Sec-Fetch-Site` with any other value
+   * (`same-site`, `cross-site`, `none`), its verdict stands even if the Host
+   * happens to match; an Origin that does not parse (including `null`) never
+   * matches.
+   */
+  static #isSameOriginRequest(req: IncomingMessage, origin: string): boolean {
+    const fetchSite = req.headers['sec-fetch-site'];
+    if (fetchSite !== undefined) return fetchSite === 'same-origin';
+    const host = req.headers.host;
+    if (!host) return false;
+    try {
+      return new URL(origin).host.toLowerCase() === host.toLowerCase();
+    } catch {
+      return false;
+    }
+  }
+
   async nodeJSRequest(
     req: IncomingMessage,
     res: ServerResponse,
@@ -456,6 +481,7 @@ export default class Router {
       // an anonymous wildcard, which browsers already refuse to pair with
       // credentials.
       const requestOrigin = req.headers.origin;
+      let forbiddenOrigin = false;
 
       if (Array.isArray(cors)) {
         // Vary on Origin so caches never serve one origin's response to another.
@@ -463,23 +489,51 @@ export default class Router {
         if (requestOrigin && cors.includes(requestOrigin)) {
           res.setHeader('Access-Control-Allow-Origin', requestOrigin);
           res.setHeader('Access-Control-Allow-Credentials', 'true');
-        } else if (requestOrigin) {
-          logger.warn('Blocked cross-origin request from non-allowlisted origin', {
-            code: 'ROUTER_CORS_ORIGIN_BLOCKED',
-            source: 'Router.nodeJSRequest',
-            origin: requestOrigin,
-          });
+        } else if (requestOrigin && !Router.#isSameOriginRequest(req, requestOrigin)) {
+          forbiddenOrigin = true;
         }
       } else {
         res.setHeader('Access-Control-Allow-Origin', '*');
       }
 
-      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
-      res.setHeader(
-        'Access-Control-Allow-Headers',
-        'Content-Type, Authorization, X-Requested-With'
-      );
-      res.setHeader('Access-Control-Max-Age', '86400');
+      if (forbiddenOrigin) {
+        // SECURITY: Withholding CORS headers only stops the other site
+        // READING the response. A form post or a `no-cors` fetch still
+        // reaches the route with the visitor's cookies, so anything but a
+        // safe method from an origin off the allowlist is refused here,
+        // before the body is read or a route runs. Preflights are refused
+        // too, so the browser never sends the real request.
+        const safe = req.method === 'GET' || req.method === 'HEAD';
+        logger.warn('Blocked cross-origin request from non-allowlisted origin', {
+          code: 'ROUTER_CORS_ORIGIN_BLOCKED',
+          source: 'Router.nodeJSRequest',
+          // Client-controlled: bounded so one header cannot bloat the log.
+          origin: requestOrigin!.slice(0, 200),
+          method: req.method?.slice(0, 16),
+          rejected: !safe,
+        });
+        if (!safe) {
+          res.statusCode = 403;
+          res.setHeader('Content-Type', 'application/json');
+          res.end(
+            JSON.stringify({
+              success: false,
+              error: {
+                code: 'CORS_ORIGIN_FORBIDDEN',
+                message: 'Cross-origin request from this origin is not allowed',
+              },
+            })
+          );
+          return;
+        }
+      } else {
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+        res.setHeader(
+          'Access-Control-Allow-Headers',
+          'Content-Type, Authorization, X-Requested-With'
+        );
+        res.setHeader('Access-Control-Max-Age', '86400');
+      }
     }
 
     if (req.method === 'OPTIONS') {

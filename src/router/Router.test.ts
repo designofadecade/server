@@ -579,6 +579,245 @@ describe('Router', () => {
       );
     });
 
+    describe('CORS allowlist enforcement', () => {
+      const allowlist = ['https://app.example.com'];
+      let handler: ReturnType<typeof vi.fn>;
+
+      beforeEach(() => {
+        handler = vi.fn(async () => ({ status: 200, body: { ok: true } }));
+        const routeHandler = handler;
+        class WriteRoutes extends Routes {
+          constructor(router: Router) {
+            super(router);
+            this.addRoute('/test', ['GET', 'POST', 'DELETE'], routeHandler);
+          }
+        }
+        router = new Router({ initRoutes: [WriteRoutes] });
+        mockReq.headers.host = 'api.example.com';
+        mockReq.on.mockImplementation((event: string, callback: (chunk?: Buffer) => void) => {
+          if (event === 'data') callback(Buffer.from('{"email":"attacker@evil.test"}'));
+          if (event === 'end') callback();
+          return mockReq;
+        });
+      });
+
+      const errorBody = () => JSON.parse(mockRes.end.mock.calls[0][0]);
+
+      it('refuses a POST from a non-allowlisted origin before reading the body', async () => {
+        mockReq.method = 'POST';
+        mockReq.headers.origin = 'https://evil.example';
+        mockReq.headers['content-type'] = 'application/json';
+
+        await router.nodeJSRequest(mockReq, mockRes, { cors: allowlist });
+
+        expect(mockRes.statusCode).toBe(403);
+        expect(errorBody()).toEqual({
+          success: false,
+          error: { code: 'CORS_ORIGIN_FORBIDDEN', message: expect.any(String) },
+        });
+        expect(handler).not.toHaveBeenCalled();
+        expect(mockReq.on).not.toHaveBeenCalled();
+        expect(mockRes.setHeader).not.toHaveBeenCalledWith(
+          'Access-Control-Allow-Origin',
+          expect.anything()
+        );
+      });
+
+      it('refuses a DELETE from a non-allowlisted origin', async () => {
+        mockReq.method = 'DELETE';
+        mockReq.headers.origin = 'https://evil.example';
+
+        await router.nodeJSRequest(mockReq, mockRes, { cors: allowlist });
+
+        expect(mockRes.statusCode).toBe(403);
+        expect(handler).not.toHaveBeenCalled();
+      });
+
+      it('answers a preflight from a non-allowlisted origin with 403', async () => {
+        mockReq.method = 'OPTIONS';
+        mockReq.headers.origin = 'https://evil.example';
+        mockReq.headers['access-control-request-method'] = 'POST';
+
+        await router.nodeJSRequest(mockReq, mockRes, { cors: allowlist });
+
+        expect(mockRes.statusCode).toBe(403);
+        expect(errorBody().error.code).toBe('CORS_ORIGIN_FORBIDDEN');
+        expect(mockRes.setHeader).not.toHaveBeenCalledWith(
+          'Access-Control-Allow-Methods',
+          expect.anything()
+        );
+      });
+
+      it('treats Origin "null" (sandboxed frame, file://) as cross-origin', async () => {
+        mockReq.method = 'POST';
+        mockReq.headers.origin = 'null';
+
+        await router.nodeJSRequest(mockReq, mockRes, { cors: allowlist });
+
+        expect(mockRes.statusCode).toBe(403);
+        expect(handler).not.toHaveBeenCalled();
+      });
+
+      it('still runs a GET from a non-allowlisted origin, without CORS headers', async () => {
+        mockReq.headers.origin = 'https://evil.example';
+
+        await router.nodeJSRequest(mockReq, mockRes, { cors: allowlist });
+
+        expect(mockRes.statusCode).toBe(200);
+        expect(handler).toHaveBeenCalledTimes(1);
+        expect(mockRes.setHeader).not.toHaveBeenCalledWith(
+          'Access-Control-Allow-Origin',
+          expect.anything()
+        );
+        expect(mockRes.setHeader).not.toHaveBeenCalledWith(
+          'Access-Control-Allow-Credentials',
+          'true'
+        );
+      });
+
+      it('runs a POST from an allowlisted origin with credentialed CORS headers', async () => {
+        mockReq.method = 'POST';
+        mockReq.headers.origin = 'https://app.example.com';
+        mockReq.headers['content-type'] = 'application/json';
+
+        await router.nodeJSRequest(mockReq, mockRes, { cors: allowlist });
+
+        expect(mockRes.statusCode).toBe(200);
+        expect(handler).toHaveBeenCalledWith(
+          expect.objectContaining({ body: { email: 'attacker@evil.test' } })
+        );
+        expect(mockRes.setHeader).toHaveBeenCalledWith(
+          'Access-Control-Allow-Origin',
+          'https://app.example.com'
+        );
+        expect(mockRes.setHeader).toHaveBeenCalledWith('Access-Control-Allow-Credentials', 'true');
+      });
+
+      it('answers a preflight from an allowlisted origin with 204', async () => {
+        mockReq.method = 'OPTIONS';
+        mockReq.headers.origin = 'https://app.example.com';
+
+        await router.nodeJSRequest(mockReq, mockRes, { cors: allowlist });
+
+        expect(mockRes.statusCode).toBe(204);
+        expect(mockRes.setHeader).toHaveBeenCalledWith(
+          'Access-Control-Allow-Methods',
+          expect.any(String)
+        );
+      });
+
+      it('runs a same-origin POST whose Origin host matches the Host header', async () => {
+        mockReq.method = 'POST';
+        mockReq.headers.host = 'API.Example.com:8443';
+        mockReq.headers.origin = 'https://api.example.com:8443';
+
+        await router.nodeJSRequest(mockReq, mockRes, { cors: allowlist });
+
+        expect(mockRes.statusCode).toBe(200);
+        expect(handler).toHaveBeenCalledTimes(1);
+        // Same-origin needs no CORS grant.
+        expect(mockRes.setHeader).not.toHaveBeenCalledWith(
+          'Access-Control-Allow-Origin',
+          expect.anything()
+        );
+      });
+
+      it('does not treat a different port on the same host as same-origin', async () => {
+        mockReq.method = 'POST';
+        mockReq.headers.host = 'api.example.com:8443';
+        mockReq.headers.origin = 'https://api.example.com:9443';
+
+        await router.nodeJSRequest(mockReq, mockRes, { cors: allowlist });
+
+        expect(mockRes.statusCode).toBe(403);
+        expect(handler).not.toHaveBeenCalled();
+      });
+
+      it('runs a POST the browser marks Sec-Fetch-Site: same-origin', async () => {
+        mockReq.method = 'POST';
+        // e.g. a proxy in front rewrote Host to the upstream name.
+        mockReq.headers.host = 'internal-upstream:3000';
+        mockReq.headers.origin = 'https://www.example.com';
+        mockReq.headers['sec-fetch-site'] = 'same-origin';
+
+        await router.nodeJSRequest(mockReq, mockRes, { cors: allowlist });
+
+        expect(mockRes.statusCode).toBe(200);
+        expect(handler).toHaveBeenCalledTimes(1);
+      });
+
+      it('does not accept Sec-Fetch-Site: same-site as same-origin', async () => {
+        mockReq.method = 'POST';
+        mockReq.headers.origin = 'https://sibling.example.com';
+        mockReq.headers['sec-fetch-site'] = 'same-site';
+
+        await router.nodeJSRequest(mockReq, mockRes, { cors: allowlist });
+
+        expect(mockRes.statusCode).toBe(403);
+        expect(handler).not.toHaveBeenCalled();
+      });
+
+      it('lets Sec-Fetch-Site: cross-site override a matching Host', async () => {
+        mockReq.method = 'POST';
+        mockReq.headers.origin = 'https://api.example.com';
+        mockReq.headers['sec-fetch-site'] = 'cross-site';
+
+        await router.nodeJSRequest(mockReq, mockRes, { cors: allowlist });
+
+        expect(mockRes.statusCode).toBe(403);
+        expect(handler).not.toHaveBeenCalled();
+      });
+
+      it('treats an unparseable Origin as cross-origin', async () => {
+        mockReq.method = 'POST';
+        mockReq.headers.origin = 'not a url';
+
+        await router.nodeJSRequest(mockReq, mockRes, { cors: allowlist });
+
+        expect(mockRes.statusCode).toBe(403);
+      });
+
+      it('sends Vary: Origin on the 403 and never echoes the Origin', async () => {
+        mockReq.method = 'POST';
+        mockReq.headers.origin = 'https://evil.example';
+
+        await router.nodeJSRequest(mockReq, mockRes, { cors: allowlist });
+
+        expect(mockRes.setHeader).toHaveBeenCalledWith('Vary', 'Origin');
+        expect(mockRes.end.mock.calls[0][0]).not.toContain('evil.example');
+      });
+
+      it('runs a POST with no Origin header (non-browser client)', async () => {
+        mockReq.method = 'POST';
+
+        await router.nodeJSRequest(mockReq, mockRes, { cors: allowlist });
+
+        expect(mockRes.statusCode).toBe(200);
+        expect(handler).toHaveBeenCalledTimes(1);
+      });
+
+      it('leaves cors: true permissive for a POST from any origin', async () => {
+        mockReq.method = 'POST';
+        mockReq.headers.origin = 'https://evil.example';
+
+        await router.nodeJSRequest(mockReq, mockRes, { cors: true });
+
+        expect(mockRes.statusCode).toBe(200);
+        expect(handler).toHaveBeenCalledTimes(1);
+        expect(mockRes.setHeader).toHaveBeenCalledWith('Access-Control-Allow-Origin', '*');
+      });
+
+      it('applies no origin check without cors', async () => {
+        mockReq.method = 'POST';
+        mockReq.headers.origin = 'https://evil.example';
+
+        await router.nodeJSRequest(mockReq, mockRes);
+
+        expect(mockRes.statusCode).toBe(200);
+        expect(handler).toHaveBeenCalledTimes(1);
+      });
+    });
+
     it('should handle OPTIONS preflight requests', async () => {
       mockReq.method = 'OPTIONS';
 

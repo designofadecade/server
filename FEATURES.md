@@ -27,6 +27,8 @@ the routes themselves.
 - **`RequestLogger` accepts a `RouterRequest`** - `createRequestLogger`,
   `logRequest` and `logResponse` take the router's request object (preferred)
   or an API Gateway event, and no longer throw on non-JSON bodies.
+  `logRequest` logs only a body summary and parameter names unless given a
+  `bodyFields` (with `logBody`) or `paramFields` allowlist.
 - **Documentation** in [docs/deployment-modes.md](docs/deployment-modes.md):
   why choose a Web Function over an Event Function (and when not to), decision
   table, entry files for all three modes, production checklist.

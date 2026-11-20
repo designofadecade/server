@@ -163,6 +163,46 @@ Never reflect an arbitrary `Origin` alongside
 make authenticated cross-origin calls as the signed-in user and read the
 response.
 
+With an allowlist, a request whose `Origin` is not on it and is not
+same-origin is handled as follows:
+
+| Method                                                   | Result                                                                                                                                              |
+| -------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OPTIONS` (preflight)                                    | `403`, no CORS headers, so the browser never sends the real request                                                                                 |
+| `POST`, `PUT`, `PATCH`, `DELETE`, anything else not safe | `403` with `{ success: false, error: { code: 'CORS_ORIGIN_FORBIDDEN', message } }`, refused before the body is read or any middleware or route runs |
+| `GET`, `HEAD`                                            | The route runs; CORS headers are withheld, so the other site cannot read the response                                                               |
+
+Every response to an allowlist request carries `Vary: Origin`, the 403s
+included. Each refusal logs `ROUTER_CORS_ORIGIN_BLOCKED` at `warn` (the
+origin truncated to 200 characters; it is never echoed in the response).
+Requests with no `Origin` header (curl, server-to-server calls) are not
+checked.
+
+Browsers send `Origin` on same-origin `POST`s as well, so the site's own pages
+are never refused even when their origin is not on the list. A request counts
+as same-origin when:
+
+- the browser sent `Sec-Fetch-Site: same-origin` (if it sent any other
+  `Sec-Fetch-Site` value, such as `same-site` or `cross-site`, that verdict
+  stands even if the Host matches); or
+- with no `Sec-Fetch-Site`, the `Origin`'s `host:port` equals the request's
+  `Host` header (case-insensitive).
+
+An `Origin` that does not parse, including `null` (sandboxed frames, `file://`),
+never counts as same-origin. Behind a proxy that rewrites `Host`, older
+browsers that send no `Sec-Fetch-Site` fall back to the Host comparison and are
+refused; add the site's public origin to the allowlist to cover them.
+
+`cors: true` and no `cors` at all apply no origin check: every method runs from
+every origin, as before.
+
+CORS is a read-protection mechanism, not a complete CSRF defence. The allowlist
+check above stops forged writes from browsers, but a cookie-authenticated app
+should still use `SameSite=Lax` or `Strict` cookies and, for anything
+sensitive, a CSRF token. The Event Function path (`eventFunction`) does no CORS
+or origin handling at all: configure CORS on API Gateway and check `Origin` /
+`Sec-Fetch-Site` in route middleware if the API uses cookies.
+
 #### eventFunction()
 
 Handle an API Gateway HTTP API (payload format 2.0) event: the Lambda **Event
