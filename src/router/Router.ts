@@ -526,11 +526,13 @@ export default class Router {
       if (forbiddenOrigin) {
         // SECURITY: Withholding CORS headers only stops the other site
         // READING the response. A form post or a `no-cors` fetch still
-        // reaches the route with the visitor's cookies, so anything but a
-        // safe method from an origin off the allowlist is refused here,
-        // before the body is read or a route runs. Preflights are refused
-        // too, so the browser never sends the real request.
-        const safe = req.method === 'GET' || req.method === 'HEAD';
+        // reaches the route with the visitor's cookies, so anything but GET
+        // from an origin off the allowlist is refused here, before the body
+        // is read or a route runs. HEAD is refused too: a HEAD route runs
+        // its handler like any other, and a cross-site page has no use for a
+        // HEAD it cannot read. Preflights are refused as well, so the browser
+        // never sends the real request. Same rule as `Local.EventFunctionProxy`.
+        const safe = req.method === 'GET';
         logger.warn('Blocked cross-origin request from non-allowlisted origin', {
           code: 'ROUTER_CORS_ORIGIN_BLOCKED',
           source: 'Router.nodeJSRequest',

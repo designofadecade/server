@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { createHmac } from 'node:crypto';
 import Router from './Router.ts';
 import Routes from './Routes.ts';
+import { logger } from '../logger/Logger.ts';
 
 describe('Router', () => {
   let router: Router;
@@ -673,6 +674,52 @@ describe('Router', () => {
           'Access-Control-Allow-Credentials',
           'true'
         );
+      });
+
+      it('refuses a HEAD from a non-allowlisted origin, as Local does (only GET is exempt)', async () => {
+        vi.spyOn(logger, 'warn').mockImplementation(() => {});
+        mockReq.method = 'HEAD';
+        mockReq.headers.origin = 'https://evil.example';
+
+        await router.nodeJSRequest(mockReq, mockRes, { cors: allowlist });
+
+        expect(mockRes.statusCode).toBe(403);
+        expect(errorBody().error.code).toBe('CORS_ORIGIN_FORBIDDEN');
+        expect(handler).not.toHaveBeenCalled();
+        expect(mockRes.setHeader).toHaveBeenCalledWith('Vary', 'Origin');
+      });
+
+      it('logs ROUTER_CORS_ORIGIN_BLOCKED, flagging whether the request was refused', async () => {
+        const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+        mockReq.headers.origin = 'https://evil.example';
+
+        await router.nodeJSRequest(mockReq, mockRes, { cors: allowlist });
+        mockReq.method = 'POST';
+        await router.nodeJSRequest(mockReq, mockRes, { cors: allowlist });
+
+        expect(warn).toHaveBeenNthCalledWith(1, expect.any(String), {
+          code: 'ROUTER_CORS_ORIGIN_BLOCKED',
+          source: 'Router.nodeJSRequest',
+          origin: 'https://evil.example',
+          method: 'GET',
+          rejected: false,
+        });
+        expect(warn).toHaveBeenNthCalledWith(
+          2,
+          expect.any(String),
+          expect.objectContaining({ method: 'POST', rejected: true })
+        );
+      });
+
+      it('bounds the logged origin and method', async () => {
+        const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+        mockReq.method = 'POST';
+        mockReq.headers.origin = `https://${'a'.repeat(500)}.example`;
+
+        await router.nodeJSRequest(mockReq, mockRes, { cors: allowlist });
+
+        const fields = warn.mock.calls[0][1] as { origin: string };
+        expect(fields.origin).toHaveLength(200);
       });
 
       it('runs a POST from an allowlisted origin with credentialed CORS headers', async () => {

@@ -536,7 +536,11 @@ export default class Local {
           });
           res.statusCode = 403;
           res.setHeader('Content-Type', 'application/json');
-          if (options.cors === undefined) res.setHeader('Vary', 'Origin');
+          // The answer depends on Origin whenever the mode reflects
+          // origins, so caches must key on it.
+          if (options.cors === undefined || Array.isArray(options.cors)) {
+            res.setHeader('Vary', 'Origin');
+          }
           res.end(
             JSON.stringify({
               success: false,
