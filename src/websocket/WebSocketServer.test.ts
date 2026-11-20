@@ -782,10 +782,8 @@ describe('WebSocketServer', () => {
       expect(() => new WebSocketServer({ authenticate: 'yes' as never })).toThrow('authenticate');
     });
 
-    it.each([0, -1, NaN, Infinity])('should reject authenticateTimeoutMs %s', (timeout) => {
-      expect(() => new WebSocketServer({ authenticateTimeoutMs: timeout })).toThrow(
-        'authenticateTimeoutMs'
-      );
+    it.each([0, -1, NaN, Infinity])('should reject upgradeTimeoutMs %s', (timeout) => {
+      expect(() => new WebSocketServer({ upgradeTimeoutMs: timeout })).toThrow('upgradeTimeoutMs');
     });
 
     it('should install an upgrade gate when allowedOrigins is set', () => {
@@ -882,16 +880,55 @@ describe('WebSocketServer', () => {
         expect(authenticate).not.toHaveBeenCalled();
       });
 
-      it('should refuse with 401 when authenticate outlives authenticateTimeoutMs', async () => {
+      it('should refuse with 401 when authenticate outlives upgradeTimeoutMs', async () => {
         vi.useFakeTimers();
         try {
           const check = gate({
             authenticate: () => new Promise(() => {}),
-            authenticateTimeoutMs: 1000,
+            upgradeTimeoutMs: 1000,
           });
           const pending = check('https://anywhere.example');
           await vi.advanceTimersByTimeAsync(1000);
 
+          await expect(pending).resolves.toEqual({ ok: false, code: 401 });
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it('should refuse with 403 when verifyClient outlives upgradeTimeoutMs', async () => {
+        vi.useFakeTimers();
+        try {
+          const authenticate = vi.fn(() => ({ user: 'a' }));
+          const check = gate({
+            verifyClient: () => new Promise<boolean>(() => {}),
+            authenticate,
+            upgradeTimeoutMs: 1000,
+          });
+          const pending = check('https://anywhere.example');
+          await vi.advanceTimersByTimeAsync(1000);
+
+          await expect(pending).resolves.toEqual({ ok: false, code: 403 });
+          expect(authenticate).not.toHaveBeenCalled();
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it('should share one deadline across verifyClient and authenticate', async () => {
+        vi.useFakeTimers();
+        try {
+          const check = gate({
+            verifyClient: () =>
+              new Promise<boolean>((resolve) => setTimeout(() => resolve(true), 600)),
+            authenticate: () =>
+              new Promise((resolve) => setTimeout(() => resolve({ user: 'a' }), 600)),
+            upgradeTimeoutMs: 1000,
+          });
+          const pending = check('https://anywhere.example');
+          await vi.advanceTimersByTimeAsync(1000);
+
+          // Each stage alone fits, but together they exceed the deadline.
           await expect(pending).resolves.toEqual({ ok: false, code: 401 });
         } finally {
           vi.useRealTimers();

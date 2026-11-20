@@ -52,24 +52,27 @@ new WebSocketServer(options?: WebSocketServerOptions)
   upgrade whose `Origin` is missing or unlisted is refused with 403
 - `verifyClient` (function, optional) - Custom upgrade gate receiving
   `{ origin, secure, req }`; return `false` to refuse. May be async. Runs after the
-  `allowedOrigins` check. Refusal is 403
+  `allowedOrigins` check. A `false` result, a throw, or not settling within
+  `upgradeTimeoutMs` refuses with 403
 - `authenticate` (function, optional) - **The authentication enforcement point.**
   Called as `authenticate(req)` with the HTTP upgrade request, after
   `allowedOrigins` and `verifyClient`, before the socket exists. May be async.
   Return the authenticated identity (any truthy value, e.g. a session or user
-  object) to accept; return a falsy value, throw, reject or exceed
-  `authenticateTimeoutMs` to refuse with `401 Unauthorized`. A refused client never
+  object) to accept; return a falsy value, throw, reject or run past
+  `upgradeTimeoutMs` to refuse with `401 Unauthorized`. A refused client never
   gets a socket, so none of its frames is dispatched. The error is logged, never
   sent to the client. The result is passed with every event from that connection
   (see [Events](#events)) and returned by [`getAuth(ws)`](#getauth)
-- `authenticateTimeoutMs` (number, optional) - How long `authenticate` may take
-  before the upgrade is refused with 401. Default: `10000`
+- `upgradeTimeoutMs` (number, optional) - One deadline for the whole upgrade gate
+  (`verifyClient` then `authenticate`). Past it the upgrade is refused: 403 while
+  `verifyClient` is pending, 401 while `authenticate` is. Without a deadline a check
+  that never settles holds the pending socket open. Default: `10000`
 
 **Throws:**
 
 - `Error` - If port is invalid (not between 1-65535)
 - `Error` - If `maxPayload` is not greater than 0
-- `Error` - If `authenticate` is not a function, or `authenticateTimeoutMs` is not a
+- `Error` - If `authenticate` is not a function, or `upgradeTimeoutMs` is not a
   finite number greater than 0
 
 **Example:**
@@ -409,7 +412,7 @@ Individual client errors are logged but don't affect other connections:
      port: 8080,
      allowedOrigins: ['https://app.example.com'],
      authenticate: async (req) => sessionFrom(req), // Session | null
-     authenticateTimeoutMs: 5000,
+     upgradeTimeoutMs: 5000,
    });
 
    wss.on('message', (parsed, ws, req, session) => {
@@ -418,8 +421,8 @@ Individual client errors are logged but don't affect other connections:
    });
    ```
 
-   `verifyClient` remains available for other upgrade checks (refused with 403);
-   it has no timeout, so keep it fast.
+   `verifyClient` remains available for other upgrade checks (refused with 403).
+   `upgradeTimeoutMs` (default 10 s) bounds both checks together.
 
 4. **Rate Limiting:** Add rate limiting for message handling
 5. **Message Validation:** Always validate message payloads

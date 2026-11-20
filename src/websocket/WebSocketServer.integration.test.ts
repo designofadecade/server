@@ -309,7 +309,7 @@ describe('WebSocketServer integration', () => {
       server = new WebSocketServer({
         port,
         authenticate: () => new Promise(() => {}),
-        authenticateTimeoutMs: 50,
+        upgradeTimeoutMs: 50,
       });
       server.on('error', () => {});
       const onConnection = vi.fn();
@@ -320,6 +320,23 @@ describe('WebSocketServer integration', () => {
 
       expect(outcome).toContain('401');
       expect(Date.now() - started).toBeLessThan(5000);
+      expect(onConnection).not.toHaveBeenCalled();
+    });
+
+    it('should refuse with 403 when verifyClient does not settle within the timeout', async () => {
+      const port = await freePort();
+      server = new WebSocketServer({
+        port,
+        verifyClient: () => new Promise<boolean>(() => {}),
+        upgradeTimeoutMs: 50,
+      });
+      server.on('error', () => {});
+      const onConnection = vi.fn();
+      server.on('connection', onConnection);
+
+      const { outcome } = await attempt(port);
+
+      expect(outcome).toContain('403');
       expect(onConnection).not.toHaveBeenCalled();
     });
 

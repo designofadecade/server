@@ -34,14 +34,15 @@ export interface WebSocketServerOptions {
    */
   allowedOrigins?: string[];
   /**
-   * Custom upgrade gate. Return false to refuse the connection. Runs after the
-   * `allowedOrigins` check when both are supplied.
+   * Custom upgrade gate. Return false to refuse the connection with 403. Runs
+   * after the `allowedOrigins` check when both are supplied. A throw, or not
+   * settling within `upgradeTimeoutMs`, also refuses with 403.
    */
   verifyClient?: (info: WebSocketUpgradeInfo) => boolean | Promise<boolean>;
   /**
    * Authenticates a pending upgrade. Runs after `allowedOrigins` and
-   * `verifyClient`, before the socket exists. A falsy result, a throw or a
-   * timeout (see `authenticateTimeoutMs`) refuses the upgrade with 401, so no
+   * `verifyClient`, before the socket exists. A falsy result, a throw or
+   * running past `upgradeTimeoutMs` refuses the upgrade with 401, so no
    * socket opens and no frame is ever dispatched. A truthy result is kept for
    * the connection: it is passed as the fourth argument of every `message`
    * event (and the third of `connection`), and `getAuth(ws)` returns it.
@@ -52,10 +53,14 @@ export interface WebSocketServerOptions {
    */
   authenticate?: (req: IncomingMessage) => unknown;
   /**
-   * How long `authenticate` may take, in milliseconds, before the upgrade is
-   * refused with 401. Defaults to 10 000.
+   * How long the whole upgrade gate (`verifyClient` then `authenticate`) may
+   * take, in milliseconds. Past it the upgrade is refused: 403 while
+   * `verifyClient` is pending, 401 while `authenticate` is. Defaults to 10 000.
+   *
+   * SECURITY: without a deadline, a check that never settles holds the
+   * pending socket open indefinitely.
    */
-  authenticateTimeoutMs?: number;
+  upgradeTimeoutMs?: number;
   /**
    * Terminate the process with `process.exit(1)` when the server errors.
    * Defaults to false.
@@ -70,8 +75,8 @@ export interface WebSocketServerOptions {
 /** Frames larger than this are rejected unless `maxPayload` overrides it. */
 const DEFAULT_MAX_PAYLOAD = 1024 * 1024;
 
-/** `authenticate` is abandoned, and the upgrade refused, after this long. */
-const DEFAULT_AUTHENTICATE_TIMEOUT_MS = 10_000;
+/** The upgrade gate is abandoned, and the upgrade refused, after this long. */
+const DEFAULT_UPGRADE_TIMEOUT_MS = 10_000;
 
 /** The outcome of the upgrade gate: accepted, or refused with an HTTP status. */
 type GateResult = { accepted: true } | { accepted: false; code: 401 | 403; message: string };
@@ -79,7 +84,7 @@ type GateResult = { accepted: true } | { accepted: false; code: 401 | 403; messa
 const FORBIDDEN: GateResult = { accepted: false, code: 403, message: 'Forbidden' };
 const UNAUTHORIZED: GateResult = { accepted: false, code: 401, message: 'Unauthorized' };
 
-class AuthenticateTimeoutError extends Error {}
+class UpgradeTimeoutError extends Error {}
 
 export default class WebSocketServer extends EventEmitter {
   #wss!: WebSocketServerLibrary;
@@ -88,7 +93,7 @@ export default class WebSocketServer extends EventEmitter {
   #verifyClient: WebSocketServerOptions['verifyClient'] = undefined;
   #exitOnError: boolean = false;
   #authenticate: WebSocketServerOptions['authenticate'] = undefined;
-  #authenticateTimeoutMs: number = DEFAULT_AUTHENTICATE_TIMEOUT_MS;
+  #upgradeTimeoutMs: number = DEFAULT_UPGRADE_TIMEOUT_MS;
 
   /** `authenticate` results, recorded at upgrade time against the request. */
   #pendingAuth = new WeakMap<IncomingMessage, unknown>();
@@ -102,7 +107,7 @@ export default class WebSocketServer extends EventEmitter {
     allowedOrigins,
     verifyClient,
     authenticate,
-    authenticateTimeoutMs = DEFAULT_AUTHENTICATE_TIMEOUT_MS,
+    upgradeTimeoutMs = DEFAULT_UPGRADE_TIMEOUT_MS,
     exitOnError = false,
   }: WebSocketServerOptions = {}) {
     super();
@@ -120,15 +125,13 @@ export default class WebSocketServer extends EventEmitter {
       throw new Error('authenticate must be a function.');
     }
 
-    if (!Number.isFinite(authenticateTimeoutMs) || authenticateTimeoutMs <= 0) {
-      throw new Error(
-        `authenticateTimeoutMs ${authenticateTimeoutMs} is invalid. Must be greater than 0.`
-      );
+    if (!Number.isFinite(upgradeTimeoutMs) || upgradeTimeoutMs <= 0) {
+      throw new Error(`upgradeTimeoutMs ${upgradeTimeoutMs} is invalid. Must be greater than 0.`);
     }
 
     this.#allowedOrigins = allowedOrigins ?? null;
     this.#authenticate = authenticate;
-    this.#authenticateTimeoutMs = authenticateTimeoutMs;
+    this.#upgradeTimeoutMs = upgradeTimeoutMs;
     this.#verifyClient = verifyClient;
     this.#exitOnError = exitOnError;
 
@@ -153,53 +156,81 @@ export default class WebSocketServer extends EventEmitter {
       }
     }
 
-    if (this.#verifyClient) {
-      try {
-        if (!(await this.#verifyClient(info))) {
-          logger.warn('WebSocket upgrade refused by verifyClient', {
-            code: 'WEBSOCKET_UPGRADE_REFUSED',
-            source: 'WebSocketServer.verifyClient',
-          });
-          return FORBIDDEN;
-        }
-      } catch (error: unknown) {
+    // One deadline covers every asynchronous stage of the gate, so a check
+    // that never settles refuses the upgrade instead of holding the socket.
+    let timer: NodeJS.Timeout | undefined;
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new UpgradeTimeoutError()), this.#upgradeTimeoutMs);
+      timer.unref?.();
+    });
+    // Rejections of an abandoned race are expected; never let them surface.
+    deadline.catch(() => {});
+    // Promise.resolve().then() turns a synchronous throw into a rejection.
+    const withinDeadline = <T>(check: () => T): Promise<Awaited<T>> =>
+      Promise.race([Promise.resolve().then(check), deadline]);
+
+    try {
+      if (this.#verifyClient) {
+        const result = await this.#runVerifyClient(info, withinDeadline);
+        if (!result.accepted) return result;
+      }
+
+      if (this.#authenticate) {
+        const result = await this.#runAuthenticate(info.req, withinDeadline);
+        if (!result.accepted) return result;
+      }
+
+      return { accepted: true };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  #logTimeout(stage: 'verifyClient' | 'authenticate'): void {
+    logger.warn(`WebSocket ${stage} timed out, refusing upgrade`, {
+      code: 'WEBSOCKET_UPGRADE_TIMEOUT',
+      source: `WebSocketServer.${stage}`,
+      timeoutMs: this.#upgradeTimeoutMs,
+    });
+  }
+
+  async #runVerifyClient(
+    info: WebSocketUpgradeInfo,
+    withinDeadline: <T>(check: () => T) => Promise<Awaited<T>>
+  ): Promise<GateResult> {
+    try {
+      if (!(await withinDeadline(() => this.#verifyClient!(info)))) {
+        logger.warn('WebSocket upgrade refused by verifyClient', {
+          code: 'WEBSOCKET_UPGRADE_REFUSED',
+          source: 'WebSocketServer.verifyClient',
+        });
+        return FORBIDDEN;
+      }
+      return { accepted: true };
+    } catch (error: unknown) {
+      if (error instanceof UpgradeTimeoutError) {
+        this.#logTimeout('verifyClient');
+      } else {
         logger.error('WebSocket verifyClient threw, refusing upgrade', {
           code: 'WEBSOCKET_VERIFY_CLIENT_ERROR',
           source: 'WebSocketServer.verifyClient',
           error: error instanceof Error ? error : String(error),
         });
-        return FORBIDDEN;
       }
+      return FORBIDDEN;
     }
-
-    if (this.#authenticate) {
-      const result = await this.#runAuthenticate(info.req);
-      if (!result.accepted) return result;
-    }
-
-    return { accepted: true };
   }
 
   /**
-   * Runs `authenticate` under its timeout and records a truthy result against
-   * the request, where the `connection` listener picks it up.
+   * Runs `authenticate` within the upgrade deadline and records a truthy
+   * result against the request, where the `connection` listener picks it up.
    */
-  async #runAuthenticate(req: IncomingMessage): Promise<GateResult> {
-    let timer: NodeJS.Timeout | undefined;
-
+  async #runAuthenticate(
+    req: IncomingMessage,
+    withinDeadline: <T>(check: () => T) => Promise<Awaited<T>>
+  ): Promise<GateResult> {
     try {
-      const timeout = new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(
-          () => reject(new AuthenticateTimeoutError()),
-          this.#authenticateTimeoutMs
-        );
-        timer.unref?.();
-      });
-      // Promise.resolve().then() turns a synchronous throw into a rejection.
-      const auth = await Promise.race([
-        Promise.resolve().then(() => this.#authenticate!(req)),
-        timeout,
-      ]);
+      const auth = await withinDeadline(() => this.#authenticate!(req));
 
       if (!auth) {
         logger.warn('WebSocket upgrade refused by authenticate', {
@@ -212,12 +243,8 @@ export default class WebSocketServer extends EventEmitter {
       this.#pendingAuth.set(req, auth);
       return { accepted: true };
     } catch (error: unknown) {
-      if (error instanceof AuthenticateTimeoutError) {
-        logger.warn('WebSocket authenticate timed out, refusing upgrade', {
-          code: 'WEBSOCKET_AUTHENTICATE_TIMEOUT',
-          source: 'WebSocketServer.authenticate',
-          timeoutMs: this.#authenticateTimeoutMs,
-        });
+      if (error instanceof UpgradeTimeoutError) {
+        this.#logTimeout('authenticate');
       } else {
         logger.error('WebSocket authenticate threw, refusing upgrade', {
           code: 'WEBSOCKET_AUTHENTICATE_ERROR',
@@ -226,8 +253,6 @@ export default class WebSocketServer extends EventEmitter {
         });
       }
       return UNAUTHORIZED;
-    } finally {
-      clearTimeout(timer);
     }
   }
 
