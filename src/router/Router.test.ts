@@ -924,6 +924,35 @@ describe('Router', () => {
       expect(mockRes.statusCode).toBe(500);
     });
 
+    it('treats an ECONNRESET while reading the body as a client abort (debug, no 500)', async () => {
+      const debug = vi.spyOn(logger, 'debug').mockImplementation(() => {});
+      const error = vi.spyOn(logger, 'error').mockImplementation(() => {});
+      class PostRoutes extends Routes {
+        constructor(router: Router) {
+          super(router);
+          this.addRoute('/test', 'POST', async () => ({ status: 200, body: {} }));
+        }
+      }
+      router = new Router({ initRoutes: [PostRoutes] });
+      mockReq.method = 'POST';
+      mockReq.on.mockImplementation((event: string, callback: (error?: Error) => void) => {
+        if (event === 'error') {
+          callback(Object.assign(new Error('aborted'), { code: 'ECONNRESET' }));
+        }
+        return mockReq;
+      });
+
+      await router.nodeJSRequest(mockReq, mockRes);
+
+      expect(mockRes.end).not.toHaveBeenCalled();
+      expect(mockRes.statusCode).toBe(0);
+      expect(error).not.toHaveBeenCalled();
+      expect(debug).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ code: 'ROUTER_CLIENT_ABORTED', method: 'POST' })
+      );
+    });
+
     it('should handle Buffer responses', async () => {
       class BufferRoutes extends Routes {
         constructor(router: Router) {

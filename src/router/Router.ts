@@ -232,10 +232,30 @@ class BodyTooLargeError extends Error {
   }
 }
 
+/** The client went away before its request body was complete. */
+class ClientAbortedError extends Error {
+  constructor() {
+    super('Client aborted the request');
+    this.name = 'ClientAbortedError';
+  }
+}
+
+/**
+ * Connections that were answered 413 and are being closed. Node keeps parsing
+ * what arrives on them, so a request pipelined behind the refused body would
+ * otherwise still reach a route — on a connection already told
+ * `Connection: close`.
+ */
+const refusedConnections = new WeakSet<object>();
+
 export default class Router {
   static MethodsWithBody = ['POST', 'PUT', 'PATCH'];
   static #MAX_CACHE_SIZE = 1000;
   static #DEFAULT_MAX_BODY_BYTES = 1024 * 1024; // 1 MiB
+  /** Most of a refused upload read (and discarded) so the 413 can land. */
+  static #MAX_DRAIN_BYTES = 4 * 1024 * 1024;
+  /** How long a refused upload's connection may linger before it is cut. */
+  static #REFUSED_UPLOAD_LINGER_MS = 2000;
 
   #routes = {
     cache: new Map<string, RouteRegistration | null>(),
@@ -417,6 +437,12 @@ export default class Router {
         typeof body === 'string' &&
         Router.#eventBodyBytes(body, event.isBase64Encoded) > this.#maxBodyBytes
       ) {
+        logger.warn('Refused request body over the size limit', {
+          code: 'ROUTER_PAYLOAD_TOO_LARGE',
+          source: 'Router.eventFunction',
+          method: event.requestContext.http.method,
+          maxBodyBytes: this.#maxBodyBytes,
+        });
         return Router.#payloadTooLargeResult();
       }
 
@@ -495,11 +521,17 @@ export default class Router {
   async nodeJSRequest(
     req: IncomingMessage,
     res: ServerResponse,
-    {
-      cors,
-      proxyOptions,
-    }: { cors?: boolean | string[]; proxyOptions?: Record<string, unknown> } = {}
+    options: { cors?: boolean | string[]; proxyOptions?: Record<string, unknown> } = {}
   ): Promise<void> {
+    const { cors, proxyOptions } = options;
+
+    // SECURITY: a request pipelined behind a refused upload is never served;
+    // its connection is already closing.
+    if (req.socket && refusedConnections.has(req.socket)) {
+      req.resume?.();
+      return;
+    }
+
     if (cors) {
       // SECURITY: Reflecting an arbitrary Origin alongside
       // Access-Control-Allow-Credentials lets any site make cookie-authenticated
@@ -645,13 +677,18 @@ export default class Router {
           method: req.method,
           maxBodyBytes: this.#maxBodyBytes,
         });
-        res.statusCode = 413;
-        res.setHeader('Content-Type', 'application/json');
-        // The rest of the upload is never read, so the connection cannot be
-        // reused: say so, and drop it once the answer is out.
-        res.setHeader('Connection', 'close');
-        res.on('finish', () => req.destroy());
-        res.end(Router.#payloadTooLargeBody());
+        Router.#answerPayloadTooLarge(req, res);
+        return;
+      }
+      if (error instanceof ClientAbortedError) {
+        // The client hung up mid-upload: there is nobody to answer and
+        // nothing went wrong on this side, so no error log and no 500.
+        logger.debug('Client aborted the request before its body was read', {
+          code: 'ROUTER_CLIENT_ABORTED',
+          source: 'Router.nodeJSRequest',
+          ...this.#requestLogFields(requestUrl.pathname),
+          method: req.method,
+        });
         return;
       }
       res.statusCode = 500;
@@ -937,6 +974,75 @@ export default class Router {
     return { lambda: claims };
   }
 
+  /**
+   * Answers 413 to a body over the limit without losing the answer to a TCP
+   * reset. Destroying the socket while unread upload bytes sit in the
+   * kernel's receive buffer makes it send RST, and a client still uploading
+   * (Node's `http.request`, `fetch`, curl) then reports ECONNRESET instead of
+   * the 413. So the response goes out with `Connection: close`, the rest of
+   * the upload is read and discarded — at most `#MAX_DRAIN_BYTES`, then the
+   * connection is cut — and the socket is destroyed after
+   * `#REFUSED_UPLOAD_LINGER_MS` if the client has not closed it by then
+   * (also the fallback when the response never finishes because the client
+   * reads nothing).
+   */
+  static #answerPayloadTooLarge(req: IncomingMessage, res: ServerResponse): void {
+    const socket = req.socket;
+    if (socket) refusedConnections.add(socket);
+    const cut = () => {
+      if (socket && !socket.destroyed) socket.destroy();
+    };
+    const linger = setTimeout(cut, Router.#REFUSED_UPLOAD_LINGER_MS);
+    linger.unref?.();
+    socket?.once?.('close', () => clearTimeout(linger));
+
+    // Lingering close. With `Connection: close`, Node ends the response with
+    // `socket.destroySoon()`, which destroys the socket as soon as the FIN is
+    // flushed — while the client may still be uploading, so the next bytes
+    // to arrive draw a reset that can wipe the unread 413 from the client's
+    // receive buffer. Half-close instead; the drain, the byte cap and the
+    // timer below decide when the socket is actually destroyed.
+    let closeWhenFlushed = cut;
+    if (socket && typeof socket.destroySoon === 'function') {
+      const destroySoon = socket.destroySoon;
+      closeWhenFlushed = () => destroySoon.call(socket);
+      socket.destroySoon = function lingeringClose(this: typeof socket) {
+        if (this.writable) this.end();
+      };
+    }
+
+    let drained = 0;
+    req.on?.('error', () => {});
+    req.on?.('data', (chunk: Buffer | string) => {
+      drained += chunk.length;
+      if (drained > Router.#MAX_DRAIN_BYTES) cut();
+    });
+    // The whole upload has arrived: nothing is left to draw a reset, so the
+    // connection can go once the answer is out.
+    req.on?.('end', () => {
+      if (res.writableFinished) closeWhenFlushed();
+      else res.once?.('finish', closeWhenFlushed);
+    });
+    req.resume?.();
+
+    res.statusCode = 413;
+    res.setHeader('Content-Type', 'application/json');
+    // The connection cannot be reused for another request: say so.
+    res.setHeader('Connection', 'close');
+    res.end(Router.#payloadTooLargeBody());
+  }
+
+  /**
+   * Whether a body-read failure is the client going away (connection reset,
+   * aborted upload) rather than a fault on this side.
+   */
+  static #isClientAbort(req: IncomingMessage, error: unknown): boolean {
+    if ((req as { aborted?: boolean }).aborted === true) return true;
+    if (!(error instanceof Error)) return false;
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === 'ECONNRESET' || code === 'ECONNABORTED' || error.message === 'aborted';
+  }
+
   async #getNodeJSRequestBody(req: IncomingMessage): Promise<unknown> {
     const limit = this.#maxBodyBytes;
     const declared = Number(req.headers['content-length']);
@@ -956,8 +1062,9 @@ export default class Router {
         size += chunk.length;
         if (size > limit) {
           done = true;
-          // Stop buffering but leave the socket alone, so the 413 can still
-          // be written; nodeJSRequest closes the connection after it.
+          // Stop buffering and release what was held; the socket is left to
+          // nodeJSRequest, which answers 413 and then closes it gracefully.
+          chunks.length = 0;
           req.off?.('data', onData);
           req.pause?.();
           reject(new BodyTooLargeError());
@@ -986,15 +1093,30 @@ export default class Router {
       req.on('error', (err) => {
         if (done) return;
         done = true;
-        reject(err);
+        chunks.length = 0;
+        // Only a body-read failure caused by the client hanging up is
+        // classified as an abort; anything else stays a server-side error.
+        reject(Router.#isClientAbort(req, err) ? new ClientAbortedError() : err);
+      });
+      // A connection that closes before 'end' (client gone mid-upload)
+      // would otherwise leave this promise pending for good.
+      req.on?.('close', () => {
+        if (done) return;
+        done = true;
+        chunks.length = 0;
+        reject(new ClientAbortedError());
       });
     });
   }
 
   static #eventBodyBytes(body: string, isBase64Encoded: boolean | undefined): number {
     if (!isBase64Encoded) return Buffer.byteLength(body, 'utf8');
-    const padding = body.endsWith('==') ? 2 : body.endsWith('=') ? 1 : 0;
-    return Math.max(0, Math.floor((body.length * 3) / 4) - padding);
+    // Line breaks (MIME base64 wraps at 76 with CRLF) and other whitespace
+    // carry no data; counting them overstated the size and refused a body
+    // exactly at the limit.
+    const compact = /\s/.test(body) ? body.replace(/\s+/g, '') : body;
+    const padding = compact.endsWith('==') ? 2 : compact.endsWith('=') ? 1 : 0;
+    return Math.max(0, Math.floor((compact.length * 3) / 4) - padding);
   }
 
   static #payloadTooLargeBody(): string {
