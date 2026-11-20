@@ -260,8 +260,10 @@ A check kept in the `connection` handler must be synchronous and use
 `ws.terminate()`, not `ws.close()`. `verifyClient` and `authenticate` now share
 a 10 s `upgradeTimeoutMs`; an upgrade whose checks take longer is refused (403
 while `verifyClient` is pending, 401 while `authenticate` is). Raise
-`upgradeTimeoutMs` if your checks are slow. See
-[docs/websocket.md](./docs/websocket.md).
+`upgradeTimeoutMs` if your checks are slow (at most `2147483647`; a larger
+value now throws). `authenticate` without `allowedOrigins` logs
+`WEBSOCKET_NO_ORIGIN_ALLOWLIST` once: with cookie auth, set `allowedOrigins`.
+See [docs/websocket.md](./docs/websocket.md).
 
 ### 11. `logRequest` logs values only for fields you name
 
@@ -282,7 +284,11 @@ Unlisted fields become `'[REDACTED]'`. Nested keys must be listed too, so
 even when listed. `logBody: true` without a non-empty `bodyFields` logs only
 the summary and warns once. `queryParams` and `pathParams` in log lines are now
 arrays of names unless `paramFields` is set, so update any log queries that
-read their values.
+read their values. Log lines carry `route` (the matched pattern, e.g.
+`/users/:id`) instead of `path`; pass `{ logPath: true }` to `logRequest`,
+`createRequestLogger` or `logResponse` to log the raw path too, and update log
+queries that filter on `path`. `route`, `path` and `userAgent` are cut at 256
+characters.
 
 ### 12. CORS-safelisted content types are not JSON-parsed
 
@@ -314,6 +320,12 @@ Nothing changes if you open your frontend at `localhost`, `127.0.0.1` or
   `file:`/`null`) no longer gets CORS. List it:
   `cors: ['http://192.168.1.20:5173']`. This allowlist also sends
   `Access-Control-Allow-Credentials: true`, as the router does.
+- **Cross-origin writes are refused.** A POST/PUT/PATCH/DELETE or preflight
+  from an origin the `cors` mode does not allow (default and `false`:
+  non-loopback; `string[]`: unlisted and not same-origin) gets
+  `403 CROSS_ORIGIN_FORBIDDEN`, form posts and `no-cors` fetches included.
+  Requests with no `Origin` (curl, scripts) are unaffected. A cross-site GET
+  still runs, so keep GET routes free of side effects.
 - **To restore the old behaviour exactly:** `{ cors: true, allowedHosts: true }`.
   This is unsafe: any website you visit can use the proxy with its injected
   authorizer. Both settings log a warning at startup.

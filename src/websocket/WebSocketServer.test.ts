@@ -782,8 +782,47 @@ describe('WebSocketServer', () => {
       expect(() => new WebSocketServer({ authenticate: 'yes' as never })).toThrow('authenticate');
     });
 
-    it.each([0, -1, NaN, Infinity])('should reject upgradeTimeoutMs %s', (timeout) => {
-      expect(() => new WebSocketServer({ upgradeTimeoutMs: timeout })).toThrow('upgradeTimeoutMs');
+    it.each([0, -1, NaN, Infinity, 2_147_483_648, Number.MAX_SAFE_INTEGER])(
+      'should reject upgradeTimeoutMs %s',
+      (timeout) => {
+        expect(() => new WebSocketServer({ upgradeTimeoutMs: timeout })).toThrow(
+          'upgradeTimeoutMs'
+        );
+      }
+    );
+
+    it('should accept upgradeTimeoutMs at the setTimeout maximum', () => {
+      expect(() => {
+        wsServer = new WebSocketServer({ upgradeTimeoutMs: 2_147_483_647 });
+      }).not.toThrow();
+    });
+
+    describe('WEBSOCKET_NO_ORIGIN_ALLOWLIST warning', () => {
+      const warnings = (options: Record<string, unknown>) => {
+        const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+        try {
+          wsServer = new WebSocketServer(options);
+          return warn.mock.calls.filter(
+            (c) => (c[1] as { code?: string } | undefined)?.code === 'WEBSOCKET_NO_ORIGIN_ALLOWLIST'
+          );
+        } finally {
+          warn.mockRestore();
+        }
+      };
+
+      it('warns once when authenticate is set without allowedOrigins', () => {
+        expect(warnings({ authenticate: () => ({ id: 1 }) })).toHaveLength(1);
+      });
+
+      it('does not warn when allowedOrigins is set', () => {
+        expect(
+          warnings({ authenticate: () => ({ id: 1 }), allowedOrigins: ['https://app.example.com'] })
+        ).toHaveLength(0);
+      });
+
+      it('does not warn without authenticate', () => {
+        expect(warnings({})).toHaveLength(0);
+      });
     });
 
     it('should install an upgrade gate when allowedOrigins is set', () => {

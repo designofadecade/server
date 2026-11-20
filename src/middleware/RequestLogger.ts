@@ -43,7 +43,19 @@ interface RequestEvent {
  * callers).
  */
 export type LoggableRequest = Pick<RouterRequest, 'method' | 'path' | 'headers'> &
-  Partial<Pick<RouterRequest, 'clientIp' | 'requestId' | 'body' | 'query' | 'params'>>;
+  Partial<Pick<RouterRequest, 'clientIp' | 'requestId' | 'body' | 'query' | 'params' | 'route'>>;
+
+/** Options shared by every request logger helper. */
+export interface RequestLogOptions {
+  /**
+   * Also log the raw request `path` (cut at 256 characters). Off by default:
+   * a path can carry secrets (`/reset-password/<token>`) and personal data
+   * (`/users/<email>`), so only the matched route pattern (`route`) is
+   * logged. With no matched route (a 404, or a raw API Gateway event) no path
+   * is logged at all unless this is set.
+   */
+  logPath?: boolean;
+}
 
 interface ResponseObject {
   statusCode?: number;
@@ -56,22 +68,39 @@ interface ResponseObject {
 const isRouterRequest = (value: RequestEvent | LoggableRequest): value is LoggableRequest =>
   typeof (value as LoggableRequest).method === 'string';
 
-function requestFields(request: RequestEvent | LoggableRequest) {
-  const userAgent = request.headers?.['user-agent'];
+/** Longest path or user agent written to a log line. */
+const MAX_LOGGED_HEADER = 256;
+
+/** Bounds a client-controlled value, in the same style as logged body strings. */
+const capField = (value: unknown): string | undefined => {
+  const text = Array.isArray(value) ? value.join(', ') : value;
+  if (typeof text !== 'string') return undefined;
+  return text.length > MAX_LOGGED_HEADER
+    ? `${text.slice(0, MAX_LOGGED_HEADER)}…[truncated, ${text.length} chars]`
+    : text;
+};
+
+function requestFields(request: RequestEvent | LoggableRequest, options: RequestLogOptions) {
+  const userAgent = capField(request.headers?.['user-agent']);
   if (isRouterRequest(request)) {
+    const route = capField(request.route);
     return {
       requestId: request.requestId || 'unknown',
       method: request.method,
-      path: request.path,
+      ...(route !== undefined && { route }),
+      ...(options.logPath && { path: capField(request.path) }),
       sourceIp: request.clientIp || undefined,
-      userAgent: Array.isArray(userAgent) ? userAgent.join(', ') : userAgent,
+      userAgent,
     };
   }
   const event = request as RequestEvent;
   return {
     requestId: event.requestContext?.requestId || 'unknown',
     method: event.httpMethod || event.requestContext?.http?.method,
-    path: event.path || event.requestContext?.http?.path,
+    // A raw event carries no router match, so its path is logged only on request.
+    ...(options.logPath && {
+      path: capField(event.path || event.requestContext?.http?.path),
+    }),
     // API Gateway sets both fields from the TCP connection; neither is read
     // from X-Forwarded-For, which the client controls.
     sourceIp: event.requestContext?.http?.sourceIp ?? event.requestContext?.identity?.sourceIp,
@@ -82,13 +111,18 @@ function requestFields(request: RequestEvent | LoggableRequest) {
 /**
  * Creates a request-scoped logger with HTTP context.
  *
+ * Every line carries the matched route pattern (`route`), not the raw path;
+ * pass `{ logPath: true }` to add the raw `path` as well.
+ *
  * @param request - A `RouterRequest` (preferred), or an API Gateway event
+ * @param options - See {@link RequestLogOptions}
  * @returns Logger with request context
  */
 export function createRequestLogger(
-  request: RequestEvent | LoggableRequest
+  request: RequestEvent | LoggableRequest,
+  options: RequestLogOptions = {}
 ): RequestLoggerInterface {
-  const requestContext = requestFields(request);
+  const requestContext = requestFields(request, options);
 
   return {
     info: (message: string, context: Record<string, any> = {}) => {
@@ -107,7 +141,7 @@ export function createRequestLogger(
 }
 
 /** Options for {@link logRequest}. */
-export interface LogRequestOptions {
+export interface LogRequestOptions extends RequestLogOptions {
   /**
    * Log the body's content. Off by default: only a summary is logged
    * (`{ contentType, bytes }` for a raw body, `{ contentType, fields }` for a
@@ -257,10 +291,11 @@ const fieldSet = (fields: readonly string[] | undefined): ReadonlySet<string> | 
 let warnedLogBodyWithoutFields = false;
 
 /**
- * Logs an incoming request: method, path, client IP, user agent, the names
+ * Logs an incoming request: method, matched route pattern, client IP, user agent, the names
  * of its query and path parameters, and a summary of the body. Body content
  * is logged only with `options.logBody` and a `bodyFields` allowlist;
- * parameter values only for names in `options.paramFields`.
+ * parameter values only for names in `options.paramFields`; the raw path only
+ * with `options.logPath`.
  *
  * @param request - A `RouterRequest` (preferred), or an API Gateway event
  * @param options - See {@link LogRequestOptions}
@@ -269,7 +304,7 @@ export function logRequest(
   request: RequestEvent | LoggableRequest,
   options: LogRequestOptions = {}
 ): void {
-  const requestLogger = createRequestLogger(request);
+  const requestLogger = createRequestLogger(request, options);
   const routerRequest = isRouterRequest(request) ? request : null;
   const event = request as RequestEvent;
 
@@ -307,17 +342,18 @@ export function logRequest(
 /**
  * Middleware to log outgoing responses
  *
- * @param {Object} event - AWS Lambda event
- * @param {Object} response - API response
- * @param {number} durationMs - Request duration in milliseconds
- * @returns {void}
+ * @param request - A `RouterRequest` (preferred), or an API Gateway event
+ * @param response - The route's response or an Event Function result
+ * @param durationMs - Request duration in milliseconds
+ * @param options - See {@link RequestLogOptions}
  */
 export function logResponse(
   request: RequestEvent | LoggableRequest,
   response: ResponseObject,
-  durationMs: number
+  durationMs: number,
+  options: RequestLogOptions = {}
 ): void {
-  const requestLogger = createRequestLogger(request);
+  const requestLogger = createRequestLogger(request, options);
   // `statusCode` for an Event Function result, `status` for a RouterResponse
   // (which defaults to 200 when a route leaves it out).
   const statusCode = response.statusCode ?? response.status ?? 200;

@@ -111,7 +111,19 @@ The proxy is a development server, but it is still reachable from every
 website the developer opens in a browser, and it runs the handler with
 whatever `authorizer` you inject (or one derived from a JWT). **An injected
 authorizer applies to every caller that reaches the proxy**, not just your own
-frontend. Two checks, both on by default, keep other sites out.
+frontend. Three checks are on by default. Together they block, for other
+websites:
+
+- **reading responses**: CORS is granted to loopback origins only;
+- **sending anything but GET/HEAD**: a cross-origin `POST`, `PUT`, `DELETE`,
+  `OPTIONS` preflight and so on from an origin that is not allowed gets `403`
+  before the handler runs (form posts and `no-cors` fetches included);
+- **DNS rebinding**: a request whose `Host` is not a loopback name gets `403`.
+
+They do **not** stop a cross-site `GET` or `HEAD` from running: a link, an
+`<img>` or a `no-cors` fetch still reaches the handler with the injected
+authorizer; only reading the reply is blocked. **GET routes must not have side
+effects.**
 
 ### Host check (DNS rebinding)
 
@@ -151,9 +163,33 @@ warning (`LOCAL_HOST_CHECK_DISABLED`) once when it is created.
 | `true`               | `Access-Control-Allow-Origin: *`. Unsafe: any website can call the proxy and read the responses. Logs `LOCAL_CORS_WILDCARD` once at startup.                                      |
 
 A malformed `Origin`, the opaque `null` origin (sandboxed iframes, `file:`
-pages) and any non-http(s) scheme get no CORS grant. Preflights are answered
-`204` either way; without an `Access-Control-Allow-Origin` the browser blocks
-the real request.
+pages) and any non-http(s) scheme get no CORS grant.
+
+### Cross-origin writes
+
+Withholding CORS headers only stops another site reading the response; a
+browser still sends a form post or a `no-cors` fetch. So, unless `cors: true`,
+a request whose method is not `GET` or `HEAD` (`OPTIONS` included) is refused
+when it is cross-origin from an origin the mode does not allow:
+
+- it carries an `Origin` that is not allowed, or
+- its `Sec-Fetch-Site` is `cross-site` or `same-site` and it carries no allowed
+  `Origin`.
+
+Allowed origins are loopback origins for the default and `cors: false`, and the
+listed origins plus same-origin requests for `cors: string[]`. The refusal runs
+after the Host check and before the body is read:
+
+```json
+{
+  "success": false,
+  "error": { "code": "CROSS_ORIGIN_FORBIDDEN", "message": "Cross-origin request not allowed" }
+}
+```
+
+and is logged as `LOCAL_CROSS_ORIGIN_BLOCKED`. A request with no `Origin` and no
+cross-site `Sec-Fetch-Site` (curl, server-to-server) is not a browser
+cross-origin request and passes. `cors: true` keeps allowing everything.
 
 CORS is enforced by browsers only. A non-browser client on the same machine
 can still call the proxy, and the Host check does not stop it: keep the

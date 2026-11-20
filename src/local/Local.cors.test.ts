@@ -109,13 +109,14 @@ describe('Local.EventFunctionProxy CORS', () => {
       expect(handler).not.toHaveBeenCalled();
     });
 
-    it('answers a foreign preflight with no CORS grant, so the browser blocks it', async () => {
+    it('refuses a foreign preflight with 403 and no CORS grant', async () => {
       const { headers, res } = await run({
         method: 'OPTIONS',
         headers: { origin: 'https://evil.example', 'access-control-request-method': 'DELETE' },
       });
 
-      expect(res.statusCode).toBe(204);
+      expect(res.statusCode).toBe(403);
+      expect(JSON.parse(String(res.body)).error.code).toBe('CROSS_ORIGIN_FORBIDDEN');
       expect(headers['access-control-allow-origin']).toBeUndefined();
       expect(headers['access-control-allow-methods']).toBeUndefined();
     });
@@ -387,4 +388,291 @@ describe('Local.EventFunctionProxy Host check ordering', () => {
       expect(handler).not.toHaveBeenCalled();
     }
   );
+});
+
+describe('Local.EventFunctionProxy cross-origin writes (CSRF)', () => {
+  // The proxy injects an authorizer, so a form post or `no-cors` fetch from a
+  // page the developer has open would act as that identity even though the
+  // page cannot read the reply.
+  const authorizer = { requestContext: { authorizer: { jwt: { claims: { sub: 'admin-id' } } } } };
+
+  const runWithBody = async (
+    { method, headers, body }: { method: string; headers: Record<string, string>; body?: string },
+    options: EventFunctionProxyOptions = authorizer
+  ) => {
+    const handler = vi.fn(async () => ({ statusCode: 200, body: '{"ok":true}' }));
+    const set: Record<string, unknown> = {};
+    const res = {
+      statusCode: 0,
+      body: undefined as unknown,
+      setHeader: vi.fn((name: string, value: unknown) => {
+        set[name.toLowerCase()] = value;
+      }),
+      end: vi.fn((b?: unknown) => {
+        res.body = b;
+      }),
+    };
+    const on = vi.fn((event: string, cb: (chunk?: Buffer) => void) => {
+      if (event === 'data' && body !== undefined) cb(Buffer.from(body));
+      if (event === 'end') cb();
+    });
+    const req = { url: '/x', method, headers: { host: 'localhost:3000', ...headers }, on };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await Local.EventFunctionProxy(handler, options).request(req as any, res as any);
+    return { handler, res, headers: set, on };
+  };
+
+  const forbidden = (res: { statusCode: number; body: unknown }) => {
+    expect(res.statusCode).toBe(403);
+    expect(JSON.parse(String(res.body))).toEqual({
+      success: false,
+      error: { code: 'CROSS_ORIGIN_FORBIDDEN', message: 'Cross-origin request not allowed' },
+    });
+  };
+
+  const evil = { origin: 'https://evil.example', 'sec-fetch-site': 'cross-site' };
+
+  it('refuses the reviewer case: text/plain POST from evil with an injected authorizer', async () => {
+    const { res, handler, on, headers } = await runWithBody({
+      method: 'POST',
+      headers: { ...evil, 'content-type': 'text/plain' },
+      body: '{"action":"delete-everything"}',
+    });
+    forbidden(res);
+    expect(handler).not.toHaveBeenCalled();
+    // Refused before the body is read.
+    expect(on).not.toHaveBeenCalled();
+    expect(headers['access-control-allow-origin']).toBeUndefined();
+  });
+
+  it('refuses a form-urlencoded POST from evil', async () => {
+    const { res, handler } = await runWithBody({
+      method: 'POST',
+      headers: { ...evil, 'content-type': 'application/x-www-form-urlencoded' },
+      body: 'a=1&b=2',
+    });
+    forbidden(res);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('refuses a POST with no body from evil', async () => {
+    const { res, handler } = await runWithBody({ method: 'POST', headers: evil });
+    forbidden(res);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it.each(['PUT', 'DELETE', 'PATCH', 'PROPFIND', 'OPTIONS'])(
+    'refuses %s from evil',
+    async (method) => {
+      const { res, handler } = await runWithBody({ method, headers: evil });
+      forbidden(res);
+      expect(handler).not.toHaveBeenCalled();
+    }
+  );
+
+  it('refuses on Origin alone, without Sec-Fetch-Site', async () => {
+    const { res, handler } = await runWithBody({
+      method: 'POST',
+      headers: { origin: 'https://evil.example' },
+    });
+    forbidden(res);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it.each(['cross-site', 'same-site'])(
+    'refuses Sec-Fetch-Site %s with no Origin (fail closed)',
+    async (site) => {
+      const { res, handler } = await runWithBody({
+        method: 'POST',
+        headers: { 'sec-fetch-site': site },
+      });
+      forbidden(res);
+      expect(handler).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['null', 'http://localhost.evil.example', 'not a url'])(
+    'refuses a POST with Origin %j',
+    async (origin) => {
+      const { res } = await runWithBody({ method: 'POST', headers: { origin } });
+      forbidden(res);
+    }
+  );
+
+  it.each([
+    ['http://localhost:5173', 'same-site'],
+    ['http://127.0.0.1:5173', 'cross-site'],
+    ['http://localhost:3000', 'same-origin'],
+  ])('allows a POST from loopback origin %s (%s)', async (origin, site) => {
+    const { res, handler, headers } = await runWithBody({
+      method: 'POST',
+      headers: { origin, 'sec-fetch-site': site, 'content-type': 'application/json' },
+      body: '{}',
+    });
+    expect(res.statusCode).toBe(200);
+    expect(handler).toHaveBeenCalled();
+    expect(headers['access-control-allow-origin']).toBe(origin);
+  });
+
+  it('allows a POST with no Origin and no Sec-Fetch-Site (curl, server-to-server)', async () => {
+    const { res, handler } = await runWithBody({
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    });
+    expect(res.statusCode).toBe(200);
+    expect(handler).toHaveBeenCalled();
+  });
+
+  it('allows a same-origin POST with Sec-Fetch-Site and no Origin', async () => {
+    const { res } = await runWithBody({
+      method: 'POST',
+      headers: { 'sec-fetch-site': 'same-origin' },
+    });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('still runs a GET from evil, with no Allow-Origin (GET routes must be side-effect free)', async () => {
+    const { res, handler, headers } = await runWithBody({ method: 'GET', headers: evil });
+    expect(res.statusCode).toBe(200);
+    expect(handler).toHaveBeenCalled();
+    expect(headers['access-control-allow-origin']).toBeUndefined();
+  });
+
+  it('still runs a HEAD from evil', async () => {
+    const { handler } = await runWithBody({ method: 'HEAD', headers: evil });
+    expect(handler).toHaveBeenCalled();
+  });
+
+  it('logs the refusal with a bounded origin', async () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    try {
+      const origin = `https://${'a'.repeat(500)}.example`;
+      await runWithBody({ method: 'POST', headers: { origin } });
+      const call = warn.mock.calls.find(
+        (c) => (c[1] as { code?: string })?.code === 'LOCAL_CROSS_ORIGIN_BLOCKED'
+      );
+      expect(call).toBeDefined();
+      expect((call![1] as { origin: string }).origin).toHaveLength(200);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('cors: false refuses foreign writes too', async () => {
+    const { res } = await runWithBody(
+      { method: 'POST', headers: evil },
+      { ...authorizer, cors: false }
+    );
+    forbidden(res);
+  });
+
+  describe('cors: string[]', () => {
+    const options = { ...authorizer, cors: ['https://app.example.test'] };
+
+    it('allows a POST from a listed origin', async () => {
+      const { res, handler, headers } = await runWithBody(
+        {
+          method: 'POST',
+          headers: { origin: 'https://app.example.test', 'sec-fetch-site': 'cross-site' },
+        },
+        options
+      );
+      expect(res.statusCode).toBe(200);
+      expect(handler).toHaveBeenCalled();
+      expect(headers['access-control-allow-credentials']).toBe('true');
+    });
+
+    it('allows a preflight from a listed origin', async () => {
+      const { res, headers } = await runWithBody(
+        { method: 'OPTIONS', headers: { origin: 'https://app.example.test' } },
+        options
+      );
+      expect(res.statusCode).toBe(204);
+      expect(headers['access-control-allow-origin']).toBe('https://app.example.test');
+    });
+
+    it.each(['https://evil.example', 'http://localhost:5173'])(
+      'refuses a POST from unlisted origin %s',
+      async (origin) => {
+        const { res, handler } = await runWithBody(
+          { method: 'POST', headers: { origin, 'sec-fetch-site': 'cross-site' } },
+          options
+        );
+        forbidden(res);
+        expect(handler).not.toHaveBeenCalled();
+      }
+    );
+
+    it('allows a same-origin POST that is not listed', async () => {
+      const { res } = await runWithBody(
+        { method: 'POST', headers: { origin: 'http://localhost:3000' } },
+        options
+      );
+      expect(res.statusCode).toBe(200);
+    });
+  });
+
+  it('cors: true keeps allowing cross-origin writes (explicit, warned opt-in)', async () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    try {
+      const { res, handler, headers } = await runWithBody(
+        { method: 'POST', headers: evil, body: 'x' },
+        { ...authorizer, cors: true }
+      );
+      expect(res.statusCode).toBe(200);
+      expect(handler).toHaveBeenCalled();
+      expect(headers['access-control-allow-origin']).toBe('*');
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('refuses a cross-site POST over a real socket', async () => {
+    const handler = vi.fn(async () => ({ statusCode: 200, body: 'ok' }));
+    const proxy = Local.EventFunctionProxy(handler, authorizer);
+    const server = http.createServer((req, res) => proxy.request(req, res));
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address() as AddressInfo;
+    try {
+      const result = await new Promise<{ status: number; body: string }>((resolve, reject) => {
+        const req = http.request(
+          {
+            host: '127.0.0.1',
+            port,
+            path: '/x',
+            method: 'POST',
+            headers: { host: `localhost:${port}`, ...evil, 'content-type': 'text/plain' },
+          },
+          (res) => {
+            let body = '';
+            res.on('data', (chunk) => (body += chunk));
+            res.on('end', () => resolve({ status: res.statusCode ?? 0, body }));
+          }
+        );
+        req.on('error', reject);
+        req.end('payload');
+      });
+      expect(result.status).toBe(403);
+      expect(JSON.parse(result.body).error.code).toBe('CROSS_ORIGIN_FORBIDDEN');
+      expect(handler).not.toHaveBeenCalled();
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+});
+
+describe('Local.EventFunctionProxy Host refusal log', () => {
+  it('bounds the logged Host to 200 characters', async () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    try {
+      await run({ headers: { host: `${'h'.repeat(500)}.example` } });
+      const call = warn.mock.calls.find(
+        (c) => (c[1] as { code?: string })?.code === 'LOCAL_HOST_NOT_ALLOWED'
+      );
+      expect((call![1] as { host: string }).host).toHaveLength(200);
+    } finally {
+      warn.mockRestore();
+    }
+  });
 });

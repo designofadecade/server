@@ -77,6 +77,8 @@ const DEFAULT_MAX_PAYLOAD = 1024 * 1024;
 
 /** The upgrade gate is abandoned, and the upgrade refused, after this long. */
 const DEFAULT_UPGRADE_TIMEOUT_MS = 10_000;
+/** Largest delay `setTimeout` honours (2^31-1 ms); above it Node fires after 1 ms. */
+const MAX_TIMEOUT_MS = 2_147_483_647;
 
 /** The outcome of the upgrade gate: accepted, or refused with an HTTP status. */
 type GateResult = { accepted: true } | { accepted: false; code: 401 | 403; message: string };
@@ -125,8 +127,27 @@ export default class WebSocketServer extends EventEmitter {
       throw new Error('authenticate must be a function.');
     }
 
-    if (!Number.isFinite(upgradeTimeoutMs) || upgradeTimeoutMs <= 0) {
-      throw new Error(`upgradeTimeoutMs ${upgradeTimeoutMs} is invalid. Must be greater than 0.`);
+    // setTimeout silently treats a delay above 2^31-1 ms as 1 ms, which would
+    // refuse every upgrade almost at once instead of waiting.
+    if (
+      !Number.isFinite(upgradeTimeoutMs) ||
+      upgradeTimeoutMs <= 0 ||
+      upgradeTimeoutMs > MAX_TIMEOUT_MS
+    ) {
+      throw new Error(
+        `upgradeTimeoutMs ${upgradeTimeoutMs} is invalid. Must be greater than 0 and at most ${MAX_TIMEOUT_MS}.`
+      );
+    }
+
+    // SECURITY: browsers send cookies with a cross-site WebSocket upgrade and
+    // apply no same-origin policy to it, so cookie-based `authenticate`
+    // without an origin allowlist lets any site open a socket as the visitor
+    // (cross-site WebSocket hijacking). Say so once, at construction.
+    if (authenticate !== undefined && (allowedOrigins ?? null) === null) {
+      logger.warn(
+        'WebSocketServer has authenticate but no allowedOrigins — if authentication uses cookies, any website can open a socket as the visitor (cross-site WebSocket hijacking)',
+        { code: 'WEBSOCKET_NO_ORIGIN_ALLOWLIST', source: 'WebSocketServer.constructor' }
+      );
     }
 
     this.#allowedOrigins = allowedOrigins ?? null;
