@@ -199,7 +199,7 @@ await server.ready;
 ```
 
 Before switching a deployed function, read
-[docs/deployment-modes.md](./docs/deployment-modes.md): a Web Function
+[docs/deployment-modes.md](https://github.com/designofadecade/server/blob/main/docs/deployment-modes.md): a Web Function
 environment serves many requests concurrently, so module-level per-request state
 that was safe in an Event Function is not safe any more.
 
@@ -264,7 +264,7 @@ while `verifyClient` is pending, 401 while `authenticate` is). Raise
 `upgradeTimeoutMs` if your checks are slow (at most `2147483647`; a larger
 value now throws). `authenticate` without `allowedOrigins` logs
 `WEBSOCKET_NO_ORIGIN_ALLOWLIST` once: with cookie auth, set `allowedOrigins`.
-See [docs/websocket.md](./docs/websocket.md).
+See [docs/websocket.md](https://github.com/designofadecade/server/blob/main/docs/websocket.md).
 
 ### 11. `logRequest` logs values only for fields you name
 

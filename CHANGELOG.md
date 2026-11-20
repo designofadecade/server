@@ -16,7 +16,7 @@ function is a real HTTP/1.1 server), as an Event Function (one API Gateway
 HTTP API v2 event per invocation), and on a plain Node server. The upgrade
 checklist is in [MIGRATION.md](./MIGRATION.md#upgrading-from-10x-to-110);
 the reasoning for choosing a mode is in
-[docs/deployment-modes.md](./docs/deployment-modes.md).
+[docs/deployment-modes.md](https://github.com/designofadecade/server/blob/main/docs/deployment-modes.md).
 
 ### Added
 
@@ -1242,7 +1242,7 @@ console.log(response.body.error.message); // "Failed"
   - Error code preservation for safe errors only
   - 30 comprehensive tests including security scenarios
 - Safe error classes whitelist: ValidationError, ConflictError, NotFoundError, AuthenticationError, AuthorizationError, UserError, BadRequestError, ForbiddenError
-- Complete documentation in [docs/route-error.md](docs/route-error.md) with security features, usage examples, and best practices
+- Complete documentation in [docs/route-error.md](https://github.com/designofadecade/server/blob/main/docs/route-error.md) with security features, usage examples, and best practices
 - Migration examples and real-world usage scenarios
 
 ### Changed
