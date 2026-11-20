@@ -1,5 +1,6 @@
 import { EventEmitter } from 'events';
 import Http, { IncomingMessage, ServerResponse } from 'http';
+import type { Duplex } from 'node:stream';
 import { logger } from '../logger/Logger.js';
 import { answerPayloadTooLarge, isRefusedConnection } from '../router/internal.js';
 
@@ -249,6 +250,10 @@ export default class Server extends EventEmitter {
     const server = Http.createServer(this.#timeouts, dispatch);
     this.#server = server;
 
+    server.on('clientError', (error: NodeJS.ErrnoException, socket: Duplex) =>
+      Server.#onClientError(error, socket)
+    );
+
     const maxBodyBytes = this.#maxBodyBytes;
     if (maxBodyBytes !== undefined) {
       // With a 'checkContinue' listener Node no longer answers
@@ -324,6 +329,64 @@ export default class Server extends EventEmitter {
       this.#resolveReady();
       this.emit('listening', this.address);
     });
+  }
+
+  /** Socket error codes that only mean the client went away. */
+  static readonly #PEER_GONE_CODES = new Set(['ECONNRESET', 'ECONNABORTED', 'EPIPE']);
+
+  /**
+   * A connection-level failure before a request reached the handler, or
+   * while its body was being parsed: malformed or smuggling-style framing
+   * (`HPE_*`), headers too large, a request that missed `requestTimeout`.
+   * Logged at `warn` with Node's error code only — never the raw bytes
+   * (`error.rawPacket`) or anything else the client sent. The answer is
+   * Node's own: `431` for oversized headers, `413` for oversized chunk
+   * extensions, `408` for a timeout, `400` otherwise, written only when the
+   * socket is writable and no response has started on it; then the socket
+   * is destroyed. A client that simply hung up is logged at `debug`.
+   */
+  static #onClientError(error: NodeJS.ErrnoException, socket: Duplex): void {
+    const raw: unknown = error?.code;
+    const errorCode =
+      typeof raw === 'string' ? raw.slice(0, 64).replace(/[^A-Za-z0-9_]/g, '') : 'UNKNOWN';
+
+    if (Server.#PEER_GONE_CODES.has(errorCode)) {
+      logger.debug('Client connection closed with an error', {
+        code: 'SERVER_CLIENT_ERROR',
+        source: 'Server.clientError',
+        errorCode,
+      });
+      socket.destroy();
+      return;
+    }
+
+    logger.warn('Rejected a malformed or timed-out request', {
+      code: 'SERVER_CLIENT_ERROR',
+      source: 'Server.clientError',
+      errorCode,
+    });
+
+    // Node's check: answer only if nothing of a response is on the wire yet,
+    // or the client would read a corrupted message.
+    const inFlight = (socket as Duplex & { _httpMessage?: { _headerSent?: boolean } | null })
+      ._httpMessage;
+    if (socket.writable && !inFlight?._headerSent) {
+      socket.write(Server.#clientErrorResponse(errorCode));
+    }
+    socket.destroy();
+  }
+
+  static #clientErrorResponse(errorCode: string): string {
+    const status =
+      errorCode === 'HPE_HEADER_OVERFLOW' ||
+      errorCode === 'ERR_HTTP_REQUEST_HEADER_FIELDS_TOO_LARGE'
+        ? 431
+        : errorCode === 'HPE_CHUNK_EXTENSIONS_OVERFLOW'
+          ? 413
+          : errorCode === 'ERR_HTTP_REQUEST_TIMEOUT'
+            ? 408
+            : 400;
+    return `HTTP/1.1 ${status} ${Http.STATUS_CODES[status]}\r\nConnection: close\r\n\r\n`;
   }
 
   /**

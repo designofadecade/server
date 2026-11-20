@@ -83,7 +83,9 @@ the reasoning for choosing a mode is in
   default 1 MiB, so local development can refuse (and accept) what the wrapped
   router does.
 - **Log codes `ROUTER_CLIENT_ABORTED`** (`debug`: the client disconnected
-  while its body was being read) **and `SERVER_PAYLOAD_TOO_LARGE`** (`warn`).
+  while its body was being read), **`SERVER_PAYLOAD_TOO_LARGE`** (`warn`)
+  **and `SERVER_CLIENT_ERROR`** (`warn`: Node rejected a malformed or
+  timed-out request; `debug` when the client only reset the connection).
 - **`RouterOptions.logPath`** — adds the raw path (query removed, cut at 256
   characters) to the router's own error logs, which otherwise carry only
   `route` (see Security).
@@ -354,6 +356,12 @@ Every item is a rename unless marked otherwise. There are no aliases.
   with `--ignore-scripts`. Every action is pinned to a commit SHA, checkouts
   do not persist the token, and a tag that does not match `package.json` is
   refused.
+- **Malformed requests (bad chunked encoding, oversized headers, request
+  timeouts) are logged at `warn` as `SERVER_CLIENT_ERROR`; Node's
+  `400`/`408`/`431` answers are kept.** They reached no log above `debug`, so
+  request-smuggling probes and slow-client attacks went unseen. The log
+  carries Node's error code only (`errorCode`), never the raw request bytes.
+  A client that simply reset the connection is logged at `debug`.
 
 ### Fixed
 

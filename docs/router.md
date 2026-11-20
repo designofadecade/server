@@ -154,6 +154,9 @@ answered `413 PAYLOAD_TOO_LARGE` before a route runs.
 
 A client that disconnects while its body is being read is logged at `debug`
 as `ROUTER_CLIENT_ABORTED` and no response is written; it is not an error.
+A body Node cannot parse (bad chunked framing, a body cut short) or one that
+misses the server's `requestTimeout` ends the same way here; `Server` logs
+those at `warn` as `SERVER_CLIENT_ERROR`.
 
 **Example:**
 

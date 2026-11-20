@@ -336,18 +336,30 @@ try {
 
 ### Log codes
 
-| Code                       | When                                                                    |
-| -------------------------- | ----------------------------------------------------------------------- |
-| `SERVER_PORT_IN_USE`       | The port is already in use (`EADDRINUSE`)                               |
-| `SERVER_ERROR`             | Any other server error                                                  |
-| `SERVER_CLOSE_ERROR`       | `close()` failed                                                        |
-| `SERVER_PAYLOAD_TOO_LARGE` | An `Expect: 100-continue` body over `maxBodyBytes` was refused (`warn`) |
+| Code                       | When                                                                              |
+| -------------------------- | --------------------------------------------------------------------------------- |
+| `SERVER_PORT_IN_USE`       | The port is already in use (`EADDRINUSE`)                                         |
+| `SERVER_ERROR`             | Any other server error                                                            |
+| `SERVER_CLOSE_ERROR`       | `close()` failed                                                                  |
+| `SERVER_PAYLOAD_TOO_LARGE` | An `Expect: 100-continue` body over `maxBodyBytes` was refused (`warn`)           |
+| `SERVER_CLIENT_ERROR`      | Node rejected a malformed or timed-out request (`warn`); a client reset (`debug`) |
 
 The `413` the server sends for that refusal carries `error.code`
 `PAYLOAD_TOO_LARGE` in its body, as the router's does, and closes the
 connection the same way: the connection is marked so a request pipelined
 behind the refused body is never handed to `requestHandler`, and a client that
 sends the body anyway still reads the `413` rather than a reset.
+
+`SERVER_CLIENT_ERROR` covers what Node's parser or timers reject before (or
+while) a request reaches the handler: malformed or smuggling-style framing
+(`HPE_INVALID_CHUNK_SIZE`, `HPE_STRICT`, a body cut short), oversized headers
+and `requestTimeout`/`headersTimeout`. The log carries only Node's code, as
+`errorCode`, never the raw bytes. Node's answers are kept: `431` for oversized
+headers, `413` for oversized chunk extensions, `408` for a timeout, `400`
+otherwise, each with `Connection: close`, written only when no response has
+started on the connection. A client that reset the connection
+(`ECONNRESET`, `ECONNABORTED`, `EPIPE`) gets nothing and is logged at
+`debug`.
 
 ## Integration with Router
 
