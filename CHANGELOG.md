@@ -7,37 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Security
-
-- **`WebSocketServer` messages could not be tied to the connection that sent
-  them (moderate).** Every client's frames were emitted as a bare `message` event,
-  so authentication done in the `connection` handler could not keep a refused
-  client's frames away from `message` listeners or `EventsManager` handlers, and no
-  handler could authorize the sender. Worse, `ws` keeps delivering frames from a
-  socket after `ws.close()` until the peer answers the close frame (up to 30 s), so
-  a client refused with `close()` could keep reaching handlers. Now:
-  - `message` is emitted as `(parsed, ws, req)` — the sending socket and its
-    upgrade request — and `EventsManager` passes them to every handler as
-    `handler(msg, ws, req)`. Existing one-argument listeners are unaffected.
-  - Frames from a socket that is no longer `OPEN` are dropped, so closing or
-    terminating a client in the `connection` handler stops its messages at once.
-    **Behaviour change:** frames that arrive after the server has started closing
-    a socket are no longer emitted.
-
-- **`logRequest` no longer logs text bodies.** A body that was not JSON (a
-  form-encoded login, multipart, plain text, a base64 event body) was logged
-  as a raw string. The logger redacts secrets by object key, and a string has
-  no keys, so passwords and tokens in such a body reached the log verbatim. It
-  is now logged as `[text body omitted, N chars]`. JSON object and array
-  bodies are logged and redacted as before.
-
-### Documentation
-
-- `docs/websocket.md` and `docs/events-manager.md` describe the new `message` /
-  handler arguments, and name `verifyClient` as the place for asynchronous
-  authentication: frames that arrive while an asynchronous check in the
-  `connection` handler is pending are still delivered.
-
 ## [11.0.0] - 2026-11-19
 
 Adds the AWS Lambda **Web Function** deployment model and renames the existing
@@ -155,6 +124,40 @@ Every item is a rename unless marked otherwise. There are no aliases.
 - **`RequestLogger` reads `sourceIp` from API Gateway's request context**
   (`http.sourceIp` for format 2.0, `identity.sourceIp` for 1.0) and never from
   `X-Forwarded-For`.
+
+- **`HtmlSanitizer.clean` attribute parsing is linear (ReDoS).** The
+  attribute regex required a quoted value after every name, so a long run of
+  name characters with no `=` inside an allowed tag was rescanned from every
+  position: one ~1 MB tag blocked the event loop for minutes. A bare name is now
+  consumed once and skipped. The attributes kept are identical.
+- **Bodies with a CORS-safelisted content type are never JSON-parsed (CSRF).**
+  Both body parsers parsed any `Content-Type` containing `application/json`,
+  including `text/plain;application/json`, which a browser sends cross-site
+  with cookies and no preflight. A body whose MIME type is `text/plain`,
+  `application/x-www-form-urlencoded` or `multipart/form-data` is now left as a
+  string. Every other content type parses exactly as before. CORS is not a CSRF
+  defence: cookie-authenticated apps still need SameSite cookies, an
+  Origin/`Sec-Fetch-Site` check or CSRF tokens for form-style requests.
+- **`WebSocketServer` messages could not be tied to the connection that sent
+  them (moderate).** Every client's frames were emitted as a bare `message` event,
+  so authentication done in the `connection` handler could not keep a refused
+  client's frames away from `message` listeners or `EventsManager` handlers, and no
+  handler could authorize the sender. Worse, `ws` keeps delivering frames from a
+  socket after `ws.close()` until the peer answers the close frame (up to 30 s), so
+  a client refused with `close()` could keep reaching handlers. Now:
+  - `message` is emitted as `(parsed, ws, req)` — the sending socket and its
+    upgrade request — and `EventsManager` passes them to every handler as
+    `handler(msg, ws, req)`. Existing one-argument listeners are unaffected.
+  - Frames from a socket that is no longer `OPEN` are dropped, so closing or
+    terminating a client in the `connection` handler stops its messages at once.
+    **Behaviour change:** frames that arrive after the server has started closing
+    a socket are no longer emitted.
+- **`logRequest` no longer logs text bodies.** A body that was not JSON (a
+  form-encoded login, multipart, plain text, a base64 event body) was logged
+  as a raw string. The logger redacts secrets by object key, and a string has
+  no keys, so passwords and tokens in such a body reached the log verbatim. It
+  is now logged as `[text body omitted, N chars]`. JSON object and array
+  bodies are logged and redacted as before.
 
 ### Fixed
 

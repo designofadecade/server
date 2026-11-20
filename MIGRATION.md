@@ -220,6 +220,35 @@ finished resolves immediately, and `server.server` is `null` after close.
 Code that called `close()` twice and swallowed `ERR_SERVER_NOT_RUNNING` can
 drop the catch.
 
+### 10. WebSocket `message` listeners receive the sender
+
+```bash
+grep -rn "on('message'\|EventsManager\|\.register(" --include="*.ts" --include="*.js" src packages | grep -v node_modules
+```
+
+`WebSocketServer` now emits `message` as `(parsed, ws, req)`, and
+`EventsManager` calls handlers as `handler(msg, ws, req)`. One-argument
+listeners are unaffected; a handler that already took an optional second
+parameter, or logs all its arguments, now receives the socket there. Frames
+from a socket the server has started closing are dropped. Do asynchronous
+authentication in `verifyClient`; a `connection` listener that refuses a
+client must do so synchronously (`ws.terminate()`), or check `ws`/`req` in each
+handler. See [docs/websocket.md](./docs/websocket.md).
+
+### 11. `logRequest` omits text bodies
+
+A request body that is not JSON (form-encoded, multipart, plain text, base64)
+is now logged as `[text body omitted, N chars]` instead of verbatim. JSON
+object and array bodies are logged and redacted by key as before. Nothing to
+change unless a log query relied on raw text bodies.
+
+### 12. CORS-safelisted content types are not JSON-parsed
+
+A body sent as `text/plain`, `application/x-www-form-urlencoded` or
+`multipart/form-data` reaches the route as a string even if the header also
+contains `application/json` (for example `text/plain;application/json`).
+Legitimate JSON clients send `application/json` and are unaffected.
+
 ---
 
 ## Upgrading from 6.x to 10.x
