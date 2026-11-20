@@ -99,8 +99,10 @@ Every item is a rename unless marked otherwise. There are no aliases.
   missing or malformed `Host` gets `403 HOST_NOT_ALLOWED`, and only loopback
   origins get CORS (reflected, `Vary: Origin`, no credentials). Opt hosts in
   with `allowedHosts: [...]` and origins with `cors: [...]`. Cross-origin
-  requests other than GET/HEAD from origins that are not allowed get
-  `403 CROSS_ORIGIN_FORBIDDEN`. (behaviour, see Security)
+  requests other than GET (HEAD included) from origins that are not allowed,
+  and form-typed or untyped-body writes with neither `Origin` nor
+  `Sec-Fetch-Site`, get `403 CROSS_ORIGIN_FORBIDDEN`. (behaviour, see
+  Security)
 - **`cors: string[]` refuses cross-origin writes** from origins that are
   neither on the list nor same-origin: `403 CORS_ORIGIN_FORBIDDEN`.
   (behaviour, see Security)
@@ -108,6 +110,11 @@ Every item is a rename unless marked otherwise. There are no aliases.
   type and size and the names of query and path parameters. New options
   `logBody` + `bodyFields` and `paramFields`. The request helpers log the
   matched `route` pattern instead of the raw `path` unless `logPath: true`.
+  (behaviour, see Security)
+- **The router's own error log lines carry `route`, not the raw path**
+  (handler errors, 404s, request failures), and the 404 message is now
+  `Route not found` (it named the method and path). New router option
+  `logPath: true` adds the path, query removed, cut at 256 characters.
   (behaviour, see Security)
 - **`WebSocketServer` refuses upgrades whose checks run past
   `upgradeTimeoutMs`** (default 10 000 ms), including a `verifyClient` that
@@ -191,6 +198,13 @@ Every item is a rename unless marked otherwise. There are no aliases.
   `path` is logged only with the new `logPath: true` option, and with no
   matched route (404, raw API Gateway events) no path is logged without it.
   `route`, `path` and `userAgent` are cut at 256 characters.
+- **The router's error logs no longer carry the raw path.** Handler errors
+  (`ROUTER_HANDLER_ERROR`), 404s and `nodeJSRequest`/`eventFunction` failures
+  logged `request.path`, and on Node `req.url` with its query string, through
+  `RouteError.fromError`; the 404 message (logged with its stack) named the
+  path too. They now log `route`, the matched pattern, and no path when none
+  matched. `new Router({ logPath: true })` opts the path back in, without the
+  query string and cut at 256 characters, as `RequestLogger` does.
 - **The CORS allowlist rejects, not just logs** (F2). With `cors: string[]`, a
   request whose `Origin` is neither on the list nor same-origin gets
   `403 CORS_ORIGIN_FORBIDDEN` for preflights and every method but GET/HEAD,
@@ -216,14 +230,24 @@ Every item is a rename unless marked otherwise. There are no aliases.
   port ignored; `true` disables the check). Both unsafe settings log a warning
   at startup. `EventFunctionProxyOptions` is now exported. Withholding CORS
   only blocks reading, so unless `cors: true` a cross-origin request that is
-  not GET/HEAD (preflights included) is refused with
+  not GET (HEAD and preflights included) is refused with
   `403 CROSS_ORIGIN_FORBIDDEN` before the body is read or the handler runs,
   when its `Origin` is not allowed (default/`false`: not loopback;
   `string[]`: unlisted and not same-origin), or its `Sec-Fetch-Site` is
   `cross-site`/`same-site` without an allowed `Origin`. This stops form posts
   and `no-cors` fetches from other sites acting as the injected authorizer.
-  Requests with no `Origin` (curl) pass; cross-site GETs still run, so GET
-  routes must not have side effects. The logged Host of a refusal is cut at
+  Only GET is exempt: a cross-site HEAD runs the handler too and is refused.
+  A request with neither `Origin` nor `Sec-Fetch-Site` (an older browser's
+  form post looks like this) is refused when its `Content-Type` is a form
+  type (`application/x-www-form-urlencoded`, `multipart/form-data`,
+  `text/plain`) or it has a body with no `Content-Type`; curl and
+  server-to-server calls with `application/json`, or with no body and no
+  type, pass. With `allowedHosts: true`, `Sec-Fetch-Site: same-origin` and
+  the Origin-equals-Host fallback count only for a loopback Origin, so a
+  DNS-rebinding page cannot write through `cors: [...]`'s same-origin rule.
+  Any loopback origin on any port may write by default; list origins with
+  `cors: [...]` to narrow that. Cross-site GETs still run, so GET routes must
+  not have side effects. The logged Host of a refusal is cut at
   200 characters.
 - **`WebSocketServer` `authenticate` option** (F3). `authenticate(req)` runs at
   upgrade time, after `allowedOrigins` and `verifyClient`. A falsy result, a
