@@ -36,15 +36,16 @@ interface ParsedMessage {
 
 /**
  * The sender arguments that follow the message on a WebSocketServer 'message'
- * event: the `ws` WebSocket that sent the frame and its upgrade request. `ws`
- * is typed loosely so these typings do not require `@types/ws`.
+ * event: the `ws` WebSocket that sent the frame, its upgrade request and, when
+ * the server has an `authenticate` option, that connection's authenticate
+ * result. `ws` is typed loosely so these typings do not require `@types/ws`.
  */
-type MessageSender = [ws?: any, req?: IncomingMessage];
+type MessageSender = [ws?: any, req?: IncomingMessage, auth?: unknown];
 
 /**
  * Handles one message type. `ws` and `req` identify the connection that sent
- * it, so a handler can authorize the sender. They are undefined if the
- * registered server does not supply them.
+ * it, and `auth` is its `authenticate` result, so a handler can authorize the
+ * sender. They are undefined if the registered server does not supply them.
  */
 type EventHandler = (
   parsedMessage: ParsedMessage,
@@ -124,7 +125,7 @@ export default class EventsManager {
   #registerWebSocketServer(wss: any): void {
     this.#wss = wss;
 
-    // `args` is the sender (ws, req), forwarded to handlers exactly as the
+    // `args` is the sender (ws, req[, auth]), forwarded to handlers exactly as the
     // server emitted it.
     this.#messageListener = async (parsedMessage: ParsedMessage, ...args: MessageSender) => {
       try {

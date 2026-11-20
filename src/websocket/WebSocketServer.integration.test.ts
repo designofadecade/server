@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import net from 'node:net';
 import { WebSocket } from 'ws';
 import WebSocketServer from './WebSocketServer.ts';
+import EventsManager from '../events/EventsManager.ts';
 
 /**
  * Integration tests that open real WebSocket connections.
@@ -243,6 +244,222 @@ describe('WebSocketServer integration', () => {
       clients.forEach((client) => client.close());
 
       expect(seen).toEqual({ 'user-a': 'user-a', 'user-b': 'user-b' });
+    });
+  });
+
+  describe('authenticate', () => {
+    /** Opens a client, sends `frames` as soon as it opens, resolves with the outcome. */
+    const attempt = (
+      port: number,
+      headers: Record<string, string> = {},
+      frames: object[] = []
+    ): Promise<{ outcome: string; client: WebSocket }> =>
+      new Promise((resolve) => {
+        const client = new WebSocket(`ws://127.0.0.1:${port}`, { headers });
+        client.on('open', () => {
+          frames.forEach((frame) => client.send(JSON.stringify(frame)));
+          resolve({ outcome: 'connected', client });
+        });
+        client.on('error', (error: Error) =>
+          resolve({ outcome: `refused: ${error.message}`, client })
+        );
+      });
+
+    it('should refuse a falsy result with 401 before any socket opens', async () => {
+      const port = await freePort();
+      server = new WebSocketServer({ port, authenticate: async () => null });
+      server.on('error', () => {});
+      const onConnection = vi.fn();
+      const onMessage = vi.fn();
+      server.on('connection', onConnection);
+      server.on('message', onMessage);
+
+      const { outcome } = await attempt(port, {}, [{ type: 'doc:update', payload: {} }]);
+      expect(outcome).toContain('401');
+
+      expect(onConnection).not.toHaveBeenCalled();
+      expect(onMessage).not.toHaveBeenCalled();
+      expect(server.clientCount).toBe(0);
+    });
+
+    it('should refuse with 401 when authenticate throws or rejects', async () => {
+      const port = await freePort();
+      server = new WebSocketServer({
+        port,
+        authenticate: (req) => {
+          if (req.headers['x-mode'] === 'sync') throw new Error('boom');
+          return Promise.reject(new Error('boom'));
+        },
+      });
+      server.on('error', () => {});
+      const onConnection = vi.fn();
+      server.on('connection', onConnection);
+
+      await expect(attempt(port, { 'x-mode': 'sync' })).resolves.toMatchObject({
+        outcome: expect.stringContaining('401'),
+      });
+      await expect(attempt(port, { 'x-mode': 'async' })).resolves.toMatchObject({
+        outcome: expect.stringContaining('401'),
+      });
+      expect(onConnection).not.toHaveBeenCalled();
+    });
+
+    it('should refuse with 401 when authenticate does not settle within the timeout', async () => {
+      const port = await freePort();
+      server = new WebSocketServer({
+        port,
+        authenticate: () => new Promise(() => {}),
+        authenticateTimeoutMs: 50,
+      });
+      server.on('error', () => {});
+      const onConnection = vi.fn();
+      server.on('connection', onConnection);
+
+      const started = Date.now();
+      const { outcome } = await attempt(port);
+
+      expect(outcome).toContain('401');
+      expect(Date.now() - started).toBeLessThan(5000);
+      expect(onConnection).not.toHaveBeenCalled();
+    });
+
+    it('should open the socket only after authenticate resolves, so no unauthenticated frame is dispatched', async () => {
+      const port = await freePort();
+      let resolved = false;
+      server = new WebSocketServer({
+        port,
+        authenticate: async (req) => {
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          resolved = true;
+          return { user: req.headers['x-test-user'] };
+        },
+      });
+      server.on('error', () => {});
+
+      const seen: { resolvedAtConnection?: boolean; auth: unknown[] } = { auth: [] };
+      server.on('connection', () => {
+        seen.resolvedAtConnection = resolved;
+      });
+      const delivered = new Promise<void>((resolve) => {
+        server?.on('message', (_parsed, _ws, _req, auth) => {
+          seen.auth.push(auth);
+          if (seen.auth.length === 3) resolve();
+        });
+      });
+
+      const frame = { type: 'doc:update', payload: {} };
+      const { outcome, client } = await attempt(port, { 'x-test-user': 'user-a' }, [
+        frame,
+        frame,
+        frame,
+      ]);
+      expect(outcome).toBe('connected');
+      await delivered;
+      client.close();
+
+      expect(seen.resolvedAtConnection).toBe(true);
+      // Every dispatched frame carries the result: none arrived before it existed.
+      expect(seen.auth).toEqual([{ user: 'user-a' }, { user: 'user-a' }, { user: 'user-a' }]);
+    });
+
+    it('should expose each connection its own result on message, connection, getAuth and EventsManager handlers', async () => {
+      const port = await freePort();
+      server = new WebSocketServer({
+        port,
+        authenticate: (req) => {
+          const user = req.headers['x-test-user'];
+          return typeof user === 'string' ? { user } : null;
+        },
+      });
+      server.on('error', () => {});
+
+      const atConnection: unknown[] = [];
+      server.on('connection', (_ws, _req, auth) => atConnection.push(auth));
+
+      const fromServer: Record<string, unknown> = {};
+      const fromGetAuth: Record<string, unknown> = {};
+      const fromManager: Record<string, unknown> = {};
+      const events = new EventsManager({ registerWebSocketServer: server });
+      const allSeen = new Promise<void>((resolve) => {
+        const check = () => {
+          if (Object.keys(fromServer).length === 2 && Object.keys(fromManager).length === 2) {
+            resolve();
+          }
+        };
+        server?.on('message', (parsed, ws, _req, auth) => {
+          fromServer[parsed.payload.claimed] = auth;
+          fromGetAuth[parsed.payload.claimed] = server?.getAuth(ws);
+          check();
+        });
+        events.registerEvents([
+          {
+            type: 'doc:update',
+            handler: (msg, _ws, _req, auth) => {
+              fromManager[msg.payload.claimed] = auth;
+              check();
+            },
+          },
+        ]);
+      });
+
+      // user-b claims to be user-a in the payload; only the auth result is trusted.
+      const clients = await Promise.all([
+        attempt(port, { 'x-test-user': 'user-a' }, [
+          { type: 'doc:update', payload: { claimed: 'from-a' } },
+        ]),
+        attempt(port, { 'x-test-user': 'user-b' }, [
+          { type: 'doc:update', payload: { claimed: 'from-b' } },
+        ]),
+      ]);
+      await allSeen;
+      clients.forEach(({ client }) => client.close());
+      events.close();
+
+      const expected = { 'from-a': { user: 'user-a' }, 'from-b': { user: 'user-b' } };
+      expect(fromServer).toEqual(expected);
+      expect(fromGetAuth).toEqual(expected);
+      expect(fromManager).toEqual(expected);
+      expect(atConnection).toEqual(
+        expect.arrayContaining([{ user: 'user-a' }, { user: 'user-b' }])
+      );
+    });
+
+    it('should run after the origin allowlist, which still refuses with 403', async () => {
+      const port = await freePort();
+      const authenticate = vi.fn(() => ({ user: 'x' }));
+      server = new WebSocketServer({
+        port,
+        allowedOrigins: ['https://app.example.com'],
+        authenticate,
+      });
+      server.on('error', () => {});
+
+      await expect(connect(port, 'https://evil.example')).resolves.toContain('403');
+      expect(authenticate).not.toHaveBeenCalled();
+      await expect(connect(port, 'https://app.example.com')).resolves.toBe('connected');
+      expect(authenticate).toHaveBeenCalledTimes(1);
+    });
+
+    it('should leave events unchanged without authenticate', async () => {
+      const port = await freePort();
+      server = new WebSocketServer({ port });
+      server.on('error', () => {});
+
+      const connectionArgs = new Promise<unknown[]>((resolve) =>
+        server?.on('connection', (...args) => resolve(args))
+      );
+      const messageArgs = new Promise<unknown[]>((resolve) =>
+        server?.on('message', (...args) => resolve(args))
+      );
+
+      const { outcome, client } = await attempt(port, {}, [{ type: 'doc:update', payload: {} }]);
+      expect(outcome).toBe('connected');
+      const [conn, msg] = await Promise.all([connectionArgs, messageArgs]);
+      expect(server.getAuth(conn[0] as WebSocket)).toBeUndefined();
+      client.close();
+
+      expect(conn).toHaveLength(2);
+      expect(msg).toHaveLength(3);
     });
   });
 });

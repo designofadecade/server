@@ -29,10 +29,16 @@ import type { IncomingMessage } from 'http';
 
 /**
  * `ws` (the `ws` WebSocket, typed loosely so these typings do not require
- * `@types/ws`) and `req` identify the connection that sent the message, so a
- * handler can authorize the sender. See EventsManager.
+ * `@types/ws`) and `req` identify the connection that sent the message, and
+ * `auth` is its WebSocketServer `authenticate` result, so a handler can
+ * authorize the sender. See EventsManager.
  */
-type EventHandler = (parsedMessage: any, ws?: any, req?: IncomingMessage) => void | Promise<void>;
+type EventHandler = (
+  parsedMessage: any,
+  ws?: any,
+  req?: IncomingMessage,
+  auth?: unknown
+) => void | Promise<void>;
 
 interface EventRegistration {
   type: string;

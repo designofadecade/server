@@ -39,6 +39,24 @@ export interface WebSocketServerOptions {
    */
   verifyClient?: (info: WebSocketUpgradeInfo) => boolean | Promise<boolean>;
   /**
+   * Authenticates a pending upgrade. Runs after `allowedOrigins` and
+   * `verifyClient`, before the socket exists. A falsy result, a throw or a
+   * timeout (see `authenticateTimeoutMs`) refuses the upgrade with 401, so no
+   * socket opens and no frame is ever dispatched. A truthy result is kept for
+   * the connection: it is passed as the fourth argument of every `message`
+   * event (and the third of `connection`), and `getAuth(ws)` returns it.
+   *
+   * SECURITY: this is the enforcement point for authentication. Do not
+   * authenticate asynchronously in the `connection` handler: frames that arrive
+   * while such a check is pending are dispatched.
+   */
+  authenticate?: (req: IncomingMessage) => unknown;
+  /**
+   * How long `authenticate` may take, in milliseconds, before the upgrade is
+   * refused with 401. Defaults to 10 000.
+   */
+  authenticateTimeoutMs?: number;
+  /**
    * Terminate the process with `process.exit(1)` when the server errors.
    * Defaults to false.
    *
@@ -52,12 +70,30 @@ export interface WebSocketServerOptions {
 /** Frames larger than this are rejected unless `maxPayload` overrides it. */
 const DEFAULT_MAX_PAYLOAD = 1024 * 1024;
 
+/** `authenticate` is abandoned, and the upgrade refused, after this long. */
+const DEFAULT_AUTHENTICATE_TIMEOUT_MS = 10_000;
+
+/** The outcome of the upgrade gate: accepted, or refused with an HTTP status. */
+type GateResult = { accepted: true } | { accepted: false; code: 401 | 403; message: string };
+
+const FORBIDDEN: GateResult = { accepted: false, code: 403, message: 'Forbidden' };
+const UNAUTHORIZED: GateResult = { accepted: false, code: 401, message: 'Unauthorized' };
+
+class AuthenticateTimeoutError extends Error {}
+
 export default class WebSocketServer extends EventEmitter {
   #wss!: WebSocketServerLibrary;
 
   #allowedOrigins: string[] | null = null;
   #verifyClient: WebSocketServerOptions['verifyClient'] = undefined;
   #exitOnError: boolean = false;
+  #authenticate: WebSocketServerOptions['authenticate'] = undefined;
+  #authenticateTimeoutMs: number = DEFAULT_AUTHENTICATE_TIMEOUT_MS;
+
+  /** `authenticate` results, recorded at upgrade time against the request. */
+  #pendingAuth = new WeakMap<IncomingMessage, unknown>();
+  /** `authenticate` results of open connections. */
+  #auth = new WeakMap<WebSocket, unknown>();
 
   constructor({
     port = 8080,
@@ -65,6 +101,8 @@ export default class WebSocketServer extends EventEmitter {
     maxPayload = DEFAULT_MAX_PAYLOAD,
     allowedOrigins,
     verifyClient,
+    authenticate,
+    authenticateTimeoutMs = DEFAULT_AUTHENTICATE_TIMEOUT_MS,
     exitOnError = false,
   }: WebSocketServerOptions = {}) {
     super();
@@ -78,7 +116,19 @@ export default class WebSocketServer extends EventEmitter {
       throw new Error(`maxPayload ${maxPayload} is invalid. Must be greater than 0.`);
     }
 
+    if (authenticate !== undefined && typeof authenticate !== 'function') {
+      throw new Error('authenticate must be a function.');
+    }
+
+    if (!Number.isFinite(authenticateTimeoutMs) || authenticateTimeoutMs <= 0) {
+      throw new Error(
+        `authenticateTimeoutMs ${authenticateTimeoutMs} is invalid. Must be greater than 0.`
+      );
+    }
+
     this.#allowedOrigins = allowedOrigins ?? null;
+    this.#authenticate = authenticate;
+    this.#authenticateTimeoutMs = authenticateTimeoutMs;
     this.#verifyClient = verifyClient;
     this.#exitOnError = exitOnError;
 
@@ -89,7 +139,7 @@ export default class WebSocketServer extends EventEmitter {
    * Decides whether a pending upgrade may proceed. Refusals are logged with the
    * offending origin so hijacking attempts are visible.
    */
-  async #shouldAccept(info: WebSocketUpgradeInfo): Promise<boolean> {
+  async #shouldAccept(info: WebSocketUpgradeInfo): Promise<GateResult> {
     if (this.#allowedOrigins) {
       const { origin } = info;
 
@@ -99,7 +149,7 @@ export default class WebSocketServer extends EventEmitter {
           source: 'WebSocketServer.verifyClient',
           origin: origin ?? null,
         });
-        return false;
+        return FORBIDDEN;
       }
     }
 
@@ -110,7 +160,7 @@ export default class WebSocketServer extends EventEmitter {
             code: 'WEBSOCKET_UPGRADE_REFUSED',
             source: 'WebSocketServer.verifyClient',
           });
-          return false;
+          return FORBIDDEN;
         }
       } catch (error: unknown) {
         logger.error('WebSocket verifyClient threw, refusing upgrade', {
@@ -118,11 +168,75 @@ export default class WebSocketServer extends EventEmitter {
           source: 'WebSocketServer.verifyClient',
           error: error instanceof Error ? error : String(error),
         });
-        return false;
+        return FORBIDDEN;
       }
     }
 
-    return true;
+    if (this.#authenticate) {
+      const result = await this.#runAuthenticate(info.req);
+      if (!result.accepted) return result;
+    }
+
+    return { accepted: true };
+  }
+
+  /**
+   * Runs `authenticate` under its timeout and records a truthy result against
+   * the request, where the `connection` listener picks it up.
+   */
+  async #runAuthenticate(req: IncomingMessage): Promise<GateResult> {
+    let timer: NodeJS.Timeout | undefined;
+
+    try {
+      const timeout = new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new AuthenticateTimeoutError()),
+          this.#authenticateTimeoutMs
+        );
+        timer.unref?.();
+      });
+      // Promise.resolve().then() turns a synchronous throw into a rejection.
+      const auth = await Promise.race([
+        Promise.resolve().then(() => this.#authenticate!(req)),
+        timeout,
+      ]);
+
+      if (!auth) {
+        logger.warn('WebSocket upgrade refused by authenticate', {
+          code: 'WEBSOCKET_UNAUTHENTICATED',
+          source: 'WebSocketServer.authenticate',
+        });
+        return UNAUTHORIZED;
+      }
+
+      this.#pendingAuth.set(req, auth);
+      return { accepted: true };
+    } catch (error: unknown) {
+      if (error instanceof AuthenticateTimeoutError) {
+        logger.warn('WebSocket authenticate timed out, refusing upgrade', {
+          code: 'WEBSOCKET_AUTHENTICATE_TIMEOUT',
+          source: 'WebSocketServer.authenticate',
+          timeoutMs: this.#authenticateTimeoutMs,
+        });
+      } else {
+        logger.error('WebSocket authenticate threw, refusing upgrade', {
+          code: 'WEBSOCKET_AUTHENTICATE_ERROR',
+          source: 'WebSocketServer.authenticate',
+          error: error instanceof Error ? error : String(error),
+        });
+      }
+      return UNAUTHORIZED;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /**
+   * The `authenticate` result of an open connection, or undefined when the
+   * socket is unknown or no `authenticate` option is set.
+   */
+  getAuth(ws: WebSocket): unknown {
+    return this.#auth.get(ws);
   }
 
   get clientCount(): number {
@@ -130,7 +244,10 @@ export default class WebSocketServer extends EventEmitter {
   }
 
   #init(port: number, host: string, maxPayload: number): void {
-    const needsGate = this.#allowedOrigins !== null || this.#verifyClient !== undefined;
+    const needsGate =
+      this.#allowedOrigins !== null ||
+      this.#verifyClient !== undefined ||
+      this.#authenticate !== undefined;
 
     this.#wss = new WebSocketServerLibrary({
       port,
@@ -146,7 +263,9 @@ export default class WebSocketServer extends EventEmitter {
                 origin: info.origin,
                 secure: info.secure,
                 req: info.req,
-              }).then((accepted) => (accepted ? done(true) : done(false, 403, 'Forbidden')));
+              }).then((result) =>
+                result.accepted ? done(true) : done(false, result.code, result.message)
+              );
             },
           }
         : {}),
@@ -189,17 +308,39 @@ export default class WebSocketServer extends EventEmitter {
     });
 
     this.#wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
+      // With `authenticate`, every connection reaching here passed it, and its
+      // result travels with the connection's events as a trailing argument.
+      // Without it the events keep their original arity.
+      const authenticated = this.#authenticate !== undefined;
+      // Fail closed: a socket that did not come through the gate with a
+      // recorded result is dropped at once. terminate(), not close(), so a
+      // peer that never answers a close frame cannot linger.
+      if (authenticated && !this.#pendingAuth.has(req)) {
+        logger.error('WebSocket connection without an authenticate result, terminating', {
+          code: 'WEBSOCKET_UNAUTHENTICATED_CONNECTION',
+          source: 'WebSocketServer.connection',
+        });
+        ws.terminate();
+        return;
+      }
+      const auth = authenticated ? this.#pendingAuth.get(req) : undefined;
+      if (authenticated) {
+        this.#pendingAuth.delete(req);
+        this.#auth.set(ws, auth);
+      }
+      const authArgs: unknown[] = authenticated ? [auth] : [];
+
       logger.info('WebSocket client connected', {
         source: 'WebSocketServer.connection',
         clientCount: this.clientCount,
       });
 
       // Re-emitted with the upgrade request so consumers can read headers and
-      // cookies for their own authentication. A listener that refuses the
-      // client must close or terminate it synchronously: frames that arrive
-      // while an asynchronous check here is pending are still delivered, so
-      // asynchronous authentication belongs in `verifyClient`.
-      this.emit('connection', ws, req);
+      // cookies. A listener that refuses the client must terminate it
+      // synchronously: frames that arrive while an asynchronous check here is
+      // pending are still delivered, so authentication belongs in the
+      // `authenticate` option, which runs before the socket exists.
+      this.emit('connection', ws, req, ...authArgs);
 
       ws.send(
         WebSocketMessageFormatter.format('ws:connected', {
@@ -238,7 +379,7 @@ export default class WebSocketServer extends EventEmitter {
           // The sending socket and its upgrade request travel with every
           // message, so handlers can tell connections apart and authorize the
           // sender instead of acting on any client's frame.
-          this.emit('message', parsed, ws, req);
+          this.emit('message', parsed, ws, req, ...authArgs);
         } catch (error: any) {
           logger.error('Message handling error', {
             code: 'WEBSOCKET_MESSAGE_ERROR',
@@ -254,6 +395,7 @@ export default class WebSocketServer extends EventEmitter {
       });
 
       ws.on('close', () => {
+        this.#auth.delete(ws);
         logger.info('WebSocket client disconnected', {
           source: 'WebSocketServer.onClose',
           clientCount: this.clientCount,
