@@ -73,7 +73,8 @@ new WebSocketServer(options?: WebSocketServerOptions)
 - `Error` - If port is invalid (not between 1-65535)
 - `Error` - If `maxPayload` is not greater than 0
 - `Error` - If `authenticate` is not a function, or `upgradeTimeoutMs` is not a
-  finite number greater than 0
+  finite number greater than 0 and at most `2147483647` (the largest delay
+  `setTimeout` honours)
 
 **Example:**
 
@@ -107,6 +108,12 @@ wss.on('message', (parsed, ws, req, session) => {
 >
 > Non-browser clients send no `Origin` header at all and are refused when
 > `allowedOrigins` is set; gate those with `verifyClient` instead.
+>
+> Constructing a server with `authenticate` but no `allowedOrigins` logs a warning
+> (`WEBSOCKET_NO_ORIGIN_ALLOWLIST`) once. If `authenticate` reads a cookie (or
+> anything else the browser attaches by itself), that combination is exploitable:
+> set `allowedOrigins`. If it only accepts a token the client must send explicitly
+> (e.g. in a subprotocol or query parameter), the warning can be ignored.
 
 ### Properties
 
