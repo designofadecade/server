@@ -3,6 +3,7 @@ import { isIP } from 'node:net';
 import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { logger } from '../logger/Logger.js';
 import RouteError from './RouteError.js';
+import { isCorsSafelistedContentType, isSameOriginRequest } from './origin.js';
 import type { ContextLike } from '../context/Context.js';
 
 /**
@@ -350,34 +351,6 @@ export default class Router {
   }
 
   /**
-   * MIME essences a browser may send cross-site without a CORS preflight
-   * (the Fetch standard's CORS-safelisted request-header rule for
-   * `Content-Type`).
-   */
-  static #CORS_SAFELISTED_CONTENT_TYPES = new Set([
-    'text/plain',
-    'application/x-www-form-urlencoded',
-    'multipart/form-data',
-  ]);
-
-  /**
-   * SECURITY: Whether a request Content-Type is one a cross-site page can
-   * send without a preflight. The JSON check below is a substring match, so
-   * `text/plain;application/json` used to be parsed as JSON even though its
-   * MIME essence is `text/plain` — letting a forged, cookie-carrying request
-   * from any site hand a route a parsed object. Bodies declared with one of
-   * these essences are never JSON-parsed. Only a single string header can
-   * come from a browser (API Gateway and Node both deliver `content-type` as
-   * one string), so an array, possible only in a hand-built Lambda event,
-   * keeps its previous handling.
-   */
-  static #isCorsSafelistedContentType(contentType: string | string[] | undefined): boolean {
-    if (typeof contentType !== 'string') return false;
-    const essence = contentType.split(';', 1)[0].trim().toLowerCase();
-    return Router.#CORS_SAFELISTED_CONTENT_TYPES.has(essence);
-  }
-
-  /**
    * Strip trailing slashes, keeping a lone "/" intact.
    *
    * `replace(/\/+$/, '')` looks equivalent but is quadratic: the anchored `+`
@@ -449,7 +422,7 @@ export default class Router {
 
       if (
         event.headers['content-type']?.includes('application/json') &&
-        !Router.#isCorsSafelistedContentType(event.headers['content-type']) &&
+        !isCorsSafelistedContentType(event.headers['content-type']) &&
         body
       ) {
         try {
@@ -519,31 +492,6 @@ export default class Router {
     }
   }
 
-  /**
-   * Browsers send `Origin` on same-origin POSTs too, so an allowlist that
-   * lacks the site's own origin must not refuse its own pages. A request is
-   * same-origin when the browser says so (`Sec-Fetch-Site`, which page script
-   * cannot set) or when the Origin's host:port equals the Host header. A
-   * cross-site page cannot make the two match: its visitor's browser sends
-   * the target's Host and the page's own Origin.
-   *
-   * Fails closed: when the browser sent `Sec-Fetch-Site` with any other value
-   * (`same-site`, `cross-site`, `none`), its verdict stands even if the Host
-   * happens to match; an Origin that does not parse (including `null`) never
-   * matches.
-   */
-  static #isSameOriginRequest(req: IncomingMessage, origin: string): boolean {
-    const fetchSite = req.headers['sec-fetch-site'];
-    if (fetchSite !== undefined) return fetchSite === 'same-origin';
-    const host = req.headers.host;
-    if (!host) return false;
-    try {
-      return new URL(origin).host.toLowerCase() === host.toLowerCase();
-    } catch {
-      return false;
-    }
-  }
-
   async nodeJSRequest(
     req: IncomingMessage,
     res: ServerResponse,
@@ -568,7 +516,7 @@ export default class Router {
         if (requestOrigin && cors.includes(requestOrigin)) {
           res.setHeader('Access-Control-Allow-Origin', requestOrigin);
           res.setHeader('Access-Control-Allow-Credentials', 'true');
-        } else if (requestOrigin && !Router.#isSameOriginRequest(req, requestOrigin)) {
+        } else if (requestOrigin && !isSameOriginRequest(req.headers, requestOrigin)) {
           forbiddenOrigin = true;
         }
       } else {
@@ -1022,7 +970,7 @@ export default class Router {
         const body = Buffer.concat(chunks).toString('utf8');
         if (
           req.headers['content-type']?.includes('application/json') &&
-          !Router.#isCorsSafelistedContentType(req.headers['content-type'])
+          !isCorsSafelistedContentType(req.headers['content-type'])
         ) {
           try {
             resolve(JSON.parse(body));

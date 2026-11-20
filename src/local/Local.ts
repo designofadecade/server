@@ -21,6 +21,7 @@
  */
 
 import Router from '../router/Router.js';
+import { isCorsSafelistedContentType, isSameOriginRequest } from '../router/origin.js';
 import Routes from '../router/Routes.js';
 import type { RouterRequest, RouterResponse } from '../router/Router.js';
 import { logger } from '../logger/Logger.js';
@@ -124,43 +125,21 @@ function isLoopbackOrigin(origin: string): boolean {
 }
 
 /**
- * Whether a request is same-origin with the backend it reached. A browser's
- * `Sec-Fetch-Site` is authoritative when present; otherwise the Origin's host
- * must equal the Host header. Mirrors the router's same-origin test.
+ * Whether a request is same-origin with the backend it reached: the router's
+ * own test (`Sec-Fetch-Site` when present, else Origin host equals Host).
  *
  * With the Host check off (`allowedHosts: true`) neither signal can be
  * trusted for a non-loopback Origin: a DNS-rebinding page is same-origin with
  * the backend as far as its browser knows, and its Origin host equals the Host
  * it sends. Only a loopback Origin can then count as same-origin.
  */
-function isSameOriginRequest(req: IncomingMessage, origin: string, hostCheckOff: boolean): boolean {
+function isSameOriginLocalRequest(
+  req: IncomingMessage,
+  origin: string,
+  hostCheckOff: boolean
+): boolean {
   if (hostCheckOff && !isLoopbackOrigin(origin)) return false;
-  const fetchSite = req.headers['sec-fetch-site'];
-  if (fetchSite !== undefined) return fetchSite === 'same-origin';
-  const host = req.headers.host;
-  if (typeof host !== 'string' || !host) return false;
-  try {
-    return new URL(origin).host.toLowerCase() === host.toLowerCase();
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Request body types a page can send cross-site without a CORS preflight
- * (an HTML form, or a `no-cors` fetch). Compared on the MIME essence, as the
- * router does.
- */
-const CORS_SAFELISTED_CONTENT_TYPES = new Set([
-  'application/x-www-form-urlencoded',
-  'multipart/form-data',
-  'text/plain',
-]);
-
-function isCorsSafelistedContentType(contentType: string | undefined): boolean {
-  if (typeof contentType !== 'string') return false;
-  const essence = contentType.split(';', 1)[0].trim().toLowerCase();
-  return CORS_SAFELISTED_CONTENT_TYPES.has(essence);
+  return isSameOriginRequest(req.headers, origin);
 }
 
 function hasRequestBody(req: IncomingMessage): boolean {
@@ -196,7 +175,7 @@ function isForbiddenCrossOriginWrite(
   const allowed =
     origin !== undefined &&
     (Array.isArray(cors)
-      ? cors.includes(origin) || isSameOriginRequest(req, origin, hostCheckOff)
+      ? cors.includes(origin) || isSameOriginLocalRequest(req, origin, hostCheckOff)
       : isLoopbackOrigin(origin));
   if (origin !== undefined && !allowed) return true;
   // SECURITY (fail closed): a browser that says the request is cross-site or
