@@ -10,22 +10,36 @@ on:
 permissions:
   contents: read
 
+# Actions are pinned to full commit SHAs (the comment names the release) so a
+# moved or compromised tag cannot change what runs with publish credentials.
+#
+# The job that installs dependencies never holds publish credentials: `npm ci`
+# runs every dependency's install scripts, so it runs in `build` with a
+# read-only token and no OIDC. `publish` gets `id-token: write` but installs
+# nothing and runs no scripts; it only publishes the tarball `build` packed.
 jobs:
-  publish-npm:
+  build:
     runs-on: ubuntu-latest
     permissions:
-      # Creating the GitHub Release.
-      contents: write
-      # Trusted Publishing (OIDC) and npm provenance attestations.
-      id-token: write
+      contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24'
-          registry-url: 'https://registry.npmjs.org'
+
+      - name: Check tag matches package version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          if [ "v${version}" != "${GITHUB_REF_NAME}" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match package.json version ${version}"
+            exit 1
+          fi
 
       - name: Install dependencies
         run: npm ci
@@ -36,12 +50,51 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Publish to npm (Trusted Publishing)
-        run: npm publish --provenance --access public
+      # Already built above; --ignore-scripts keeps pack from running hooks.
+      - name: Pack
+        run: |
+          mkdir -p pack
+          npm pack --ignore-scripts --pack-destination pack
 
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: package
+          path: pack/*.tgz
+          if-no-files-found: error
+          retention-days: 7
+
+  publish-npm:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      # Trusted Publishing (OIDC) and npm provenance attestations.
+      id-token: write
+      contents: read
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: package
+          path: pack
+
+      - name: Publish to npm (Trusted Publishing)
+        run: npm publish pack/*.tgz --provenance --access public --ignore-scripts
+
+  github-release:
+    needs: publish-npm
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      # Creating the GitHub Release.
+      contents: write
+    steps:
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3
-        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
           generate_release_notes: true
         env:
