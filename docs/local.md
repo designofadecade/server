@@ -140,7 +140,7 @@ Anything else, including a missing or malformed `Host`, gets `403`:
 { "success": false, "error": { "code": "HOST_NOT_ALLOWED", "message": "Host not allowed" } }
 ```
 
-The check runs first, for every method (`OPTIONS` and `HEAD` included), before
+The refusal is logged as `LOCAL_HOST_NOT_ALLOWED`. The check runs first, for every method (`OPTIONS` and `HEAD` included), before
 the body is read, the authorizer is derived or the handler runs. It blocks
 DNS rebinding: an attacker re-points their own domain at `127.0.0.1`, and the
 browser then treats your backend as same-origin with their page, but it still

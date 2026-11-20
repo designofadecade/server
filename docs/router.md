@@ -141,8 +141,8 @@ nodeJSRequest(
 for transport shims such as `Local.EventFunctionProxy` and is not needed by
 ordinary applications.
 
-Request bodies are capped at 1 MB; larger bodies are rejected before a route
-runs.
+Request bodies are capped at `maxBodyBytes` (default 1 MiB); a larger body is
+answered `413 PAYLOAD_TOO_LARGE` before a route runs.
 
 **Example:**
 
@@ -631,11 +631,27 @@ See [RouteError documentation](./route-error.md) for comprehensive security feat
 
 ### Error Codes
 
-All router errors include codes for monitoring:
+Log lines written by the router carry a `code` for monitoring:
 
-- `ROUTER_ERROR` - General routing errors
-- `ROUTER_JWT_DECODE_ERROR` - JWT decoding failures
-- `ROUTER_HANDLER_ERROR` - Handler execution errors
+- `ROUTE_ERROR` - Any error answered through `RouteError.fromError` (404s,
+  authorization failures, invalid JSON bodies, transport failures); the line's
+  `source` says where it came from
+- `ROUTER_HANDLER_ERROR` - A route handler threw (logged with `ROUTE_ERROR`'s
+  fields, `code` overridden)
+- `ROUTER_PAYLOAD_TOO_LARGE` - A body over `maxBodyBytes` was refused on the
+  Node transport
+- `ROUTER_CORS_ORIGIN_BLOCKED` - A cross-origin request from an origin not on
+  the `cors` allowlist was refused
+- `ROUTER_INVALID_REQUEST_URL` - A request with an unparseable URL or `Host`
+  header was refused
+- `ROUTER_JWT_ALG_NOT_ALLOWED`, `ROUTER_JWT_BAD_SIGNATURE`,
+  `ROUTER_JWT_EXPIRED`, `ROUTER_JWT_VERIFY_FAILED` - A bearer token was
+  rejected (algorithm, signature, expiry, custom verifier)
+- `STATIC_FILE_ERROR` - `StaticFileHandler` failed to read a file
+
+Error responses the router itself sends carry `error.code` in the body:
+`PAYLOAD_TOO_LARGE` (413), `CORS_ORIGIN_FORBIDDEN` (403) and
+`INVALID_REQUEST` (400).
 
 ## Performance
 
@@ -649,7 +665,12 @@ The router implements intelligent caching:
 
 ### Body Size Limits
 
-- Maximum request body on the Node path (`nodeJSRequest`, so plain server and Web Function): 1 MB. Larger bodies are rejected. Not currently configurable.
+- Maximum request body: `maxBodyBytes` (`RouterOptions`), default 1 MiB, on
+  both transports (`nodeJSRequest`, so plain server and Web Function, and
+  `eventFunction`, measured after base64 decoding). A larger body gets
+  `413 PAYLOAD_TOO_LARGE` before any middleware or route runs; on the Node
+  transport an oversized `Content-Length` is refused without reading the body,
+  with `Connection: close`.
 - JWT claims are exposed only after verification: configure `jwt` (see `RouterOptions`); there is no decode-without-verify helper.
 
 ## Best Practices

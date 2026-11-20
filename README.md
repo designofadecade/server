@@ -177,29 +177,35 @@ See [WebSocket](docs/websocket.md#security-considerations) for the security mode
 ```typescript
 import { StaticFileHandler } from '@designofadecade/server';
 
-const staticHandler = new StaticFileHandler({
-  rootDir: './public',
+const staticHandler = new StaticFileHandler('./public', {
   cacheControl: 'public, max-age=3600',
 });
 
-await staticHandler.serve(request, response, '/assets/style.css');
+// Resolves to { status, headers, body }; paths outside ./public get 403.
+const response = await staticHandler.serve('/assets/style.css');
 ```
 
 ### Event System
 
+`EventsManager` routes WebSocket messages to handlers by their `type`:
+
 ```typescript
-import { Events, EventsManager } from '@designofadecade/server';
+import { Events, EventsManager, WebSocketServer } from '@designofadecade/server';
 
-const events = new Events();
-const manager = new EventsManager(events);
+class UserEvents extends Events {
+  constructor(manager: EventsManager) {
+    super(manager);
+    this.addListener('user:login', async (msg, ws, req, auth) => {
+      manager.broadcast('user:online', msg.payload);
+    });
+  }
+}
 
-// Subscribe to events
-manager.on('user:login', (data) => {
-  console.log('User logged in:', data);
+const wss = new WebSocketServer({ port: 8080, allowedOrigins: ['https://app.example.com'] });
+const manager = new EventsManager({
+  registerWebSocketServer: wss,
+  initEvents: [UserEvents],
 });
-
-// Emit events
-events.emit('user:login', { userId: 123, timestamp: Date.now() });
 ```
 
 ## Documentation

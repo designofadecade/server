@@ -78,13 +78,13 @@ const server = new Server({ port: 3000 }, router.nodeJSRequest.bind(router));
 ```typescript
 import WebSocketServer from '@designofadecade/server/websocket';
 import EventsManager from '@designofadecade/server/events';
-import Events from '@designofadecade/server/events/Events';
+import { Events } from '@designofadecade/server';
 
 // Define event handlers
 class ChatEvents extends Events {
   constructor(manager) {
     super(manager);
-    this.addEvent('chat:message', this.handleMessage);
+    this.addListener('chat:message', this.handleMessage.bind(this));
   }
 
   async handleMessage(msg) {
@@ -229,7 +229,7 @@ Which one? See [Deployment Modes](./deployment-modes.md).
 - Route caching for fast lookups
 - Efficient WebSocket broadcasting
 - Configurable request timeouts
-- Body size limits (1MB default)
+- Request body limit (`maxBodyBytes`, 1 MiB default, `413` above it)
 
 ### 🔒 Security
 
@@ -439,7 +439,7 @@ io.on('connection', (socket) => {
 class ChatEvents extends Events {
   constructor(manager) {
     super(manager);
-    this.addEvent('chat:message', this.handleMessage);
+    this.addListener('chat:message', this.handleMessage.bind(this));
   }
 
   async handleMessage(msg) {
