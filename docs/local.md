@@ -44,8 +44,9 @@ http
   .createServer((req, res) => {
     localHandler.request(req, res);
   })
-  .listen(3000, () => {
-    console.log('Local Event Function server listening on port 3000');
+  // Loopback only: other machines cannot even connect.
+  .listen(3000, '127.0.0.1', () => {
+    console.log('Local Event Function server listening on http://127.0.0.1:3000');
   });
 ```
 
@@ -69,7 +70,10 @@ Creates a proxy that wraps an Event Function handler for local development.
   - `requestContext` (object) - Additional `requestContext` fields merged into every event
   - `event` (object) - Additional top-level event fields merged into every event
   - `cors` (`boolean | string[]`, optional) - Cross-origin access. Default:
-    loopback origins only. See [Security: CORS and Host](#security-cors-and-host)
+    loopback origins only. See [Security: peer, Host and CORS](#security-peer-host-and-cors)
+  - `allowedPeers` (`string[] | true`, optional) - Client IP addresses or CIDR
+    ranges to serve besides this machine. Default: loopback peers only. See
+    [Peer check](#peer-check)
   - `allowedHosts` (`string[] | true`, optional) - Extra `Host` names to serve
     besides loopback ones. Default: loopback only. See below
   - `maxBodyBytes` (number, optional) - Largest request body accepted, in
@@ -111,14 +115,16 @@ const handler = Local.EventFunctionProxy(
 );
 ```
 
-## Security: CORS and Host
+## Security: peer, Host and CORS
 
-The proxy is a development server, but it is still reachable from every
-website the developer opens in a browser, and it runs the handler with
-whatever `authorizer` you inject (or one derived from a JWT). **An injected
-authorizer applies to every caller that reaches the proxy**, not just your own
-frontend. Three checks are on by default. Together they block, for other
-websites:
+The proxy is a development server, but it runs the handler with whatever
+`authorizer` you inject (or one derived from a JWT). **An injected authorizer
+applies to every caller that reaches the proxy**, not just your own frontend.
+Four checks are on by default.
+
+The first keeps other machines out: only a client connecting from this
+machine (a loopback peer) is served. The other three block, for other
+websites open in your browser:
 
 - **reading responses**: CORS is granted to loopback origins only;
 - **sending anything but GET**: a cross-origin `POST`, `PUT`, `DELETE`,
@@ -136,6 +142,46 @@ In the default mode any loopback origin on any port (including `*.localhost`)
 may write, so another local app with an XSS hole can drive the proxy; list
 your frontend's origins with `cors: [...]` to narrow that.
 
+### Peer check
+
+A request is served only when its TCP peer (`req.socket.remoteAddress`) is a
+loopback address: `127.0.0.0/8`, `::1`, or `::ffff:127.x.x.x` (what a
+dual-stack server reports for an IPv4 loopback client). This is decided from
+the socket, never from the `Host` header: any machine on the network can send
+`Host: localhost`. Any other peer, or a socket with no address, gets `403`:
+
+```json
+{ "success": false, "error": { "code": "PEER_NOT_ALLOWED", "message": "Peer not allowed" } }
+```
+
+The refusal is logged as `LOCAL_PEER_NOT_ALLOWED` with the peer address (cut
+at 64 characters) and the method. It runs before anything else: the Host
+check, CORS, reading the body, deriving the authorizer and the handler.
+
+Bind the server to loopback as well (`listen(3000, '127.0.0.1')`), so other
+machines cannot even connect; `listen(3000)` alone binds every interface.
+
+Tunnels such as cloudflared or ngrok connect to the proxy from this machine,
+so they pass the peer check and need only their name in `allowedHosts`.
+
+To let another device in (a phone on your LAN, a second laptop), list its
+address or a range, bind an interface it can reach, and add the name it uses
+to `allowedHosts`:
+
+```typescript
+const local = Local.EventFunctionProxy(handler, {
+  allowedPeers: ['192.168.1.0/24'], // who may connect
+  allowedHosts: ['192.168.1.20'], // the name they use to reach this machine
+});
+http.createServer((req, res) => local.request(req, res)).listen(3000, '0.0.0.0');
+```
+
+Entries are IPv4 or IPv6 addresses or CIDR ranges (`10.0.0.0/8`,
+`fd00::/8`); an IPv4-mapped IPv6 peer is matched against IPv4 entries. An
+entry that is neither throws when the proxy is created. `allowedPeers: true`
+serves any peer and logs `LOCAL_PEER_CHECK_DISABLED` once at startup: every
+machine that can reach the port then acts as the injected authorizer.
+
 ### Host check (DNS rebinding)
 
 A request is served only when its `Host` header names a loopback host:
@@ -146,14 +192,17 @@ Anything else, including a missing or malformed `Host`, gets `403`:
 { "success": false, "error": { "code": "HOST_NOT_ALLOWED", "message": "Host not allowed" } }
 ```
 
-The refusal is logged as `LOCAL_HOST_NOT_ALLOWED`. The check runs first, for every method (`OPTIONS` and `HEAD` included), before
-the body is read, the authorizer is derived or the handler runs. It blocks
-DNS rebinding: an attacker re-points their own domain at `127.0.0.1`, and the
+The refusal is logged as `LOCAL_HOST_NOT_ALLOWED`. The check runs right after
+the peer check, for every method (`OPTIONS` and `HEAD` included), before the
+body is read, the authorizer is derived or the handler runs. It blocks DNS
+rebinding: an attacker re-points their own domain at `127.0.0.1`, and the
 browser then treats your backend as same-origin with their page, but it still
-sends their domain as `Host`.
+sends their domain as `Host`. It does not decide which machines may connect:
+the client chooses the `Host` header, so that is the peer check's job.
 
-To reach the proxy from another device on your LAN or through a tunnel, list
-those names. Matching is case-insensitive and ignores the port:
+To reach the proxy through a tunnel or, together with `allowedPeers`, from
+another device on your LAN, list the names they use. Matching is
+case-insensitive and ignores the port:
 
 ```typescript
 Local.EventFunctionProxy(handler, {
@@ -217,8 +266,9 @@ send `-H 'Content-Type: application/json'` from curl. `cors: true` keeps
 allowing everything.
 
 CORS is enforced by browsers only. A non-browser client on the same machine
-can still call the proxy, and the Host check does not stop it: keep the
-injected authorizer to what you would accept any local process using.
+can still call the proxy, and neither the peer check nor the Host check stops
+it: keep the injected authorizer to what you would accept any local process
+using.
 
 A frontend served from a host you added to `allowedHosts` is not a loopback
 origin, so give it a `cors` entry too:
@@ -236,13 +286,15 @@ The proxy's own warnings carry a `code`:
 
 | Code                         | When                                                    |
 | ---------------------------- | ------------------------------------------------------- |
+| `LOCAL_PEER_NOT_ALLOWED`     | A request from a non-allowed peer was refused (`403`)   |
+| `LOCAL_PEER_CHECK_DISABLED`  | Created with `allowedPeers: true` (once, at startup)    |
 | `LOCAL_HOST_NOT_ALLOWED`     | A request with a non-allowed `Host` was refused (`403`) |
 | `LOCAL_CROSS_ORIGIN_BLOCKED` | A cross-origin request was refused (`403`)              |
 | `LOCAL_CORS_WILDCARD`        | Created with `cors: true` (once, at startup)            |
 | `LOCAL_HOST_CHECK_DISABLED`  | Created with `allowedHosts: true` (once, at startup)    |
 
-Its refusals carry `error.code` `HOST_NOT_ALLOWED` or `CROSS_ORIGIN_FORBIDDEN`
-in the body. Everything else, including the `413 PAYLOAD_TOO_LARGE` for a body
+Its refusals carry `error.code` `PEER_NOT_ALLOWED`, `HOST_NOT_ALLOWED` or
+`CROSS_ORIGIN_FORBIDDEN` in the body. Everything else, including the `413 PAYLOAD_TOO_LARGE` for a body
 over `maxBodyBytes`, comes from the router the proxy runs on and is logged with
 the router's codes (`ROUTER_PAYLOAD_TOO_LARGE`, `ROUTER_CLIENT_ABORTED`, ...;
 see [Router error codes](./router.md#error-codes)).
@@ -384,7 +436,7 @@ const server = http.createServer((req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
+server.listen(PORT, '127.0.0.1', () => {
   console.log(`Event Function handler running locally on http://localhost:${PORT}`);
 });
 ```
@@ -414,8 +466,8 @@ if (process.env.NODE_ENV === 'development') {
     localHandler.request(req, res);
   });
 
-  server.listen(3000, () => {
-    console.log('Local server running on port 3000');
+  server.listen(3000, '127.0.0.1', () => {
+    console.log('Local server running on http://127.0.0.1:3000');
   });
 }
 ```
@@ -440,9 +492,10 @@ const handler = Local.EventFunctionProxy(lambdaHandler, {
 
 ### With Authorization
 
-The injected identity is given to every request the proxy serves. The
-loopback-only defaults above are what limit that to your own machine; keep
-them unless you need to widen them.
+The injected identity is given to every request the proxy serves. The peer
+check (and binding to `127.0.0.1`) is what limits that to your own machine;
+the Host and CORS checks keep other websites in your browser out. Keep the
+defaults unless you need to widen them.
 
 ```typescript
 const handler = Local.EventFunctionProxy(lambdaHandler, {
@@ -605,8 +658,8 @@ const server = http.createServer((req, res) => {
   localHandler.request(req, res);
 });
 
-server.listen(3000, () => {
-  console.log('Event Function handler running on http://localhost:3000');
+server.listen(3000, '127.0.0.1', () => {
+  console.log('Event Function handler running on http://127.0.0.1:3000');
 });
 ```
 

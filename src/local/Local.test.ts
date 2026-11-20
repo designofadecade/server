@@ -17,6 +17,7 @@ describe('Local', () => {
 
       mockReq = {
         url: '/test',
+        socket: { remoteAddress: '127.0.0.1' },
         method: 'GET',
         headers: {
           'content-type': 'application/json',

@@ -17,7 +17,7 @@
  * // Use with Node.js http server
  * http.createServer((req, res) => {
  *     localHandler.request(req, res);
- * }).listen(3000);
+ * }).listen(3000, '127.0.0.1');
  */
 
 import Router from '../router/Router.js';
@@ -27,6 +27,7 @@ import Routes from '../router/Routes.js';
 import type { RouterRequest, RouterResponse } from '../router/Router.js';
 import { logger } from '../logger/Logger.js';
 import type { IncomingMessage, ServerResponse } from 'http';
+import { BlockList, isIP } from 'node:net';
 
 export interface EventFunctionProxyOptions {
   requestContext?: Record<string, unknown>;
@@ -70,9 +71,29 @@ export interface EventFunctionProxyOptions {
    * browser treats the local backend as same-origin with the attacker page.
    * List extra names here for a LAN address or a tunnel
    * (`['192.168.1.20', 'dev.example.test']`): matched case-insensitively,
-   * port ignored. `true` disables the check.
+   * port ignored. `true` disables the check. This check does not decide
+   * which machines may connect (the client chooses Host); a LAN device also
+   * needs `allowedPeers`.
    */
   allowedHosts?: string[] | true;
+  /**
+   * Network peers (the TCP client address) allowed besides this machine.
+   *
+   * By default a request is refused with 403 `PEER_NOT_ALLOWED` unless it
+   * arrives from a loopback address (`127.0.0.0/8`, `::1`, or
+   * `::ffff:127.x.x.x`), whatever its `Host` header says: the Host header is
+   * chosen by the client, so it cannot tell the developer's own browser from
+   * another machine on the same network. Tunnels (cloudflared, ngrok) connect
+   * from loopback and need only `allowedHosts`.
+   *
+   * List IP addresses or CIDR ranges to let other machines in
+   * (`['192.168.1.30', '192.168.1.0/24', 'fd00::/8']`); an IPv4-mapped IPv6
+   * peer is matched as IPv4. An entry that is not an address or range throws.
+   * `true` admits any peer, and logs a warning at startup: every machine that
+   * can reach the port then acts as the injected authorizer. Prefer binding
+   * the server to loopback (`listen(3000, '127.0.0.1')`) as well.
+   */
+  allowedPeers?: string[] | true;
   /**
    * Largest request body the proxy accepts, in bytes; a larger one is
    * answered `413 PAYLOAD_TOO_LARGE` before the handler runs. Default 1 MiB,
@@ -111,6 +132,70 @@ function hostnameOf(value: string): string | null {
     return hostname || null;
   } catch {
     return null;
+  }
+}
+
+/** Loopback peer addresses: `127.0.0.0/8` and `::1`. */
+const LOOPBACK_PEERS = new BlockList();
+LOOPBACK_PEERS.addSubnet('127.0.0.0', 8, 'ipv4');
+LOOPBACK_PEERS.addAddress('::1', 'ipv6');
+
+/**
+ * A socket address as `[address, family]`, with an IPv4-mapped IPv6 address
+ * (`::ffff:192.168.1.30`, what a dual-stack server reports for an IPv4
+ * client) unwrapped to IPv4. `null` for anything that is not an IP address.
+ */
+function peerAddressOf(value: unknown): [string, 'ipv4' | 'ipv6'] | null {
+  if (typeof value !== 'string') return null;
+  const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(value);
+  const address = mapped ? mapped[1]! : value;
+  const version = isIP(address);
+  if (version === 4) return [address, 'ipv4'];
+  if (version === 6) return [address, 'ipv6'];
+  return null;
+}
+
+/**
+ * Builds the opt-in peer list from `allowedPeers` entries: addresses
+ * (`192.168.1.30`, `fd00::1`) or CIDR ranges (`192.168.1.0/24`). Throws on
+ * anything else, so a typo cannot silently leave the list narrower or wider
+ * than intended.
+ */
+function peerListOf(entries: readonly string[]): BlockList {
+  const list = new BlockList();
+  for (const entry of entries) {
+    const [rawAddress, prefix, ...rest] = typeof entry === 'string' ? entry.trim().split('/') : [];
+    const parsed = peerAddressOf(rawAddress);
+    const prefixLength = prefix === undefined ? undefined : Number(prefix);
+    const maxPrefix = parsed?.[1] === 'ipv4' ? 32 : 128;
+    if (
+      !parsed ||
+      rest.length > 0 ||
+      (prefix !== undefined &&
+        (!/^\d{1,3}$/.test(prefix) || prefixLength! < 0 || prefixLength! > maxPrefix))
+    ) {
+      throw new TypeError(
+        `EventFunctionProxy allowedPeers: ${JSON.stringify(entry)} is not an IP address or CIDR range`
+      );
+    }
+    if (prefixLength === undefined) list.addAddress(parsed[0], parsed[1]);
+    else list.addSubnet(parsed[0], prefixLength, parsed[1]);
+  }
+  return list;
+}
+
+/**
+ * Whether a socket's remote address is loopback or on the `allowedPeers`
+ * list. Fails closed: a missing or unparseable address (or one `BlockList`
+ * cannot check, such as an IPv6 address with a zone id) is not allowed.
+ */
+function isAllowedPeer(remoteAddress: unknown, extraPeers: BlockList | null): boolean {
+  const peer = peerAddressOf(remoteAddress);
+  if (!peer) return false;
+  try {
+    return LOOPBACK_PEERS.check(peer[0], peer[1]) || extraPeers?.check(peer[0], peer[1]) === true;
+  } catch {
+    return false;
   }
 }
 
@@ -322,6 +407,10 @@ export default class Local {
    *   (LAN address, tunnel). By default only loopback hosts are served and
    *   anything else gets 403, which blocks DNS rebinding. `true` disables the
    *   check.
+   * @param {string[]|true} options.allowedPeers - Client IP addresses or CIDR
+   *   ranges to serve besides loopback peers (decided from the socket, never
+   *   from Host). By default any other peer gets 403 `PEER_NOT_ALLOWED`.
+   *   `true` serves any peer.
    * @returns {Object} Object with request method for handling HTTP requests
    *
    * @example
@@ -337,7 +426,8 @@ export default class Local {
    *
    * SECURITY: an `authorizer` injected through `requestContext` (or derived
    * from a JWT) applies to every caller that reaches the proxy, not only to
-   * the developer's own frontend. By default other websites cannot read
+   * the developer's own frontend. By default other machines are refused
+   * (403 `PEER_NOT_ALLOWED`, from the socket address), and other websites cannot read
    * responses (CORS is loopback-only), cannot send anything but GET
    * (403 `CROSS_ORIGIN_FORBIDDEN`), and cannot reach it by DNS rebinding
    * (403 `HOST_NOT_ALLOWED`). A cross-site GET still runs, so GET routes must
@@ -488,6 +578,9 @@ export default class Local {
     });
 
     const allowedHosts = options.allowedHosts;
+    const allowedPeers = options.allowedPeers;
+    // Validated up front: a bad entry throws here, not on the first request.
+    const extraPeers = Array.isArray(allowedPeers) ? peerListOf(allowedPeers) : null;
 
     // SECURITY: both opt-outs expose the local backend, and its injected
     // authorizer, beyond this machine's own pages. Say so once, at startup.
@@ -495,6 +588,12 @@ export default class Local {
       logger.warn(
         'EventFunctionProxy cors: true sends Access-Control-Allow-Origin: * — any website can call this local backend and read its responses',
         { code: 'LOCAL_CORS_WILDCARD', source: 'Local.EventFunctionProxy' }
+      );
+    }
+    if (allowedPeers === true) {
+      logger.warn(
+        'EventFunctionProxy allowedPeers: true serves any network peer — every machine that can reach this port acts as the injected authorizer',
+        { code: 'LOCAL_PEER_CHECK_DISABLED', source: 'Local.EventFunctionProxy' }
       );
     }
     if (allowedHosts === true) {
@@ -520,6 +619,33 @@ export default class Local {
           event?: Record<string, unknown>;
         } = {}
       ) => {
+        // SECURITY: the proxy acts as the injected authorizer for whoever
+        // reaches it, so by default only this machine may. Decided from the
+        // TCP peer, never from Host: any client on the network can send
+        // `Host: localhost`. Checked first, before Host, CORS, the body or
+        // the handler. A socket with no address (already closed) is refused.
+        if (allowedPeers !== true) {
+          const rawPeer = req.socket?.remoteAddress;
+          if (!isAllowedPeer(rawPeer, extraPeers)) {
+            logger.warn('Rejected request from a non-allowed network peer', {
+              code: 'LOCAL_PEER_NOT_ALLOWED',
+              source: 'Local.EventFunctionProxy',
+              // From the socket, not the client, but bounded all the same.
+              peer: typeof rawPeer === 'string' ? rawPeer.slice(0, 64) : undefined,
+              method: req.method?.slice(0, 16),
+            });
+            res.statusCode = 403;
+            res.setHeader('Content-Type', 'application/json');
+            res.end(
+              JSON.stringify({
+                success: false,
+                error: { code: 'PEER_NOT_ALLOWED', message: 'Peer not allowed' },
+              })
+            );
+            return Promise.resolve();
+          }
+        }
+
         // SECURITY (DNS rebinding): a browser sends the attacker's own name
         // as Host after re-pointing it at 127.0.0.1, so only loopback names
         // (plus any the developer listed) are served.

@@ -325,11 +325,28 @@ needs its origin on the list.
 ### 14. `Local.EventFunctionProxy` is loopback-only by default and passes the raw body
 
 Nothing changes if you open your frontend at `localhost`, `127.0.0.1` or
-`*.localhost` and point it at the proxy on a loopback address. Otherwise:
+`*.localhost` on the same machine and point it at the proxy on a loopback
+address. Bind the proxy's server to loopback too:
+`server.listen(3000, '127.0.0.1')` (`listen(3000)` alone binds every
+interface). Otherwise:
 
-- **Proxy reached by a LAN IP, a custom hostname or a tunnel** now answers
+- **Requests from another machine** (a phone or laptop on your LAN, a VM or
+  container reaching the host's address) now answer `403 PEER_NOT_ALLOWED`,
+  whatever `Host` they send: the proxy decides who is local from the TCP peer
+  address, not from the client-chosen `Host` header. List the devices'
+  addresses or a range, and the name they use in `allowedHosts`:
+  `Local.EventFunctionProxy(handler, { allowedPeers: ['192.168.1.0/24'], allowedHosts: ['192.168.1.20'] })`,
+  and listen on an interface they can reach (`listen(3000, '0.0.0.0')`).
+  `allowedPeers: true` admits any peer and warns at startup. An entry that is
+  not an IP address or CIDR range throws when the proxy is created.
+- **Proxy reached by a custom hostname or a tunnel** now answers
   `403 HOST_NOT_ALLOWED`. Add the names:
-  `Local.EventFunctionProxy(handler, { allowedHosts: ['192.168.1.20', 'my-app.tunnel.example'] })`.
+  `Local.EventFunctionProxy(handler, { allowedHosts: ['my-app.tunnel.example'] })`.
+  Tunnels (cloudflared, ngrok) connect from this machine, so they need no
+  `allowedPeers`.
+- **Tests that call `request(req, res)` with a mock `IncomingMessage`** must
+  give it a loopback socket address (`socket: { remoteAddress: '127.0.0.1' }`)
+  or the request is refused with `403 PEER_NOT_ALLOWED`.
 - **Frontend served from a non-loopback origin** (LAN IP, custom host, tunnel,
   `file:`/`null`) no longer gets CORS. List it:
   `cors: ['http://192.168.1.20:5173']`. This allowlist also sends
@@ -345,9 +362,11 @@ Nothing changes if you open your frontend at `localhost`, `127.0.0.1` or
   `Content-Type: application/json`. With `allowedHosts: true`, a non-loopback
   same-origin frontend must be listed in `cors`. A cross-site GET still runs,
   so keep GET routes free of side effects.
-- **To restore the old behaviour exactly:** `{ cors: true, allowedHosts: true }`.
-  This is unsafe: any website you visit can use the proxy with its injected
-  authorizer. Both settings log a warning at startup.
+- **To restore the old behaviour exactly:**
+  `{ cors: true, allowedHosts: true, allowedPeers: true }`. This is unsafe:
+  any website you visit and any machine that can reach the port can use the
+  proxy with its injected authorizer. All three settings log a warning at
+  startup.
 - **`event.body` is the raw request text**, as API Gateway sends it, not
   `JSON.stringify` of the router's parsed body. `JSON.parse(event.body)` still
   works for JSON bodies (and so does `router.eventFunction(event)`). Code that

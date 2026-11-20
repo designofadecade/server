@@ -216,7 +216,7 @@ if (process.env.NODE_ENV === 'development') {
   const server = http.createServer((req, res) => {
     localHandler.request(req, res);
   });
-  server.listen(3000);
+  server.listen(3000, '127.0.0.1');
 }
 ```
 

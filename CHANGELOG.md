@@ -94,6 +94,11 @@ the reasoning for choosing a mode is in
   gate, and read a connection's authenticate result (see Security).
 - **`Local.EventFunctionProxy` options `cors` and `allowedHosts`** — opt
   origins and Host names in beyond the loopback-only default (see Security).
+- **`Local.EventFunctionProxy` option `allowedPeers?: string[] | true`** —
+  client IP addresses or CIDR ranges (IPv4 or IPv6) served besides loopback
+  peers; `true` serves any peer and logs `LOCAL_PEER_CHECK_DISABLED` once at
+  startup. An entry that is not an address or range throws when the proxy is
+  created (see Security).
 - **`logRequest` options `logBody`, `bodyFields`, `paramFields` and
   `logPath`** — name the body fields and parameters whose values may be
   logged, and opt the raw path back in (see Security).
@@ -131,8 +136,13 @@ Every item is a rename unless marked otherwise. There are no aliases.
   address through the header, or asserted the literal `127.0.0.1`, should use
   the `requestContext` option instead. (behaviour, see Security)
 
-- **`Local.EventFunctionProxy` serves loopback only by default.** Any other,
-  missing or malformed `Host` gets `403 HOST_NOT_ALLOWED`, and only loopback
+- **`Local.EventFunctionProxy` serves only this machine by default.** A
+  request whose TCP peer is not loopback (`127.0.0.0/8`, `::1`,
+  `::ffff:127.x.x.x`), or has no address, gets `403 PEER_NOT_ALLOWED` before
+  anything else runs, whatever its `Host`; opt devices in with
+  `allowedPeers: [...]`. Mock requests in tests need a loopback
+  `socket.remoteAddress`. Any other, missing or malformed `Host` gets
+  `403 HOST_NOT_ALLOWED`, and only loopback
   origins get CORS (reflected, `Vary: Origin`, no credentials). Opt hosts in
   with `allowedHosts: [...]` and origins with `cors: [...]`. Cross-origin
   requests other than GET (HEAD included) from origins that are not allowed,
@@ -389,6 +399,21 @@ Every item is a rename unless marked otherwise. There are no aliases.
   logged as `ROUTER_INVALID_REQUEST_URL` with a fixed `reason` and the method
   (cut at 16 characters), never the target; the logged `Host` of a malformed
   Host refusal is dropped for the same reason.
+
+- **`Local.EventFunctionProxy` decides who is local from the socket, not
+  the `Host` header.** The only check keeping the proxy, and the identity it
+  injects, to the developer's machine was the `Host` header, which the client
+  chooses. Node's `listen(port)` binds every interface, so a machine on the
+  same network that sent `Host: localhost` (with no `Origin` and a JSON
+  body, which the cross-origin write check lets through) ran any route as the
+  injected authorizer and read the replies. The proxy now refuses any request
+  whose `req.socket.remoteAddress` is not loopback with
+  `403 PEER_NOT_ALLOWED`, before the Host check, CORS, the body, the
+  authorizer or the handler; other machines must be listed in the new
+  `allowedPeers` option. The refusal is logged as `LOCAL_PEER_NOT_ALLOWED`
+  with the peer address (cut at 64 characters) and the method. The Host check
+  stays, as the DNS-rebinding defence. The docs now bind every example to
+  `127.0.0.1`.
 
 ### Fixed
 

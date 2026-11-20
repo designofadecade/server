@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import Local from './Local.ts';
 import Router from '../router/Router.ts';
 import Routes from '../router/Routes.ts';
+import { logger } from '../logger/Logger.ts';
 
 /**
  * `EventFunctionProxy` exists so a real Lambda handler can be exercised locally.
@@ -17,6 +18,7 @@ describe('Local.EventFunctionProxy event shape', () => {
 
   const makeReq = (overrides = {}) => ({
     url: '/test',
+    socket: { remoteAddress: '::1' },
     method: 'GET',
     headers: { host: 'localhost:3000' },
     on: vi.fn((event, cb) => {
@@ -109,11 +111,12 @@ describe('Local.EventFunctionProxy event shape', () => {
       socket: { remoteAddress: '192.0.2.10' },
     });
 
-    // A non-loopback Host is refused by default (DNS rebinding); opt it in.
-    await Local.EventFunctionProxy(handler, { allowedHosts: ['api.example.com'] }).request(
-      req,
-      res
-    );
+    // A non-loopback Host is refused by default (DNS rebinding), and so is a
+    // non-loopback peer; opt both in.
+    await Local.EventFunctionProxy(handler, {
+      allowedHosts: ['api.example.com'],
+      allowedPeers: ['192.0.2.10'],
+    }).request(req, res);
 
     const ctx = seenEvent.requestContext;
     expect(ctx.http.protocol).toBe('HTTP/1.1');
@@ -137,13 +140,17 @@ describe('Local.EventFunctionProxy event shape', () => {
       socket: { remoteAddress: '192.0.2.10' },
     });
 
-    await Local.EventFunctionProxy(handler).request(req, res);
+    await Local.EventFunctionProxy(handler, { allowedPeers: ['192.0.2.0/24'] }).request(req, res);
 
     expect(seenEvent.requestContext.http.sourceIp).toBe('192.0.2.10');
   });
 
   it('falls back to 127.0.0.1 when the socket address is unknown', async () => {
-    await Local.EventFunctionProxy(handler).request(req, res);
+    // Only reachable with the peer check off: an unknown peer is refused.
+    req = makeReq({ socket: {} });
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    await Local.EventFunctionProxy(handler, { allowedPeers: true }).request(req, res);
+    warn.mockRestore();
 
     expect(seenEvent.requestContext.http.sourceIp).toBe('127.0.0.1');
   });

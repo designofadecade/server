@@ -39,6 +39,7 @@ const run = async (
   };
   const req = {
     url: '/x',
+    socket: { remoteAddress: '127.0.0.1' },
     method,
     headers: { host: 'localhost:3000', ...headers },
     on: vi.fn((event: string, cb: () => void) => {
@@ -337,6 +338,7 @@ describe('Local.EventFunctionProxy unsafe opt-ins', () => {
       const res = { statusCode: 0, setHeader: vi.fn(), end: vi.fn() };
       const req = {
         url: '/x',
+        socket: { remoteAddress: '127.0.0.1' },
         method: 'GET',
         headers: { host: 'localhost' },
         on: vi.fn((event: string, cb: () => void) => {
@@ -388,6 +390,7 @@ describe('Local.EventFunctionProxy Host check ordering', () => {
       const res = { statusCode: 0, setHeader: vi.fn(), end: vi.fn() };
       const req = {
         url: '/x',
+        socket: { remoteAddress: '127.0.0.1' },
         method,
         // A bearer token the router would otherwise decode into an authorizer.
         headers: { host: 'rebind.evil.example', authorization: 'Bearer x.y.z' },
@@ -429,7 +432,13 @@ describe('Local.EventFunctionProxy cross-origin writes (CSRF)', () => {
       if (event === 'data' && body !== undefined) cb(Buffer.from(body));
       if (event === 'end') cb();
     });
-    const req = { url: '/x', method, headers: { host: 'localhost:3000', ...headers }, on };
+    const req = {
+      url: '/x',
+      method,
+      headers: { host: 'localhost:3000', ...headers },
+      socket: { remoteAddress: '127.0.0.1' },
+      on,
+    };
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await Local.EventFunctionProxy(handler, options).request(req as any, res as any);
     return { handler, res, headers: set, on };
