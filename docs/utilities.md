@@ -350,16 +350,21 @@ requestLogger.error('Validation failed', { errors });
 
 ### API Reference
 
+`request` is a `LoggableRequest` (any `RouterRequest`, or an object with its
+`method`, `path` and `headers`) or an API Gateway HTTP API v2 event, such as an
+`EventFunctionEvent` or `@types/aws-lambda`'s `APIGatewayProxyEventV2` (a
+format 1.0 event is also accepted).
+
 ```typescript
-createRequestLogger(request: RouterRequest | ApiGatewayEvent, options?: RequestLogOptions): {
+createRequestLogger(request: LoggableRequest | EventFunctionEvent, options?: RequestLogOptions): {
   info(message: string, context?: Record<string, any>): void;
   error(message: string, context?: Record<string, any>): void;
   warn(message: string, context?: Record<string, any>): void;
   debug(message: string, context?: Record<string, any>): void;
 }
 
-logRequest(request: RouterRequest | ApiGatewayEvent, options?: LogRequestOptions): void;
-logResponse(request: RouterRequest | ApiGatewayEvent, response: { status?: number; statusCode?: number }, durationMs: number, options?: RequestLogOptions): void;
+logRequest(request: LoggableRequest | EventFunctionEvent, options?: LogRequestOptions): void;
+logResponse(request: LoggableRequest | EventFunctionEvent, response: { status?: number; statusCode?: number }, durationMs: number, options?: RequestLogOptions): void;
 
 interface RequestLogOptions {
   /** Also log the raw request path (cut at 256 characters). Default false. */

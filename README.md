@@ -17,7 +17,7 @@ Type-safe ESM server framework for Node 24+. The same routes run as an **AWS Lam
 
 - ✅ Full TypeScript support with comprehensive type definitions
 - ✅ ESM (ES Modules) compatible
-- ✅ **Three deployment modes, one router**: Lambda Web Function, Lambda Event Function, plain Node server — see [Deployment Modes](docs/deployment-modes.md)
+- ✅ **Three deployment modes, one router**: Lambda Web Function, Lambda Event Function, plain Node server — see [Deployment Modes](https://github.com/designofadecade/server/blob/main/docs/deployment-modes.md)
 - ✅ Trustworthy `clientIp` and `requestId` on every request, in every mode
 - ✅ **Secure error handling** with automatic sensitive data protection
 - ✅ WebSocket server with message formatting and event handling
@@ -82,7 +82,7 @@ console.log(`Server running on http://localhost:${server.address.port}`);
 
 The same `router` serves a Lambda Event Function with
 `export const handler = (event) => router.eventFunction(event);`. Choosing
-between the two: [docs/deployment-modes.md](docs/deployment-modes.md).
+between the two: [docs/deployment-modes.md](https://github.com/designofadecade/server/blob/main/docs/deployment-modes.md).
 
 ## Architecture Overview
 
@@ -115,7 +115,7 @@ The server is composed of several modular components:
 
 ### Local development
 
-- **Local**: `Local.EventFunctionProxy` runs a Lambda Event Function handler behind a local HTTP server. It serves loopback `Host` names only and grants CORS to loopback origins only by default; see [docs/local.md](./docs/local.md#security-cors-and-host) to opt in LAN or tunnel hosts
+- **Local**: `Local.EventFunctionProxy` runs a Lambda Event Function handler behind a local HTTP server. It serves loopback `Host` names only and grants CORS to loopback origins only by default; see [docs/local.md](https://github.com/designofadecade/server/blob/main/docs/local.md#security-cors-and-host) to opt in LAN or tunnel hosts
 
 ### Integrations
 
@@ -170,48 +170,54 @@ wsServer.on('message', (parsed, ws, req, session) => {
 });
 ```
 
-See [WebSocket](docs/websocket.md#security-considerations) for the security model.
+See [WebSocket](https://github.com/designofadecade/server/blob/main/docs/websocket.md#security-considerations) for the security model.
 
 ### Static File Serving
 
 ```typescript
 import { StaticFileHandler } from '@designofadecade/server';
 
-const staticHandler = new StaticFileHandler({
-  rootDir: './public',
+const staticHandler = new StaticFileHandler('./public', {
   cacheControl: 'public, max-age=3600',
 });
 
-await staticHandler.serve(request, response, '/assets/style.css');
+// Resolves to { status, headers, body }; paths outside ./public get 403.
+const response = await staticHandler.serve('/assets/style.css');
 ```
 
 ### Event System
 
+`EventsManager` routes WebSocket messages to handlers by their `type`:
+
 ```typescript
-import { Events, EventsManager } from '@designofadecade/server';
+import { Events, EventsManager, WebSocketServer } from '@designofadecade/server';
 
-const events = new Events();
-const manager = new EventsManager(events);
+class UserEvents extends Events {
+  constructor(manager: EventsManager) {
+    super(manager);
+    this.addListener('user:login', async (msg, ws, req, auth) => {
+      manager.broadcast('user:online', msg.payload);
+    });
+  }
+}
 
-// Subscribe to events
-manager.on('user:login', (data) => {
-  console.log('User logged in:', data);
+const wss = new WebSocketServer({ port: 8080, allowedOrigins: ['https://app.example.com'] });
+const manager = new EventsManager({
+  registerWebSocketServer: wss,
+  initEvents: [UserEvents],
 });
-
-// Emit events
-events.emit('user:login', { userId: 123, timestamp: Date.now() });
 ```
 
 ## Documentation
 
-Comprehensive documentation is available in the `/docs` directory:
+Comprehensive documentation is available in the [`docs/` directory](https://github.com/designofadecade/server/tree/main/docs) on GitHub:
 
-- **[Deployment Modes](docs/deployment-modes.md)** - Lambda Web Function vs Event Function vs plain server: decision table, entry files, production checklist
-- **[Logger Documentation](docs/logger.md)** - CloudWatch Logger with AWS Lambda integration, sensitive data redaction, and performance tracking
-- **[API Documentation](docs/api-documentation.md)** - OpenAPI/Swagger documentation generation guide
-- **[New Features](FEATURES.md)** - Performance benchmarks, pre-commit hooks, and recent additions
+- **[Deployment Modes](https://github.com/designofadecade/server/blob/main/docs/deployment-modes.md)** - Lambda Web Function vs Event Function vs plain server: decision table, entry files, production checklist
+- **[Logger Documentation](https://github.com/designofadecade/server/blob/main/docs/logger.md)** - CloudWatch Logger with AWS Lambda integration, sensitive data redaction, and performance tracking
+- **[API Documentation](https://github.com/designofadecade/server/blob/main/docs/api-documentation.md)** - OpenAPI/Swagger documentation generation guide
+- **[New Features](https://github.com/designofadecade/server/blob/main/FEATURES.md)** - Performance benchmarks, pre-commit hooks, and recent additions
 - **[Changelog](CHANGELOG.md)** - Version history and release notes
-- **[Contributing Guide](CONTRIBUTING.md)** - How to contribute to the project
+- **[Contributing Guide](https://github.com/designofadecade/server/blob/main/CONTRIBUTING.md)** - How to contribute to the project
 
 ## Development
 
@@ -268,18 +274,18 @@ src/
 
 ## API Reference
 
-Full API documentation is available in the [docs](docs/) directory:
+Full API documentation is available in the [docs](https://github.com/designofadecade/server/tree/main/docs) directory:
 
-- **[Deployment Modes](docs/deployment-modes.md)** - Choosing and configuring a deployment mode
-- **[Server](docs/server.md)** - Core server setup, `WebFunction.serve`, shutdown
-- **[Router](docs/router.md)** - Routing and request handling
-- **[Local Development](docs/local.md)** - Running Event Function handlers locally
-- **[WebSocket](docs/websocket.md)** - WebSocket server and messaging
-- **[Logger](docs/logger.md)** - CloudWatch logging and performance tracking
-- **[Events Manager](docs/events-manager.md)** - Event system usage
-- **[API Documentation](docs/api-documentation.md)** - OpenAPI/Swagger setup
-- **[State & Context](docs/context-state.md)** - State management
-- **[Utilities](docs/utilities.md)** - Helper functions and utilities
+- **[Deployment Modes](https://github.com/designofadecade/server/blob/main/docs/deployment-modes.md)** - Choosing and configuring a deployment mode
+- **[Server](https://github.com/designofadecade/server/blob/main/docs/server.md)** - Core server setup, `WebFunction.serve`, shutdown
+- **[Router](https://github.com/designofadecade/server/blob/main/docs/router.md)** - Routing and request handling
+- **[Local Development](https://github.com/designofadecade/server/blob/main/docs/local.md)** - Running Event Function handlers locally
+- **[WebSocket](https://github.com/designofadecade/server/blob/main/docs/websocket.md)** - WebSocket server and messaging
+- **[Logger](https://github.com/designofadecade/server/blob/main/docs/logger.md)** - CloudWatch logging and performance tracking
+- **[Events Manager](https://github.com/designofadecade/server/blob/main/docs/events-manager.md)** - Event system usage
+- **[API Documentation](https://github.com/designofadecade/server/blob/main/docs/api-documentation.md)** - OpenAPI/Swagger setup
+- **[State & Context](https://github.com/designofadecade/server/blob/main/docs/context-state.md)** - State management
+- **[Utilities](https://github.com/designofadecade/server/blob/main/docs/utilities.md)** - Helper functions and utilities
 
 ## Security
 
@@ -307,7 +313,7 @@ See [CHANGELOG.md](CHANGELOG.md) for a history of changes.
 
 ## Contributing
 
-Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for details on:
+Contributions are welcome! Please see [CONTRIBUTING.md](https://github.com/designofadecade/server/blob/main/CONTRIBUTING.md) for details on:
 
 - Code of Conduct
 - Development workflow

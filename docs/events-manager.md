@@ -10,14 +10,14 @@ WebSocket event management system for organized message handling and broadcastin
 
 ```typescript
 import EventsManager from '@designofadecade/server/events';
-import Events from '@designofadecade/server/events/Events';
+import { Events } from '@designofadecade/server';
 ```
 
 ## Quick Start
 
 ```typescript
 import EventsManager from '@designofadecade/server/events';
-import Events from '@designofadecade/server/events/Events';
+import { Events } from '@designofadecade/server';
 import WebSocketServer from '@designofadecade/server/websocket';
 
 // Define event handlers
@@ -25,8 +25,8 @@ class ChatEvents extends Events {
   constructor(manager: EventsManager) {
     super(manager);
 
-    this.addEvent('chat:message', this.handleMessage);
-    this.addEvent('chat:typing', this.handleTyping);
+    this.addListener('chat:message', this.handleMessage.bind(this));
+    this.addListener('chat:typing', this.handleTyping.bind(this));
   }
 
   async handleMessage(msg) {
@@ -180,7 +180,7 @@ class MyEvents extends Events {
     super(manager);
 
     // Register event handlers
-    this.addEvent('event:type', this.handler);
+    this.addListener('event:type', this.handler.bind(this));
   }
 }
 ```
@@ -216,14 +216,14 @@ Returns array of registered event handlers.
 
 ### Methods
 
-#### addEvent()
+#### addListener()
 
 Register an event handler.
 
 ```typescript
-addEvent(
+addListener(
   type: string,
-  handler: (msg: ParsedMessage) => void | Promise<void>
+  handler: (msg: ParsedMessage, ws?: WebSocket, req?: IncomingMessage, auth?: unknown) => void | Promise<void>
 ): void
 ```
 
@@ -239,9 +239,9 @@ class ChatEvents extends Events {
   constructor(manager: EventsManager) {
     super(manager);
 
-    this.addEvent('chat:message', this.handleMessage);
-    this.addEvent('chat:join', this.handleJoin);
-    this.addEvent('chat:leave', this.handleLeave);
+    this.addListener('chat:message', this.handleMessage.bind(this));
+    this.addListener('chat:join', this.handleJoin.bind(this));
+    this.addListener('chat:leave', this.handleLeave.bind(this));
   }
 
   async handleMessage(msg) {
@@ -304,9 +304,9 @@ class UserEvents extends Events {
   constructor(manager: EventsManager) {
     super(manager);
 
-    this.addEvent('user:login', this.handleLogin);
-    this.addEvent('user:logout', this.handleLogout);
-    this.addEvent('user:update', this.handleUpdate);
+    this.addListener('user:login', this.handleLogin.bind(this));
+    this.addListener('user:logout', this.handleLogout.bind(this));
+    this.addListener('user:update', this.handleUpdate.bind(this));
   }
 }
 
@@ -314,9 +314,9 @@ class ChatEvents extends Events {
   constructor(manager: EventsManager) {
     super(manager);
 
-    this.addEvent('chat:message', this.handleMessage);
-    this.addEvent('chat:typing', this.handleTyping);
-    this.addEvent('chat:read', this.handleRead);
+    this.addListener('chat:message', this.handleMessage.bind(this));
+    this.addListener('chat:typing', this.handleTyping.bind(this));
+    this.addListener('chat:read', this.handleRead.bind(this));
   }
 }
 ```
@@ -354,7 +354,7 @@ class SafeEvents extends Events {
   constructor(manager: EventsManager) {
     super(manager);
 
-    this.addEvent('process:data', async (msg) => {
+    this.addListener('process:data', async (msg) => {
       try {
         await this.processData(msg.payload);
       } catch (error) {
@@ -407,7 +407,7 @@ All errors include `source` field (e.g., `EventsManager.broadcast`).
 3. **Handle Errors:** Always catch and handle errors in event handlers
 
    ```typescript
-   this.addEvent('risky:operation', async (msg) => {
+   this.addListener('risky:operation', async (msg) => {
      try {
        await riskyOperation(msg.payload);
      } catch (error) {
@@ -446,16 +446,16 @@ All errors include `source` field (e.g., `EventsManager.broadcast`).
 
 ```typescript
 import EventsManager from '@designofadecade/server/events';
-import Events from '@designofadecade/server/events/Events';
+import { Events } from '@designofadecade/server';
 
 class ChatEvents extends Events {
   constructor(manager: EventsManager) {
     super(manager);
 
-    this.addEvent('chat:join', this.handleJoin);
-    this.addEvent('chat:leave', this.handleLeave);
-    this.addEvent('chat:message', this.handleMessage);
-    this.addEvent('chat:typing', this.handleTyping);
+    this.addListener('chat:join', this.handleJoin.bind(this));
+    this.addListener('chat:leave', this.handleLeave.bind(this));
+    this.addListener('chat:message', this.handleMessage.bind(this));
+    this.addListener('chat:typing', this.handleTyping.bind(this));
   }
 
   async handleJoin(msg) {
@@ -529,10 +529,10 @@ class DocumentEvents extends Events {
   constructor(manager: EventsManager) {
     super(manager);
 
-    this.addEvent('doc:open', this.handleOpen);
-    this.addEvent('doc:edit', this.handleEdit);
-    this.addEvent('doc:cursor', this.handleCursor);
-    this.addEvent('doc:close', this.handleClose);
+    this.addListener('doc:open', this.handleOpen.bind(this));
+    this.addListener('doc:edit', this.handleEdit.bind(this));
+    this.addListener('doc:cursor', this.handleCursor.bind(this));
+    this.addListener('doc:close', this.handleClose.bind(this));
   }
 
   async handleOpen(msg) {
@@ -584,10 +584,10 @@ class GameEvents extends Events {
   constructor(manager: EventsManager) {
     super(manager);
 
-    this.addEvent('game:join', this.handleJoin);
-    this.addEvent('game:move', this.handleMove);
-    this.addEvent('game:action', this.handleAction);
-    this.addEvent('game:leave', this.handleLeave);
+    this.addListener('game:join', this.handleJoin.bind(this));
+    this.addListener('game:move', this.handleMove.bind(this));
+    this.addListener('game:action', this.handleAction.bind(this));
+    this.addListener('game:leave', this.handleLeave.bind(this));
   }
 
   async handleJoin(msg) {

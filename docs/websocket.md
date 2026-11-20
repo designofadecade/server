@@ -349,14 +349,14 @@ The WebSocket server handles common errors automatically:
 #### Port Already in Use (EADDRINUSE)
 
 ```typescript
-// Logs error and exits process with code 1
+// Logs the error and emits `error`; exits with code 1 only with exitOnError: true
 // Error code: WEBSOCKET_PORT_IN_USE
 ```
 
 #### Server Initialization Errors
 
 ```typescript
-// Logs error and exits process with code 1
+// Logs the error and emits `error`; exits with code 1 only with exitOnError: true
 // Error code: WEBSOCKET_SERVER_ERROR
 ```
 
@@ -386,9 +386,10 @@ Individual client errors are logged but don't affect other connections:
 ## Connection Lifecycle
 
 ```
-1. Client connects
+1. Upgrade request: allowedOrigins, verifyClient, then authenticate
+   (refused with 403/401 on failure, or past upgradeTimeoutMs)
    ↓
-2. Server logs connection (WEBSOCKET_CLIENT_CONNECTED)
+2. Server logs "WebSocket client connected" (info) and emits connection
    ↓
 3. Server sends ws:connected message
    ↓
@@ -396,8 +397,33 @@ Individual client errors are logged but don't affect other connections:
    ↓
 5. Client disconnects
    ↓
-6. Server logs disconnection (WEBSOCKET_CLIENT_DISCONNECTED)
+6. Server logs "WebSocket client disconnected" (info)
 ```
+
+### Log codes
+
+Every warning and error the server logs carries a `code`:
+
+| Code                                   | When                                                          |
+| -------------------------------------- | ------------------------------------------------------------- |
+| `WEBSOCKET_NO_ORIGIN_ALLOWLIST`        | `authenticate` set without `allowedOrigins` (once per server) |
+| `WEBSOCKET_ORIGIN_REFUSED`             | Upgrade refused: `Origin` missing or not allowed (403)        |
+| `WEBSOCKET_UPGRADE_REFUSED`            | Upgrade refused by `verifyClient` (403)                       |
+| `WEBSOCKET_VERIFY_CLIENT_ERROR`        | `verifyClient` threw; upgrade refused (403)                   |
+| `WEBSOCKET_UNAUTHENTICATED`            | Upgrade refused by `authenticate` (401)                       |
+| `WEBSOCKET_AUTHENTICATE_ERROR`         | `authenticate` threw; upgrade refused (401)                   |
+| `WEBSOCKET_UPGRADE_TIMEOUT`            | Upgrade checks ran past `upgradeTimeoutMs`                    |
+| `WEBSOCKET_UNAUTHENTICATED_CONNECTION` | A connection had no `authenticate` result; terminated         |
+| `WEBSOCKET_PORT_IN_USE`                | The port is already in use                                    |
+| `WEBSOCKET_SERVER_ERROR`               | Any other server error                                        |
+| `WEBSOCKET_CLIENT_ERROR`               | A client socket errored                                       |
+| `WEBSOCKET_MESSAGE_ERROR`              | A `message` listener threw; the client gets `ws:error`        |
+| `WEBSOCKET_BROADCAST_ERROR`            | Sending a broadcast to one client failed                      |
+| `WEBSOCKET_CLOSE_ERROR`                | `close()` failed                                              |
+| `WEBSOCKET_INVALID_MESSAGE`            | A frame was empty or not a string                             |
+| `WEBSOCKET_INVALID_FIELDS`             | A parsed frame lacks a string `type` or a `payload`           |
+| `WEBSOCKET_PARSE_ERROR`                | A frame was not valid JSON                                    |
+| `WEBSOCKET_SERIALIZE_ERROR`            | An outgoing message could not be serialised                   |
 
 ## Security Considerations
 
