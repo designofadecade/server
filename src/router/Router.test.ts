@@ -580,6 +580,31 @@ describe('Router', () => {
       );
     });
 
+    it('passes proxyOptions through to request.proxyOptions ({} when omitted)', async () => {
+      const seen: unknown[] = [];
+      class ProxyRoutes extends Routes {
+        constructor(r: Router) {
+          super(r);
+          this.addRoute('/test', 'GET', async (request) => {
+            seen.push(request.proxyOptions);
+            return { body: {} };
+          });
+        }
+      }
+      const proxyRouter = new Router({ initRoutes: [ProxyRoutes] });
+      mockReq.on.mockImplementation((event: string, callback: () => void) => {
+        if (event === 'end') callback();
+        return mockReq;
+      });
+      const proxyOptions = { event: { stageVariables: { a: '1' } } };
+
+      await proxyRouter.nodeJSRequest(mockReq, mockRes, { proxyOptions });
+      await proxyRouter.nodeJSRequest(mockReq, mockRes);
+
+      expect(seen).toEqual([proxyOptions, {}]);
+      expect(seen[0]).toBe(proxyOptions);
+    });
+
     describe('CORS allowlist enforcement', () => {
       const allowlist = ['https://app.example.com'];
       let handler: ReturnType<typeof vi.fn>;

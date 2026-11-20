@@ -937,6 +937,17 @@ describe('logRequest body logging options', () => {
     logRequest(event(deep), { logBody: true, bodyFields: ['n', 'leaf'] });
     expect(JSON.stringify(loggedBody())).toContain('[MAX_DEPTH]');
   });
+
+  it('marks a circular reference instead of recursing (a route body can be any object)', () => {
+    const body: Record<string, unknown> = { name: 'Ana' };
+    body.self = body;
+    body.list = [body];
+
+    expect(() =>
+      logRequest(event(body), { logBody: true, bodyFields: ['name', 'self', 'list'] })
+    ).not.toThrow();
+    expect(loggedBody()).toEqual({ name: 'Ana', self: '[CIRCULAR]', list: ['[CIRCULAR]'] });
+  });
 });
 
 describe('RequestLogger body summary for non-JSON-shaped bodies', () => {
