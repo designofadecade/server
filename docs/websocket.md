@@ -52,12 +52,28 @@ new WebSocketServer(options?: WebSocketServerOptions)
   upgrade whose `Origin` is missing or unlisted is refused with 403
 - `verifyClient` (function, optional) - Custom upgrade gate receiving
   `{ origin, secure, req }`; return `false` to refuse. May be async. Runs after the
-  `allowedOrigins` check
+  `allowedOrigins` check. A `false` result, a throw, or not settling within
+  `upgradeTimeoutMs` refuses with 403
+- `authenticate` (function, optional) - **The authentication enforcement point.**
+  Called as `authenticate(req)` with the HTTP upgrade request, after
+  `allowedOrigins` and `verifyClient`, before the socket exists. May be async.
+  Return the authenticated identity (any truthy value, e.g. a session or user
+  object) to accept; return a falsy value, throw, reject or run past
+  `upgradeTimeoutMs` to refuse with `401 Unauthorized`. A refused client never
+  gets a socket, so none of its frames is dispatched. The error is logged, never
+  sent to the client. The result is passed with every event from that connection
+  (see [Events](#events)) and returned by [`getAuth(ws)`](#getauth)
+- `upgradeTimeoutMs` (number, optional) - One deadline for the whole upgrade gate
+  (`verifyClient` then `authenticate`). Past it the upgrade is refused: 403 while
+  `verifyClient` is pending, 401 while `authenticate` is. Without a deadline a check
+  that never settles holds the pending socket open. Default: `10000`
 
 **Throws:**
 
 - `Error` - If port is invalid (not between 1-65535)
 - `Error` - If `maxPayload` is not greater than 0
+- `Error` - If `authenticate` is not a function, or `upgradeTimeoutMs` is not a
+  finite number greater than 0
 
 **Example:**
 
@@ -71,10 +87,15 @@ const wss = new WebSocketServer({
   maxPayload: 256 * 1024,
 });
 
-// Authenticate the upgrade yourself (e.g. a cookie or token)
+// Authenticate every connection at upgrade time (e.g. a cookie or token)
 const wss = new WebSocketServer({
   port: 8080,
-  verifyClient: async ({ req }) => isValidSession(req.headers.cookie),
+  allowedOrigins: ['https://app.example.com'],
+  authenticate: async (req) => sessionFrom(req.headers.cookie), // null -> 401
+});
+
+wss.on('message', (parsed, ws, req, session) => {
+  // `session` is what authenticate returned for this connection
 });
 ```
 
@@ -106,6 +127,15 @@ console.log(`Active connections: ${wss.clientCount}`);
 ```
 
 ### Methods
+
+#### getAuth()
+
+```typescript
+getAuth(ws: WebSocket): unknown
+```
+
+Returns the `authenticate` result of an open connection, or `undefined` when the
+socket is unknown, has closed, or no `authenticate` option is set.
 
 #### broadcast()
 
@@ -163,37 +193,38 @@ The WebSocketServer extends EventEmitter and emits the following events:
 
 #### 'connection'
 
-Emitted when a client connects, with the socket and the HTTP upgrade request.
-Use the request to read headers or cookies for per-connection authentication.
+Emitted when a client connects, with the socket and the HTTP upgrade request, and,
+when the `authenticate` option is set, that connection's `authenticate` result.
 
 ```typescript
-wss.on('connection', (ws, req) => {
-  const session = req.headers.cookie;
-  // ...
+wss.on('connection', (ws, req, auth) => {
+  // `auth` is only passed when `authenticate` is configured
 });
 ```
 
-A `connection` listener that refuses a client must call `ws.terminate()` (or
-`ws.close()`) **synchronously**. Frames from a socket that is no longer open are
-dropped, but frames that arrive while an asynchronous check here is still pending
-are delivered. Do asynchronous authentication in `verifyClient`, which runs before
-the socket exists.
+> **Do not authenticate in the `connection` handler.** By the time it runs the
+> socket is open: frames that arrive while an asynchronous check here is still
+> pending are dispatched to `message` listeners, and a client refused with
+> `ws.close()` stays connected until it answers the close frame. Use the
+> `authenticate` option, which runs before the socket exists. If you must refuse a
+> client here, decide synchronously and call `ws.terminate()`, not `ws.close()`.
 
 #### 'message'
 
 Emitted when a valid message is received from an open client socket, with the
-socket that sent it and that socket's HTTP upgrade request.
+socket that sent it, that socket's HTTP upgrade request and, when the
+`authenticate` option is set, that connection's `authenticate` result.
 
 ```typescript
-wss.on('message', (parsed: ParsedMessage, ws: WebSocket, req: IncomingMessage) => {
-  // Handle message; `ws` and `req` identify the sender
+wss.on('message', (parsed: ParsedMessage, ws: WebSocket, req: IncomingMessage, auth?: unknown) => {
+  // Handle message; `ws`, `req` and `auth` identify the sender
 });
 ```
 
-Listeners that take only `parsed` keep working unchanged. Use `ws` or `req` to
-authorize the sender rather than trusting anything in the payload. `req` is the
-same object `verifyClient` received, so state recorded there is available here
-(see [Security Considerations](#security-considerations)).
+Listeners that take only `parsed` keep working unchanged. Without `authenticate`
+the event carries exactly `(parsed, ws, req)`. Authorize the sender from `auth` (or
+`ws` / `req`) rather than trusting anything in the payload (see
+[Security Considerations](#security-considerations)).
 
 **ParsedMessage Format:**
 
@@ -366,32 +397,32 @@ Individual client errors are logged but don't affect other connections:
 1. **Message Size:** Frames are capped at 1 MiB by default; tune with `maxPayload`
 2. **Origin:** Set `allowedOrigins` so other sites cannot open sockets on a
    visitor's behalf
-3. **Authentication:** Validate clients at upgrade time with `verifyClient`; it may
-   be async and runs before any frame can arrive. If you authenticate in the
-   `connection` event instead, decide synchronously and `ws.terminate()` refused
-   clients. Authorize each message against its sender (`ws` / `req`), never against
+3. **Authentication:** Authenticate with the `authenticate` option. It runs at
+   upgrade time, before the socket exists, and fails closed: a falsy result, a
+   throw or a timeout refuses the upgrade with 401, so an unauthenticated client
+   never gets a socket and none of its frames reaches a handler. Do **not**
+   authenticate in the `connection` handler: frames that arrive while such a check
+   is pending are dispatched, and `ws.close()` leaves a hostile peer connected for
+   up to 30 s (use `ws.terminate()` if you ever refuse a client there). Authorize
+   each message against its sender's `authenticate` result, never against
    identifiers in the payload:
 
    ```typescript
-   const sessions = new WeakMap<IncomingMessage, Session>();
-
    const wss = new WebSocketServer({
      port: 8080,
      allowedOrigins: ['https://app.example.com'],
-     verifyClient: async ({ req }) => {
-       const session = await sessionFrom(req);
-       if (!session) return false;
-       sessions.set(req, session); // same `req` object arrives with every message
-       return true;
-     },
+     authenticate: async (req) => sessionFrom(req), // Session | null
+     upgradeTimeoutMs: 5000,
    });
 
-   wss.on('message', (parsed, ws, req) => {
-     const session = sessions.get(req);
-     if (!session || !session.canEdit(parsed.payload.docId)) return;
+   wss.on('message', (parsed, ws, req, session) => {
+     if (!session.canEdit(parsed.payload.docId)) return;
      // ...
    });
    ```
+
+   `verifyClient` remains available for other upgrade checks (refused with 403).
+   `upgradeTimeoutMs` (default 10 s) bounds both checks together.
 
 4. **Rate Limiting:** Add rate limiting for message handling
 5. **Message Validation:** Always validate message payloads

@@ -156,17 +156,21 @@ export const handler = (event) => router.eventFunction(event);
 ```typescript
 import { WebSocketServer } from '@designofadecade/server';
 
-const wsServer = new WebSocketServer({ port: 8080 });
+const wsServer = new WebSocketServer({
+  port: 8080,
+  allowedOrigins: ['https://app.example.com'], // others refused with 403
+  // Runs at upgrade time; null/false, a throw or a timeout refuse with 401
+  // before any socket opens. Do not authenticate in the 'connection' handler.
+  authenticate: async (req) => sessionFrom(req.headers.cookie),
+});
 
-wsServer.on('connection', (ws) => {
-  console.log('Client connected');
-
-  ws.on('message', (data) => {
-    console.log('Received:', data);
-    ws.send('Echo: ' + data);
-  });
+wsServer.on('message', (parsed, ws, req, session) => {
+  // `session` is what authenticate returned for the sending connection
+  console.log(`${session.userId} sent`, parsed.type);
 });
 ```
+
+See [WebSocket](docs/websocket.md#security-considerations) for the security model.
 
 ### Static File Serving
 

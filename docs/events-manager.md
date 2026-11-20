@@ -87,8 +87,9 @@ registerEvents(events: EventRegistration[]): void
 - `events` - Array of event registration objects
   - `type` (string) - Event type identifier
   - `handler` (function) - Async function to handle the event, called as
-    `handler(msg, ws, req)` with the socket that sent it and its upgrade request
-    (see [Knowing the sender](#knowing-the-sender))
+    `handler(msg, ws, req, auth)` with the socket that sent it, its upgrade request
+    and, when the server has an `authenticate` option, that connection's
+    `authenticate` result (see [Knowing the sender](#knowing-the-sender))
 
 **Throws:**
 
@@ -263,19 +264,26 @@ interface ParsedMessage {
 
 ### Knowing the sender
 
-Every handler is called as `handler(msg, ws, req)`: `ws` is the socket that sent
-the message and `req` its HTTP upgrade request, exactly as `WebSocketServer` emits
-them. Handlers that take only `msg` keep working unchanged. Authorize the sender
-from `ws` / `req` (for example a session recorded against `req` in `verifyClient`)
-rather than trusting user or document IDs in `msg.payload`:
+Every handler is called as `handler(msg, ws, req, auth)`: `ws` is the socket that
+sent the message, `req` its HTTP upgrade request and `auth` the result of the
+server's `authenticate` option for that connection, exactly as `WebSocketServer`
+emits them (`auth` is absent when `authenticate` is not configured). Handlers that
+take only `msg` keep working unchanged. Authorize the sender from `auth` rather
+than trusting user or document IDs in `msg.payload`:
 
 ```typescript
+const wss = new WebSocketServer({
+  port: 8080,
+  allowedOrigins: ['https://app.example.com'],
+  authenticate: async (req) => sessionFrom(req), // null -> 401, no socket opens
+});
+const eventsManager = new EventsManager({ registerWebSocketServer: wss });
+
 eventsManager.registerEvents([
   {
     type: 'doc:update',
-    handler: async (msg, ws, req) => {
-      const session = req && sessions.get(req);
-      if (!session || !session.canEdit(msg.payload.docId)) return;
+    handler: async (msg, ws, req, session) => {
+      if (!session.canEdit(msg.payload.docId)) return;
       await updateDoc(msg.payload);
     },
   },
@@ -283,7 +291,7 @@ eventsManager.registerEvents([
 ```
 
 See [WebSocketServer security considerations](./websocket.md#security-considerations)
-for where to authenticate.
+for why authentication belongs in `authenticate`, not the `connection` handler.
 
 ## Event Patterns
 
