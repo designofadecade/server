@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import http from 'node:http';
 import net from 'node:net';
 import { createHmac } from 'node:crypto';
@@ -155,6 +155,114 @@ describe('Router integration', () => {
 
       expect(response.status).toBe(200);
       expect(JSON.parse(response.body).received).toBe('this is not json');
+    });
+  });
+
+  /**
+   * The path is taken verbatim from the request target. Resolving it as a URL
+   * turned `//x/admin` into `/admin` and removed dot segments, so a proxy in
+   * front guarding `/admin` judged one path and the router served another.
+   * Sent over a raw socket: `http.request` would normalise some of these.
+   */
+  describe('request target', () => {
+    const reached = vi.fn();
+
+    class TargetRoutes extends Routes {
+      constructor(router: Router) {
+        super(router);
+        this.addRoute('/admin', ['GET', 'POST'], async () => {
+          reached('/admin');
+          return { status: 200, body: 'admin' };
+        });
+        this.addRoute('/admin/users', 'GET', async () => {
+          reached('/admin/users');
+          return { status: 200, body: 'admin users' };
+        });
+        this.addRoute('/files/:name', 'GET', async (request) => ({
+          status: 200,
+          body: { name: request.params.name, path: request.path },
+        }));
+        this.addRoute('/search', 'GET', async (request) => ({
+          status: 200,
+          body: { query: request.query, path: request.path },
+        }));
+      }
+    }
+
+    const send = (port: number, target: string, method = 'GET') =>
+      rawRequest(
+        port,
+        `${method} ${target} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n`
+      );
+
+    const statusOf = (raw: string) => Number(/^HTTP\/1\.1 (\d{3})/.exec(raw)?.[1]);
+    const bodyOf = (raw: string) => raw.slice(raw.indexOf('\r\n\r\n') + 4);
+
+    it.each([
+      '//x/admin',
+      '//x/admin/users',
+      '/\\x/admin',
+      '/pub/../admin',
+      '/pub/%2e%2e/admin',
+      '/pub/%2E%2e/admin',
+      '/pub/.%2E/admin',
+      '/./admin',
+      '/admin/.',
+      '/admin/users/..',
+      'http://x/admin',
+      'http://localhost/admin',
+      '*',
+      '/admin%00',
+      '/admin?x=%00',
+      '/admin#frag',
+    ])('refuses %j with 400 and never reaches /admin', async (target) => {
+      reached.mockClear();
+      live = await listen(new Router({ initRoutes: [TargetRoutes] }));
+
+      for (const method of ['GET', 'POST', 'OPTIONS']) {
+        const raw = await send(live.port, target, method);
+        expect(statusOf(raw), `${method} ${target}`).toBe(400);
+        expect(JSON.parse(bodyOf(raw))).toEqual({
+          success: false,
+          error: { code: 'INVALID_REQUEST', message: 'Invalid request URL' },
+        });
+      }
+      expect(reached).not.toHaveBeenCalled();
+    });
+
+    it('serves ordinary paths exactly as before', async () => {
+      live = await listen(new Router({ initRoutes: [TargetRoutes] }));
+
+      expect(statusOf(await send(live.port, '/admin'))).toBe(200);
+      expect(statusOf(await send(live.port, '/admin/'))).toBe(200);
+      expect(statusOf(await send(live.port, '/admin/users/'))).toBe(200);
+
+      // Params stay percent-encoded, as URLPattern always gave them.
+      const spaced = JSON.parse(bodyOf(await send(live.port, '/files/a%20b')));
+      expect(spaced).toEqual({ name: 'a%20b', path: '/files/a%20b' });
+
+      // Characters URL parsing percent-encoded are still encoded.
+      const quoted = JSON.parse(bodyOf(await send(live.port, '/files/a"b{c}')));
+      expect(quoted).toEqual({ name: 'a%22b%7Bc%7D', path: '/files/a%22b%7Bc%7D' });
+
+      // Dots inside a segment are not dot segments.
+      const dotted = JSON.parse(bodyOf(await send(live.port, '/files/.env...')));
+      expect(dotted.name).toBe('.env...');
+
+      const search = JSON.parse(
+        bodyOf(await send(live.port, '/search?next=/a?b=c&q=1&q=2&e=a+b%20c&flag'))
+      );
+      expect(search).toEqual({
+        path: '/search',
+        query: { next: '/a?b=c', q: '2', e: 'a b c', flag: '' },
+      });
+    });
+
+    it('still serves after refusing a target', async () => {
+      live = await listen(new Router({ initRoutes: [TargetRoutes] }));
+      expect(statusOf(await send(live.port, '//x/admin'))).toBe(400);
+      const ok = await request(live.port, '/admin');
+      expect(ok.status).toBe(200);
     });
   });
 

@@ -54,7 +54,7 @@ describe('Router', () => {
       token: string
     ): Promise<unknown> => {
       const req = {
-        url: 'http://localhost:3000/whoami',
+        url: '/whoami',
         method: 'GET',
         headers: { host: 'localhost:3000', authorization: `Bearer ${token}` },
         on: vi.fn((event: string, cb: () => void) => {
@@ -470,7 +470,7 @@ describe('Router', () => {
       router = new Router({ initRoutes: [TestRoutes] });
 
       mockReq = {
-        url: 'http://localhost:3000/test',
+        url: '/test',
         method: 'GET',
         headers: {
           host: 'localhost:3000',
@@ -990,7 +990,7 @@ describe('Router', () => {
       }
 
       router = new Router({ initRoutes: [BufferRoutes] });
-      mockReq.url = 'http://localhost:3000/buffer';
+      mockReq.url = '/buffer';
 
       mockReq.on.mockImplementation((event: string, callback: () => void) => {
         if (event === 'end') callback();
@@ -1015,7 +1015,7 @@ describe('Router', () => {
       }
 
       router = new Router({ initRoutes: [Base64Routes] });
-      mockReq.url = 'http://localhost:3000/base64';
+      mockReq.url = '/base64';
 
       mockReq.on.mockImplementation((event: string, callback: () => void) => {
         if (event === 'end') callback();
@@ -1024,7 +1024,7 @@ describe('Router', () => {
 
       await router.nodeJSRequest(mockReq, mockRes);
 
-      expect(mockRes.end).toHaveBeenCalled();
+      expect(mockRes.end).toHaveBeenCalledWith(Buffer.from('test'));
     });
   });
 

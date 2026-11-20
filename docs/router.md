@@ -152,6 +152,28 @@ ordinary applications.
 Request bodies are capped at `maxBodyBytes` (default 1 MiB); a larger body is
 answered `413 PAYLOAD_TOO_LARGE` before a route runs.
 
+**The request path is taken verbatim.** `request.path` is the request target
+up to the first `?`, never a URL-resolved form of it, so the router routes on
+the same path a proxy, CDN or WAF in front of it saw. `request.query` is the
+rest, parsed with `URLSearchParams` (a `?` inside a value stays in the value;
+for a repeated name the last value wins). Path parameters stay
+percent-encoded (`/files/a%20b` gives `params.name === 'a%20b'`), as before.
+A target that URL resolution would have read as a different path is refused
+with `400 INVALID_REQUEST` before CORS, the body, middleware or a route runs:
+
+- anything not starting with exactly one `/`: `//host/path`, `/\host/path`,
+  absolute-form (`http://host/path`) and asterisk-form (`*`, so `OPTIONS *`
+  too);
+- a backslash anywhere in the path;
+- a `.` or `..` segment, raw or percent-encoded in any case (`/a/../b`,
+  `/a/%2e%2e/b`, `/a/%2E./b`, `/./a`, `/a/.`); dots inside a segment
+  (`/.env`, `/a...`) are fine;
+- a control character, `%00`, or a `#` anywhere in the target.
+
+The refusal is logged at `warn` as `ROUTER_INVALID_REQUEST_URL` with a fixed
+`reason` and the method, never the target. A `Host` header no URL parser
+accepts (`Host: a b`) is refused the same way.
+
 A client that disconnects while its body is being read is logged at `debug`
 as `ROUTER_CLIENT_ABORTED` and no response is written; it is not an error.
 A body Node cannot parse (bad chunked framing, a body cut short) or one that
@@ -263,6 +285,12 @@ export const handler = async (event: APIGatewayProxyEventV2) => {
 `queryStringParameters` is typed `Record<string, string | undefined>` to match
 what API Gateway actually sends. Parameters with no value are dropped before
 handlers see them, so `request.query` remains `Record<string, string>`.
+
+`request.path` is `requestContext.http.path`. A path starting with `//` or
+`/\`, containing a backslash, a `.`/`..` segment (raw or `%2e`), a control
+character or `%00` gets `400 INVALID_REQUEST`, the same rules as
+`nodeJSRequest`. API Gateway normalises most of these away; the check keeps
+the two transports refusing the same paths.
 
 `request.clientIp` is `requestContext.http.sourceIp` and `request.requestId`
 is `requestContext.requestId`, both set by API Gateway. Response cookies set
@@ -676,8 +704,10 @@ Log lines written by the router carry a `code` for monitoring:
   read (`debug`); no response is written
 - `ROUTER_CORS_ORIGIN_BLOCKED` - A cross-origin request from an origin not on
   the `cors` allowlist was refused
-- `ROUTER_INVALID_REQUEST_URL` - A request with an unparseable URL or `Host`
-  header was refused
+- `ROUTER_INVALID_REQUEST_URL` - A request target the router refuses (see
+  `nodeJSRequest()`) or an unparseable `Host` header; logged at `warn` with a
+  fixed `reason` (`leading-double-slash`, `dot-segment`, `host`, ...) and the
+  method, never the target (both transports)
 - `ROUTER_JWT_ALG_NOT_ALLOWED`, `ROUTER_JWT_BAD_SIGNATURE`,
   `ROUTER_JWT_EXPIRED`, `ROUTER_JWT_VERIFY_FAILED` - A bearer token was
   rejected (algorithm, signature, expiry, custom verifier)

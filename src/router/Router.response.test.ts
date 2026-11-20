@@ -23,7 +23,7 @@ const routerReturning = (response: RouterResponse) =>
 
 const nodeRequest = async (router: Router) => {
   const req = {
-    url: 'http://localhost:3000/t',
+    url: '/t',
     method: 'GET',
     headers: {} as Record<string, string>,
     on: vi.fn(),

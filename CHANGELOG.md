@@ -185,6 +185,20 @@ Every item is a rename unless marked otherwise. There are no aliases.
   receives the socket there.
   (behaviour, see Security)
 
+- **The Node transport routes on the request target verbatim and refuses
+  targets URL resolution would rewrite.** `request.path` is the target up to
+  the first `?`, no longer `new URL(req.url, base).pathname`. A target that
+  does not start with exactly one `/` (`//host/...`, `/\...`, absolute-form
+  `http://host/...`, `*` including `OPTIONS *`), or that contains a
+  backslash, a `.`/`..` segment (raw or percent-encoded, any case: `%2e`,
+  `%2E`), a control character, `%00` or `#`, gets `400 INVALID_REQUEST`
+  before CORS, the body or any route runs. `eventFunction` refuses the same
+  paths (`requestContext.http.path`), `#` excepted. Ordinary paths, trailing
+  slashes, percent-encoded characters, path parameters (still
+  percent-encoded) and query strings behave exactly as before. Mock requests
+  in tests that set `req.url` to an absolute URL (`'http://localhost/x'`)
+  must use the path (`'/x'`). (behaviour, see Security)
+
 ### Security
 
 - **Client IP is never taken from the first `X-Forwarded-For` value.** That
@@ -362,6 +376,19 @@ Every item is a rename unless marked otherwise. There are no aliases.
   request-smuggling probes and slow-client attacks went unseen. The log
   carries Node's error code only (`errorCode`), never the raw request bytes.
   A client that simply reset the connection is logged at `debug`.
+
+- **The router no longer serves a different path than a proxy in front of it
+  judged.** `nodeJSRequest` took `request.path` from `new URL(req.url, base)`,
+  and URL resolution reads `//x/admin` as an authority and serves `/admin`
+  (`/\x/admin` likewise), and removes dot segments, percent-encoded ones
+  included (`/pub/%2e%2e/admin`). A proxy, CDN or WAF that guards `/admin` by
+  path saw `//x/admin` or `/pub/%2e%2e/admin`, let it through, and the router
+  ran the `/admin` route. The path is now taken verbatim and every such target
+  is refused with `400 INVALID_REQUEST` on both transports, so the router
+  never dispatches on a path other than the one it received. The refusal is
+  logged as `ROUTER_INVALID_REQUEST_URL` with a fixed `reason` and the method
+  (cut at 16 characters), never the target; the logged `Host` of a malformed
+  Host refusal is dropped for the same reason.
 
 ### Fixed
 

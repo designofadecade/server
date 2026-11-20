@@ -15,8 +15,9 @@ the client IP and request id are taken only from sources the caller cannot
 forge, the CORS allowlist refuses cross-origin writes, `logRequest` logs only
 the values you name, WebSocket checks have a deadline, the local Event Function proxy serves
 loopback only and passes the raw request body, request bodies are capped at
-1 MiB on every transport, and a plain Node `Server` times out slow clients
-(items 6 and 10 to 16).
+1 MiB on every transport, a plain Node `Server` times out slow clients, and
+request targets that URL resolution would rewrite are refused
+(items 6 and 10 to 17).
 
 Work through the greps. Nothing returned means that item does not apply.
 
@@ -396,6 +397,38 @@ before the client sends the body, when `Server` knows the limit. With
 `WebFunction.serve` there is nothing to do: it passes the router's
 `maxBodyBytes`. A hand-built `Server` in front of a router can opt in with
 `new Server({ port, maxBodyBytes: router.maxBodyBytes }, handler)`.
+
+### 17. Request targets are taken verbatim; rewritable ones get `400`
+
+```bash
+grep -rn "url: *['\"\`]https\?://" --include="*.ts" --include="*.js" src test tests | grep -v node_modules
+```
+
+`request.path` is now the request target up to the first `?`, exactly as the
+client sent it, instead of `new URL(req.url, base).pathname`. URL resolution
+read `//x/admin` as `/admin` and removed dot segments, so a proxy in front
+and the router could disagree about the path. These targets now get
+`400 INVALID_REQUEST`, on the Node transport and (by path) in an Event
+Function:
+
+- not starting with exactly one `/`: `//x/...`, `/\x/...`, absolute-form
+  `http://host/path`, `*` (`OPTIONS *` included);
+- a backslash, a `.` or `..` segment (raw or `%2e`/`%2E`), a control
+  character or `%00`; on the Node transport also `#`.
+
+Real clients (browsers, `fetch`, curl) already normalise these before
+sending, so nothing changes for them. What to check:
+
+- **Unit tests that build a mock `IncomingMessage`** with an absolute
+  `url` (`'http://localhost:3000/users'`) now get `400`: use the path
+  (`'/users'`). Node itself always passes origin-form for ordinary requests.
+- **Links or clients that rely on `..` being resolved server-side**
+  (`/assets/../index.html`) must send the resolved path.
+- **A forward proxy** sending absolute-form targets to the app directly is
+  not supported; put a reverse proxy in front.
+
+Path parameters, trailing slashes, percent-encoded characters and query
+strings are unchanged.
 
 ---
 

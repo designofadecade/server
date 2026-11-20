@@ -4,6 +4,7 @@ import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto
 import { logger } from '../logger/Logger.js';
 import RouteError from './RouteError.js';
 import { isCorsSafelistedContentType, isSameOriginRequest } from './origin.js';
+import { checkRequestPath, parseRequestTarget } from './requestTarget.js';
 import {
   RAW_BODY,
   answerPayloadTooLarge,
@@ -387,6 +388,16 @@ export default class Router {
     return end === path.length ? path : path.slice(0, end);
   }
 
+  /** Whether a Host header value parses as the authority of an http URL. */
+  static #isParseableHost(host: string): boolean {
+    try {
+      new URL(`http://${host}`);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   /** Longest raw path written to an error log line when `logPath` is on. */
   static #MAX_LOGGED_PATH = 256;
 
@@ -429,6 +440,27 @@ export default class Router {
     // Kept outside the try so the error log can name the matched route.
     let routerRequest: RouterRequest | undefined;
     try {
+      // SECURITY: the same path rules as the Node transport (see
+      // requestTarget.ts). API Gateway normalises most of these away; this is
+      // defence in depth, so the two transports refuse the same paths.
+      const pathRefused = checkRequestPath(event.requestContext.http.path);
+      if (pathRefused) {
+        logger.warn('Rejected request with an invalid request path', {
+          code: 'ROUTER_INVALID_REQUEST_URL',
+          source: 'Router.eventFunction',
+          reason: pathRefused,
+          method: event.requestContext.http.method?.slice(0, 16),
+        });
+        return {
+          statusCode: 400,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            success: false,
+            error: { code: 'INVALID_REQUEST', message: 'Invalid request URL' },
+          }),
+        };
+      }
+
       let body = Router.MethodsWithBody.includes(event.requestContext.http.method)
         ? event.body
         : null;
@@ -536,6 +568,37 @@ export default class Router {
       return;
     }
 
+    // SECURITY: the path is taken verbatim from the request target, never by
+    // resolving it as a URL, and any target that a URL parser, a proxy or
+    // the router could read as a different path is refused. See
+    // requestTarget.ts. Checked before CORS, OPTIONS and the body, so a
+    // refused target reaches nothing.
+    const target = parseRequestTarget(req.url);
+    // SECURITY: a malformed Host header (e.g. 'a b') is refused as well. It
+    // used to make the URL constructor throw outside any try, taking the
+    // process down; the path no longer depends on Host, but a Host no URL
+    // parser accepts is still not served.
+    const hostRefused =
+      req.headers.host !== undefined && !Router.#isParseableHost(req.headers.host);
+    if ('refused' in target || hostRefused) {
+      logger.warn('Rejected request with an invalid request target or Host header', {
+        code: 'ROUTER_INVALID_REQUEST_URL',
+        source: 'Router.nodeJSRequest',
+        // A fixed reason, never the target or Host itself.
+        reason: 'refused' in target ? target.refused : 'host',
+        method: req.method?.slice(0, 16),
+      });
+      res.statusCode = 400;
+      res.setHeader('Content-Type', 'application/json');
+      res.end(
+        JSON.stringify({
+          success: false,
+          error: { code: 'INVALID_REQUEST', message: 'Invalid request URL' },
+        })
+      );
+      return;
+    }
+
     if (cors) {
       // SECURITY: Reflecting an arbitrary Origin alongside
       // Access-Control-Allow-Credentials lets any site make cookie-authenticated
@@ -607,42 +670,18 @@ export default class Router {
       return;
     }
 
-    // SECURITY: A malformed Host header (e.g. 'a b') makes the URL constructor
-    // throw. This used to sit outside the try below, so the rejection escaped
-    // nodeJSRequest() and took the process down under Node's default
-    // unhandled-rejection policy. Parse defensively and answer 400 instead.
-    let requestUrl: URL;
-    try {
-      requestUrl = new URL(req.url!, `http://${req.headers.host ?? 'localhost'}`);
-    } catch {
-      logger.warn('Rejected request with unparseable URL or Host header', {
-        code: 'ROUTER_INVALID_REQUEST_URL',
-        source: 'Router.nodeJSRequest',
-        host: req.headers.host,
-      });
-      res.statusCode = 400;
-      res.setHeader('Content-Type', 'application/json');
-      res.end(
-        JSON.stringify({
-          success: false,
-          error: { code: 'INVALID_REQUEST', message: 'Invalid request URL' },
-        })
-      );
-      return;
-    }
-
     // Kept outside the try so the error log can name the matched route.
     let routerRequest: RouterRequest | undefined;
     try {
       routerRequest = {
-        path: requestUrl.pathname,
+        path: target.path,
         method: req.method!,
         body: Router.MethodsWithBody.includes(req.method!)
           ? await this.#getNodeJSRequestBody(req, rawBody)
           : null,
         cookies: this.#parseCookies(req.headers?.cookie || ''),
         params: {},
-        query: Object.fromEntries(requestUrl.searchParams),
+        query: target.query,
         headers: req.headers as Record<string, string | string[] | undefined>,
         clientIp: this.#nodeClientIp(req),
         requestId: this.#nodeRequestId(req),
@@ -690,7 +729,7 @@ export default class Router {
         logger.debug('Client aborted the request before its body was read', {
           code: 'ROUTER_CLIENT_ABORTED',
           source: 'Router.nodeJSRequest',
-          ...this.#requestLogFields(requestUrl.pathname),
+          ...this.#requestLogFields(target.path),
           method: req.method,
         });
         return;
@@ -702,7 +741,7 @@ export default class Router {
         status: 500,
         context: {
           source: 'Router.nodeJSRequest',
-          ...this.#requestLogFields(requestUrl.pathname, routerRequest?.route),
+          ...this.#requestLogFields(target.path, routerRequest?.route),
           method: req.method,
         },
       });

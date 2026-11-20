@@ -33,7 +33,7 @@ const callWithToken = async (
 ): Promise<unknown> => {
   const router = new Router({ initRoutes: [Echo], jwt });
   const req = {
-    url: 'http://localhost/echo',
+    url: '/echo',
     method: 'GET',
     headers: { host: 'localhost', authorization: `Bearer ${token}` },
     on: vi.fn((event: string, cb: () => void) => {

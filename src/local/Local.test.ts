@@ -16,7 +16,7 @@ describe('Local', () => {
       }));
 
       mockReq = {
-        url: 'http://localhost:3000/test',
+        url: '/test',
         method: 'GET',
         headers: {
           'content-type': 'application/json',
@@ -67,7 +67,7 @@ describe('Local', () => {
 
     it('should forward POST request with body to Lambda handler', async () => {
       mockReq.method = 'POST';
-      mockReq.url = 'http://localhost:3000/api/users';
+      mockReq.url = '/api/users';
 
       const requestBody = { name: 'John Doe' };
 
@@ -99,7 +99,7 @@ describe('Local', () => {
     });
 
     it('should parse query string parameters', async () => {
-      mockReq.url = 'http://localhost:3000/test?foo=bar&baz=qux';
+      mockReq.url = '/test?foo=bar&baz=qux';
 
       mockReq.on.mockImplementation((event, callback) => {
         if (event === 'end') callback();
@@ -356,7 +356,7 @@ describe('Local', () => {
 
     it('should handle PUT requests', async () => {
       mockReq.method = 'PUT';
-      mockReq.url = 'http://localhost:3000/api/users/1';
+      mockReq.url = '/api/users/1';
 
       mockReq.on.mockImplementation((event, callback) => {
         if (event === 'data') callback('{"name":"Updated"}');
@@ -380,7 +380,7 @@ describe('Local', () => {
 
     it('should handle PATCH requests', async () => {
       mockReq.method = 'PATCH';
-      mockReq.url = 'http://localhost:3000/api/users/1';
+      mockReq.url = '/api/users/1';
 
       mockReq.on.mockImplementation((event, callback) => {
         if (event === 'data') callback('{"status":"active"}');
@@ -404,7 +404,7 @@ describe('Local', () => {
 
     it('should handle DELETE requests', async () => {
       mockReq.method = 'DELETE';
-      mockReq.url = 'http://localhost:3000/api/users/1';
+      mockReq.url = '/api/users/1';
 
       mockReq.on.mockImplementation((event, callback) => {
         if (event === 'end') callback();

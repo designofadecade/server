@@ -1,6 +1,7 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import Router from './Router.ts';
 import Routes from './Routes.ts';
+import { logger } from '../logger/Logger.ts';
 
 /**
  * Route paths are attacker-controlled. Trailing slashes were stripped with
@@ -24,10 +25,11 @@ describe('Router path normalization ReDoS resistance', () => {
     });
 
   it('normalizes a long run of slashes in linear time', async () => {
+    // Not leading: a path starting with `//` is refused before routing.
     const router = build();
     const started = performance.now();
     await router.eventFunction({
-      requestContext: { http: { method: 'GET', path: '/'.repeat(200_000) + 'x' } },
+      requestContext: { http: { method: 'GET', path: '/a' + '/'.repeat(200_000) + 'x' } },
       headers: {},
     });
     expect(performance.now() - started).toBeLessThan(BUDGET_MS);
@@ -180,5 +182,133 @@ describe('Router JSON body parsing ignores CORS-safelisted content types', () =>
     expect((await viaLambda(['application/json; charset=utf-8'], payload)).echo.kind).toBe(
       'string'
     );
+  });
+});
+
+/**
+ * The request path is taken verbatim. URL resolution used to turn `//x/admin`
+ * into `/admin` and drop dot segments, so the router dispatched on a path a
+ * proxy in front never judged. Such targets are refused on both transports,
+ * before CORS, the body or any middleware, and the refusal is logged without
+ * the target itself.
+ */
+describe('Router refuses request targets that resolution would rewrite', () => {
+  const handler = vi.fn(async () => ({ status: 200, body: 'admin' }));
+  const middleware = vi.fn(async () => null);
+
+  const build = () =>
+    new Router({
+      middleware: [middleware],
+      initRoutes: [
+        class extends Routes {
+          constructor(router: Router) {
+            super(router);
+            this.addRoute('/admin', ['GET', 'POST', 'OPTIONS'], handler);
+            this.addRoute('/tags/:tag', 'GET', async (request) => ({
+              status: 200,
+              body: { tag: request.params.tag },
+            }));
+          }
+        },
+      ],
+    });
+
+  const nodeRequest = async (router: Router, url: string, method = 'GET') => {
+    const req = {
+      url,
+      method,
+      headers: { host: 'localhost', origin: 'https://evil.example' },
+      socket: {},
+      on: vi.fn(),
+    };
+    const res = { statusCode: 0, setHeader: vi.fn(), end: vi.fn() };
+    await router.nodeJSRequest(req as never, res as never, { cors: ['https://app.example'] });
+    return res;
+  };
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    handler.mockClear();
+    middleware.mockClear();
+  });
+
+  it('answers 400 on the Node transport and logs a fixed reason, never the target', async () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    const router = build();
+
+    const res = await nodeRequest(router, '//secret-token/admin', 'POST');
+
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.end.mock.calls[0]![0] as string)).toEqual({
+      success: false,
+      error: { code: 'INVALID_REQUEST', message: 'Invalid request URL' },
+    });
+    expect(handler).not.toHaveBeenCalled();
+    expect(middleware).not.toHaveBeenCalled();
+    // Refused before CORS: no CORS log and no CORS headers.
+    expect(res.setHeader).not.toHaveBeenCalledWith('Vary', 'Origin');
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(expect.any(String), {
+      code: 'ROUTER_INVALID_REQUEST_URL',
+      source: 'Router.nodeJSRequest',
+      reason: 'leading-double-slash',
+      method: 'POST',
+    });
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('secret-token');
+  });
+
+  it('caps the logged method', async () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    await nodeRequest(build(), '/a/../admin', 'X'.repeat(100));
+    expect(warn.mock.calls[0]![1]).toMatchObject({ reason: 'dot-segment', method: 'X'.repeat(16) });
+  });
+
+  it.each([
+    '//x/admin',
+    '/\\x/admin',
+    '/pub/../admin',
+    '/pub/%2e%2E/admin',
+    '/./admin',
+    '/admin/.',
+  ])('answers 400 to an Event Function path of %j', async (path) => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    const result = await build().eventFunction({
+      requestContext: { http: { method: 'GET', path } },
+      headers: {},
+    });
+    expect(result.statusCode).toBe(400);
+    expect(JSON.parse(result.body as string)).toEqual({
+      success: false,
+      error: { code: 'INVALID_REQUEST', message: 'Invalid request URL' },
+    });
+    expect(handler).not.toHaveBeenCalled();
+    expect(middleware).not.toHaveBeenCalled();
+    expect(warn.mock.calls[0]![1]).toMatchObject({
+      code: 'ROUTER_INVALID_REQUEST_URL',
+      source: 'Router.eventFunction',
+    });
+  });
+
+  it('still serves ordinary Event Function paths, a decoded # and space included', async () => {
+    const router = build();
+    const admin = await router.eventFunction({
+      requestContext: { http: { method: 'GET', path: '/admin/' } },
+      headers: {},
+    });
+    expect(admin.statusCode).toBe(200);
+
+    const spaced = await router.eventFunction({
+      requestContext: { http: { method: 'GET', path: '/tags/a b' } },
+      headers: {},
+    });
+    expect(spaced.statusCode).toBe(200);
+
+    // Not refused as a fragment (routing it is URLPattern's business, as before).
+    vi.spyOn(logger, 'error').mockImplementation(() => {});
+    const hash = await router.eventFunction({
+      requestContext: { http: { method: 'GET', path: '/tags/#a' } },
+      headers: {},
+    });
+    expect(hash.statusCode).not.toBe(400);
   });
 });
