@@ -63,8 +63,24 @@ the reasoning for choosing a mode is in
   `method` is treated as a `RouterRequest`; API Gateway events have no top-level
   `method`. `logResponse` reads `status` (a `RouterResponse`) as well as
   `statusCode`.
+- **`RouterOptions.maxBodyBytes`** — the request body limit, default 1 MiB,
+  applied on every transport; larger bodies get `413 PAYLOAD_TOO_LARGE` (see
+  Fixed).
+- **`RouterOptions.logPath`** — adds the raw path (query removed, cut at 256
+  characters) to the router's own error logs, which otherwise carry only
+  `route` (see Security).
+- **`WebSocketServer` options `authenticate` and `upgradeTimeoutMs`, and
+  `getAuth(ws)`** — authenticate at upgrade time, bound the whole upgrade
+  gate, and read a connection's authenticate result (see Security).
+- **`Local.EventFunctionProxy` options `cors` and `allowedHosts`** — opt
+  origins and Host names in beyond the loopback-only default (see Security).
+- **`logRequest` options `logBody`, `bodyFields`, `paramFields` and
+  `logPath`** — name the body fields and parameters whose values may be
+  logged, and opt the raw path back in (see Security).
 - **Exports from the package root:** `WebFunction`, `WebFunctionOptions`,
-  `ServerOptions`, `ServerAddress`, `JwtOptions`, `JwtHmacAlgorithm`.
+  `ServerOptions`, `ServerAddress`, `JwtOptions`, `JwtHmacAlgorithm`,
+  `EventFunctionProxyOptions`, and from `RequestLogger` the types
+  `LoggableRequest`, `RequestLogOptions` and `LogRequestOptions`.
 - **`docs/deployment-modes.md`** — why choose a Web Function over an Event
   Function and when not to, a decision table, a minimal entry file for each of
   the three modes using one `Router`, and a production checklist.
@@ -119,6 +135,20 @@ Every item is a rename unless marked otherwise. There are no aliases.
 - **`WebSocketServer` refuses upgrades whose checks run past
   `upgradeTimeoutMs`** (default 10 000 ms), including a `verifyClient` that
   never settles. (behaviour, see Security)
+- **Event Functions answer `413 PAYLOAD_TOO_LARGE` for bodies over
+  `maxBodyBytes`** (default 1 MiB); they used to accept anything API Gateway
+  delivered. Raise `maxBodyBytes` if you rely on larger bodies. (behaviour,
+  see Fixed)
+- **`text/plain`, `application/x-www-form-urlencoded` and
+  `multipart/form-data` bodies are no longer JSON-parsed**, even when the
+  content type mentions `application/json`; `request.body` is the raw string.
+  (behaviour, see Security)
+- **`WebSocketServer` drops frames from sockets that are no longer `OPEN`**,
+  and `message` listeners and `EventsManager` handlers receive extra trailing
+  arguments (`ws, req`, plus `auth` with `authenticate`). A handler that
+  already took an optional second parameter, or logs all its arguments, now
+  receives the socket there.
+  (behaviour, see Security)
 
 ### Security
 
@@ -180,7 +210,7 @@ Every item is a rename unless marked otherwise. There are no aliases.
     terminating a client in the `connection` handler stops its messages at once.
     **Behaviour change:** frames that arrive after the server has started closing
     a socket are no longer emitted.
-- **`logRequest` logs no request values by default** (F4). A body that was
+- **`logRequest` logs no request values by default**. A body that was
   not JSON (a form-encoded login, multipart, plain text, a base64 event body)
   used to be logged as a raw string, and JSON bodies were filtered only by a
   list of sensitive key names, so fields with other names (`dob`, a diagnosis,
@@ -205,7 +235,7 @@ Every item is a rename unless marked otherwise. There are no aliases.
   path too. They now log `route`, the matched pattern, and no path when none
   matched. `new Router({ logPath: true })` opts the path back in, without the
   query string and cut at 256 characters, as `RequestLogger` does.
-- **The CORS allowlist rejects, not just logs** (F2). With `cors: string[]`, a
+- **The CORS allowlist rejects, not just logs**. With `cors: string[]`, a
   request whose `Origin` is neither on the list nor same-origin gets
   `403 CORS_ORIGIN_FORBIDDEN` for preflights and every method but GET/HEAD,
   before the body is read or any middleware or route runs. Same-origin means
@@ -217,7 +247,7 @@ Every item is a rename unless marked otherwise. There are no aliases.
   `eventFunction` does no CORS handling (configure it on API Gateway). CORS is
   not a CSRF defence on its own; see docs/router.md.
 - **`Local.EventFunctionProxy` no longer sends `Access-Control-Allow-Origin: *`
-  or serves any Host** (F5, F6). The proxy injects an authorizer into every
+  or serves any Host**. The proxy injects an authorizer into every
   event, so any website the developer visited could drive the local backend
   and read responses as that identity, and DNS rebinding reached it as
   same-origin. By default it now serves only loopback `Host` names
@@ -249,7 +279,7 @@ Every item is a rename unless marked otherwise. There are no aliases.
   `cors: [...]` to narrow that. Cross-site GETs still run, so GET routes must
   not have side effects. The logged Host of a refusal is cut at
   200 characters.
-- **`WebSocketServer` `authenticate` option** (F3). `authenticate(req)` runs at
+- **`WebSocketServer` `authenticate` option**. `authenticate(req)` runs at
   upgrade time, after `allowedOrigins` and `verifyClient`. A falsy result, a
   throw, a rejection or running past `upgradeTimeoutMs` refuses the upgrade
   with 401, so no socket opens and none of the client's frames is dispatched;
@@ -302,7 +332,7 @@ Every item is a rename unless marked otherwise. There are no aliases.
 - **`logRequest` no longer throws on a non-JSON body.** A raw event body went
   through a bare `JSON.parse`, so any plain-text or form body made the logging
   call itself throw and take the request down with it. Non-JSON bodies are now
-  logged as strings.
+  summarised, never logged as text.
 - **`logResponse` understands `RouterResponse`.** It read only `statusCode`, so
   a `RouterResponse` (which uses `status`) was always logged as `undefined`
   and never at `error` level. Both fields are read; a missing status defaults

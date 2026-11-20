@@ -227,7 +227,7 @@ drop the catch.
 ### 10. WebSocket `message` listeners receive the sender
 
 ```bash
-grep -rn "on('message'\|EventsManager\|\.register(" --include="*.ts" --include="*.js" src packages | grep -v node_modules
+grep -rn "on('message'\|EventsManager\|registerEvents(\|addListener(" --include="*.ts" --include="*.js" src packages | grep -v node_modules
 ```
 
 `WebSocketServer` now emits `message` as `(parsed, ws, req)`, and
