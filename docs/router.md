@@ -92,6 +92,11 @@ new Router(options?: RouterOptions)
   proxies** (CloudFront: `IamAuth` on the endpoint, invoke permission granted
   only to your distribution). If clients can call the endpoint directly, they
   choose the entry this reads.
+- `logPath` (boolean, optional) - Also log the raw request path on the router's
+  own error lines (handler errors, 404s, request failures). Default: `false`:
+  a path can carry secrets and personal data, so those lines carry only
+  `route`, the matched pattern, and no path when no route matched. When on,
+  the path is logged without its query string and cut at 256 characters.
 
 **Example:**
 
