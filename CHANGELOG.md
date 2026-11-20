@@ -20,6 +20,9 @@ the reasoning for choosing a mode is in
 
 ### Added
 
+- **`RouterRequest.route`** (optional): the matched route pattern
+  (`/users/:id`), set by the router before middleware in every mode; unset
+  when no route matched.
 - **`WebFunction.serve(router, options)`** — entry point for a Lambda Web
   Function that is, unchanged, also a local or any-host Node server. Wires
   `router.nodeJSRequest(req, res, { cors })` to a `Server` and returns it. A
@@ -103,7 +106,9 @@ Every item is a rename unless marked otherwise. There are no aliases.
   (behaviour, see Security)
 - **`logRequest` logs no request values by default**, only the body's content
   type and size and the names of query and path parameters. New options
-  `logBody` + `bodyFields` and `paramFields`. (behaviour, see Security)
+  `logBody` + `bodyFields` and `paramFields`. The request helpers log the
+  matched `route` pattern instead of the raw `path` unless `logPath: true`.
+  (behaviour, see Security)
 - **`WebSocketServer` refuses upgrades whose checks run past
   `upgradeTimeoutMs`** (default 10 000 ms), including a `verifyClient` that
   never settles. (behaviour, see Security)
@@ -179,10 +184,13 @@ Every item is a rename unless marked otherwise. There are no aliases.
   summary and warns once (`REQUEST_LOGGER_BODY_FIELDS_REQUIRED`). Unlisted
   keys are `'[REDACTED]'` at any depth, sensitive keys (password, token, ssn,
   cardNumber, ...) stay redacted even when listed, strings are capped at 256
-  characters, and text and binary bodies are never logged. The logged `path`
-  and `userAgent` are cut at 256 characters; `path` is the raw request path
-  (the router exposes no route pattern), so secrets in URLs still reach the
-  log.
+  characters, and text and binary bodies are never logged. `logRequest`,
+  `createRequestLogger` and `logResponse` log `route`, the matched pattern
+  (new optional `RouterRequest.route`, set by the router in every mode), not
+  the raw path, which can carry reset tokens or email addresses; the raw
+  `path` is logged only with the new `logPath: true` option, and with no
+  matched route (404, raw API Gateway events) no path is logged without it.
+  `route`, `path` and `userAgent` are cut at 256 characters.
 - **The CORS allowlist rejects, not just logs** (F2). With `cors: string[]`, a
   request whose `Origin` is neither on the list nor same-origin gets
   `403 CORS_ORIGIN_FORBIDDEN` for preflights and every method but GET/HEAD,

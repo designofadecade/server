@@ -284,9 +284,11 @@ Unlisted fields become `'[REDACTED]'`. Nested keys must be listed too, so
 even when listed. `logBody: true` without a non-empty `bodyFields` logs only
 the summary and warns once. `queryParams` and `pathParams` in log lines are now
 arrays of names unless `paramFields` is set, so update any log queries that
-read their values. `path` and `userAgent` are cut at 256 characters. `path` is
-the raw request path, not the route pattern, so keep secrets (reset tokens,
-invite codes) out of URLs on logged routes.
+read their values. Log lines carry `route` (the matched pattern, e.g.
+`/users/:id`) instead of `path`; pass `{ logPath: true }` to `logRequest`,
+`createRequestLogger` or `logResponse` to log the raw path too, and update log
+queries that filter on `path`. `route`, `path` and `userAgent` are cut at 256
+characters.
 
 ### 12. CORS-safelisted content types are not JSON-parsed
 

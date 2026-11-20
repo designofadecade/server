@@ -330,8 +330,8 @@ class PageRoutes extends Routes {
 
 ## RequestLogger
 
-Request-scoped logging helpers that attach method, path, client IP, request id
-and user agent to every line.
+Request-scoped logging helpers that attach method, matched route pattern,
+client IP, request id and user agent to every line.
 
 ### Installation
 
@@ -351,7 +351,7 @@ requestLogger.error('Validation failed', { errors });
 ### API Reference
 
 ```typescript
-createRequestLogger(request: RouterRequest | ApiGatewayEvent): {
+createRequestLogger(request: RouterRequest | ApiGatewayEvent, options?: RequestLogOptions): {
   info(message: string, context?: Record<string, any>): void;
   error(message: string, context?: Record<string, any>): void;
   warn(message: string, context?: Record<string, any>): void;
@@ -359,7 +359,12 @@ createRequestLogger(request: RouterRequest | ApiGatewayEvent): {
 }
 
 logRequest(request: RouterRequest | ApiGatewayEvent, options?: LogRequestOptions): void;
-logResponse(request: RouterRequest | ApiGatewayEvent, response: { status?: number; statusCode?: number }, durationMs: number): void;
+logResponse(request: RouterRequest | ApiGatewayEvent, response: { status?: number; statusCode?: number }, durationMs: number, options?: RequestLogOptions): void;
+
+interface RequestLogOptions {
+  /** Also log the raw request path (cut at 256 characters). Default false. */
+  logPath?: boolean;
+}
 ```
 
 Pass the `RouterRequest` the router hands to middleware and handlers
@@ -371,14 +376,16 @@ top-level `method`, so the two are told apart by that. A raw API Gateway event
 `requestContext.http.sourceIp` / `requestContext.identity.sourceIp`, never from
 `X-Forwarded-For`.
 
-By default `logRequest` logs no request data values beyond the path and user
-agent:
+All three helpers log `route`, the pattern the router matched
+(`/reset-password/:token`, see [`RouterRequest.route`](./router.md)), not the
+raw path, because a path can carry secrets and personal data
+(`/reset-password/<token>`, `/users/<email>`). Pass `{ logPath: true }` to add
+the raw `path` as well. When no route matched (a 404) or the request is a raw
+API Gateway event, which has no router match, no path of any kind is logged
+unless `logPath` is set. `route`, `path` and `userAgent` are cut at 256
+characters.
 
-- the path **as received**, not the matched route pattern (the router does not
-  expose it), cut at 256 characters like the user agent. A secret in the path
-  (`/reset-password/<token>`, `/invite/<code>`) therefore reaches the log: put
-  such values in the body or a header instead, or do not call `logRequest` on
-  those routes. Capping bounds the size of a line, not what it exposes.
+By default `logRequest` logs no request data values at all:
 
 - the body as a summary only: `{ contentType, bytes }` for a raw body,
   `{ contentType, fields }` for a parsed object, `{ contentType, items }` for
@@ -392,7 +399,7 @@ A body or query string can hold personal data under any name (`dob`,
 so logging values means naming the fields you want:
 
 ```typescript
-interface LogRequestOptions {
+interface LogRequestOptions extends RequestLogOptions {
   /** Log body content. Default false. Needs a non-empty bodyFields. */
   logBody?: boolean;
   /** Body field names to log; every other field becomes '[REDACTED]'. */

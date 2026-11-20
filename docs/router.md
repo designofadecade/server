@@ -331,8 +331,16 @@ interface RouterRequest {
   requestId: string; // Correlation id for logs
   authorizer?: unknown; // Verified JWT claims / API Gateway authorizer
   proxyOptions?: unknown; // Transport options from a proxy such as Local.EventFunctionProxy
+  route?: string; // Matched route pattern ('/users/:id'); unset when nothing matched
 }
 ```
+
+`route` is set by the router, in every deployment mode, before global
+middleware runs: it is the registered path of the matched route, with repeated
+slashes collapsed. It does not come from the event's `routeKey` (which is
+`$default` or a proxy route behind a catch-all integration). It holds no
+request values, so it is what `logRequest` logs instead of the raw path. It is
+optional so request objects built by hand (in tests) need not set it.
 
 ### `clientIp`
 

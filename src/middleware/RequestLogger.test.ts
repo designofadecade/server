@@ -106,7 +106,7 @@ describe('RequestLogger', () => {
       );
     });
 
-    it('should extract path from path property', () => {
+    it('should extract path from path property with logPath', () => {
       const event = {
         requestContext: {
           requestId: 'test-id',
@@ -115,7 +115,7 @@ describe('RequestLogger', () => {
         headers: {},
       };
 
-      const requestLogger = createRequestLogger(event);
+      const requestLogger = createRequestLogger(event, { logPath: true });
       requestLogger.info('test');
 
       expect(logger.info).toHaveBeenCalledWith(
@@ -126,7 +126,7 @@ describe('RequestLogger', () => {
       );
     });
 
-    it('should extract path from requestContext.http.path', () => {
+    it('should extract path from requestContext.http.path with logPath', () => {
       const event = {
         requestContext: {
           requestId: 'test-id',
@@ -137,7 +137,7 @@ describe('RequestLogger', () => {
         headers: {},
       };
 
-      const requestLogger = createRequestLogger(event);
+      const requestLogger = createRequestLogger(event, { logPath: true });
       requestLogger.info('test');
 
       expect(logger.info).toHaveBeenCalledWith(
@@ -288,24 +288,33 @@ describe('RequestLogger', () => {
     });
 
     it('cuts a long event path at 256 characters', () => {
-      createRequestLogger({
-        requestContext: { requestId: 'id', http: { method: 'GET', path: `/${'p'.repeat(999)}` } },
-      }).info('t');
+      createRequestLogger(
+        {
+          requestContext: { requestId: 'id', http: { method: 'GET', path: `/${'p'.repeat(999)}` } },
+        },
+        { logPath: true }
+      ).info('t');
       expect(ctx().path).toBe(`/${'p'.repeat(255)}…[truncated, 1000 chars]`);
     });
 
     it('cuts a long RouterRequest path and joined user agent', () => {
-      logRequest({
-        method: 'GET',
-        path: `/${'r'.repeat(300)}`,
-        headers: { 'user-agent': ['a'.repeat(200), 'b'.repeat(200)] },
-      });
+      logRequest(
+        {
+          method: 'GET',
+          path: `/${'r'.repeat(300)}`,
+          headers: { 'user-agent': ['a'.repeat(200), 'b'.repeat(200)] },
+        },
+        { logPath: true }
+      );
       expect(ctx().path).toHaveLength(256 + '…[truncated, 301 chars]'.length);
       expect(ctx().userAgent).toMatch(/^a{200}, b{54}…\[truncated, 402 chars\]$/);
     });
 
     it('leaves short values untouched', () => {
-      logRequest({ method: 'GET', path: '/ok', headers: { 'user-agent': 'curl/8' } });
+      logRequest(
+        { method: 'GET', path: '/ok', headers: { 'user-agent': 'curl/8' } },
+        { logPath: true }
+      );
       expect(ctx()).toMatchObject({ path: '/ok', userAgent: 'curl/8' });
     });
   });
@@ -573,6 +582,7 @@ describe('RequestLogger with a RouterRequest', () => {
     body: { name: 'John' },
     query: { q: '1' },
     params: { id: '7' },
+    route: '/api/users/:id',
   };
 
   it('takes identity from the RouterRequest', () => {
@@ -582,7 +592,7 @@ describe('RequestLogger with a RouterRequest', () => {
       expect.objectContaining({
         requestId: 'req-9',
         method: 'POST',
-        path: '/api/users',
+        route: '/api/users/:id',
         sourceIp: '203.0.113.5',
         userAgent: 'a, b',
       })
@@ -644,8 +654,69 @@ describe('RequestLogger with a RouterRequest', () => {
     createRequestLogger({ method: 'GET', path: '/x', headers: {} }).info('test');
     expect(logger.info).toHaveBeenCalledWith(
       'test',
-      expect.objectContaining({ method: 'GET', path: '/x', requestId: 'unknown' })
+      expect.objectContaining({ method: 'GET', requestId: 'unknown' })
     );
+  });
+
+  describe('route and path', () => {
+    const ctx = (fn: 'info' | 'error' = 'info') =>
+      vi.mocked(logger[fn]).mock.calls.at(-1)![1] as Record<string, unknown>;
+    const secret = {
+      method: 'POST',
+      path: '/reset-password/s3cr3t',
+      headers: {},
+      route: '/reset-password/:token',
+    };
+
+    it('logs the route pattern and not the raw path by default', () => {
+      logRequest(secret);
+      expect(ctx()).toMatchObject({ route: '/reset-password/:token' });
+      expect(ctx()).not.toHaveProperty('path');
+      expect(JSON.stringify(vi.mocked(logger.info).mock.calls)).not.toContain('s3cr3t');
+    });
+
+    it('applies to createRequestLogger and logResponse too', () => {
+      createRequestLogger(secret).warn('w');
+      logResponse(secret, { status: 500 }, 3);
+      const all = JSON.stringify([
+        vi.mocked(logger.warn).mock.calls,
+        vi.mocked(logger.error).mock.calls,
+      ]);
+      expect(all).toContain('/reset-password/:token');
+      expect(all).not.toContain('s3cr3t');
+    });
+
+    it('adds the raw path with logPath: true', () => {
+      logRequest(secret, { logPath: true });
+      expect(ctx()).toMatchObject({
+        route: '/reset-password/:token',
+        path: '/reset-password/s3cr3t',
+      });
+      logResponse(secret, { status: 200 }, 1, { logPath: true });
+      expect(ctx()).toMatchObject({ path: '/reset-password/s3cr3t' });
+    });
+
+    it('logs no path and no route when nothing matched (404)', () => {
+      logResponse({ method: 'GET', path: '/nope/s3cr3t', headers: {} }, { status: 404 }, 1);
+      expect(ctx('error')).not.toHaveProperty('path');
+      expect(ctx('error')).not.toHaveProperty('route');
+    });
+
+    it('logs no path for a raw API Gateway event unless logPath', () => {
+      const event = {
+        requestContext: { requestId: 'r', http: { method: 'GET', path: '/users/a@b.example' } },
+        headers: {},
+      };
+      logRequest(event);
+      expect(ctx()).not.toHaveProperty('path');
+      logRequest(event, { logPath: true });
+      expect(ctx()).toMatchObject({ path: '/users/a@b.example' });
+    });
+
+    it('caps a long route at 256 characters', () => {
+      createRequestLogger({ ...secret, route: `/${'r'.repeat(300)}` }).info('t');
+      expect(String(ctx().route)).toMatch(/…\[truncated, 301 chars\]$/);
+    });
   });
 
   it('reads the format 2.0 sourceIp from a raw event', () => {

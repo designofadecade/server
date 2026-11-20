@@ -116,6 +116,14 @@ export interface RouterRequest {
   authorizer?: unknown;
   /** Transport-specific options a proxy (see `Local`) passes to its catch-all route. */
   proxyOptions?: unknown;
+  /**
+   * The registered path pattern of the route that matched (`/users/:id`),
+   * set by the router before middleware runs. Unset when no route matched.
+   * Safe to log where the raw `path` is not: it never contains the
+   * request's own values (ids, reset tokens). Optional so request objects
+   * built by hand, in tests for example, need not supply it.
+   */
+  route?: string;
 }
 
 export interface RouterResponse {
@@ -961,6 +969,11 @@ export default class Router {
         status: 404,
         context: { path: request.path, method: request.method },
       });
+    }
+
+    // The matched pattern, for logging without the request's own path values.
+    if ('path' in route && typeof route.path === 'string') {
+      request.route = route.path.replace(/\/+/g, '/');
     }
 
     // Match dynamic route parameters

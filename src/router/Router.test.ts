@@ -1198,3 +1198,89 @@ describe('Router eventFunction query parameters', () => {
     expect(capturedQuery).toEqual({});
   });
 });
+
+describe('RouterRequest.route', () => {
+  const seen: { route?: string | undefined; middleware?: string | undefined } = {};
+  let router: Router;
+
+  beforeEach(() => {
+    delete seen.route;
+    delete seen.middleware;
+    class TestRoutes extends Routes {
+      constructor(r: Router) {
+        super(r);
+        const capture = async (request: { route?: string }) => {
+          seen.route = request.route;
+          return { status: 200, body: 'ok' };
+        };
+        this.addRoute('/static', 'GET', capture);
+        this.addRoute('/users/:id', 'GET', capture);
+        this.addRoute('//double//slash', 'GET', capture);
+      }
+    }
+    router = new Router({
+      initRoutes: [TestRoutes],
+      middleware: [
+        async (request) => {
+          seen.middleware = request.route;
+          return null;
+        },
+      ],
+    });
+  });
+
+  const viaEvent = (path: string) =>
+    router.eventFunction({ requestContext: { http: { method: 'GET', path } }, headers: {} });
+
+  const viaNode = async (path: string) => {
+    const req = {
+      url: path,
+      method: 'GET',
+      headers: { host: 'localhost:3000' },
+      on: vi.fn((event: string, cb: () => void) => {
+        if (event === 'end') cb();
+        return req;
+      }),
+    };
+    const res = { setHeader: vi.fn(), end: vi.fn(), statusCode: 0 };
+    await router.nodeJSRequest(req as never, res as never);
+    return res;
+  };
+
+  it.each([
+    ['/users/abc-secret', '/users/:id'],
+    ['/static', '/static'],
+    ['/static/', '/static'],
+    ['/double/slash', '/double/slash'],
+  ])('eventFunction %s -> route %s, set before middleware', async (path, route) => {
+    const response = await viaEvent(path);
+    expect(response.statusCode).toBe(200);
+    expect(seen.route).toBe(route);
+    expect(seen.middleware).toBe(route);
+  });
+
+  it.each([
+    ['/users/abc-secret?x=1', '/users/:id'],
+    ['/static', '/static'],
+  ])('nodeJSRequest %s -> route %s', async (path, route) => {
+    const res = await viaNode(path);
+    expect(res.statusCode).toBe(200);
+    expect(seen.route).toBe(route);
+    expect(seen.middleware).toBe(route);
+  });
+
+  it('is unset when no route matched', async () => {
+    const response = await viaEvent('/missing');
+    expect(response.statusCode).toBe(404);
+    expect(seen).not.toHaveProperty('route');
+  });
+
+  it('ignores an event routeKey such as $default', async () => {
+    await router.eventFunction({
+      routeKey: '$default',
+      requestContext: { http: { method: 'GET', path: '/users/7' } },
+      headers: {},
+    } as never);
+    expect(seen.route).toBe('/users/:id');
+  });
+});
