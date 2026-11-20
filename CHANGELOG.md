@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [11.0.0] - 2026-11-19
+## [11.0.0] - 2026-11-20
 
 Adds the AWS Lambda **Web Function** deployment model and renames the existing
 Lambda surface after the model it implements, the Lambda **Event Function**.
