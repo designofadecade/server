@@ -371,7 +371,14 @@ top-level `method`, so the two are told apart by that. A raw API Gateway event
 `requestContext.http.sourceIp` / `requestContext.identity.sourceIp`, never from
 `X-Forwarded-For`.
 
-By default `logRequest` logs no request data values at all:
+By default `logRequest` logs no request data values beyond the path and user
+agent:
+
+- the path **as received**, not the matched route pattern (the router does not
+  expose it), cut at 256 characters like the user agent. A secret in the path
+  (`/reset-password/<token>`, `/invite/<code>`) therefore reaches the log: put
+  such values in the body or a header instead, or do not call `logRequest` on
+  those routes. Capping bounds the size of a line, not what it exposes.
 
 - the body as a summary only: `{ contentType, bytes }` for a raw body,
   `{ contentType, fields }` for a parsed object, `{ contentType, items }` for

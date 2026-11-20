@@ -56,22 +56,39 @@ interface ResponseObject {
 const isRouterRequest = (value: RequestEvent | LoggableRequest): value is LoggableRequest =>
   typeof (value as LoggableRequest).method === 'string';
 
+/** Longest path or user agent written to a log line. */
+const MAX_LOGGED_HEADER = 256;
+
+/**
+ * Bounds a client-controlled value. The path is logged as received (the
+ * router does not expose the matched route pattern), so a secret in it, such
+ * as `/reset-password/<token>`, reaches the log; capping limits size, not
+ * exposure.
+ */
+const capField = (value: unknown): string | undefined => {
+  const text = Array.isArray(value) ? value.join(', ') : value;
+  if (typeof text !== 'string') return undefined;
+  return text.length > MAX_LOGGED_HEADER
+    ? `${text.slice(0, MAX_LOGGED_HEADER)}…[truncated, ${text.length} chars]`
+    : text;
+};
+
 function requestFields(request: RequestEvent | LoggableRequest) {
-  const userAgent = request.headers?.['user-agent'];
+  const userAgent = capField(request.headers?.['user-agent']);
   if (isRouterRequest(request)) {
     return {
       requestId: request.requestId || 'unknown',
       method: request.method,
-      path: request.path,
+      path: capField(request.path),
       sourceIp: request.clientIp || undefined,
-      userAgent: Array.isArray(userAgent) ? userAgent.join(', ') : userAgent,
+      userAgent,
     };
   }
   const event = request as RequestEvent;
   return {
     requestId: event.requestContext?.requestId || 'unknown',
     method: event.httpMethod || event.requestContext?.http?.method,
-    path: event.path || event.requestContext?.http?.path,
+    path: capField(event.path || event.requestContext?.http?.path),
     // API Gateway sets both fields from the TCP connection; neither is read
     // from X-Forwarded-For, which the client controls.
     sourceIp: event.requestContext?.http?.sourceIp ?? event.requestContext?.identity?.sourceIp,
@@ -260,7 +277,8 @@ let warnedLogBodyWithoutFields = false;
  * Logs an incoming request: method, path, client IP, user agent, the names
  * of its query and path parameters, and a summary of the body. Body content
  * is logged only with `options.logBody` and a `bodyFields` allowlist;
- * parameter values only for names in `options.paramFields`.
+ * parameter values only for names in `options.paramFields`. The path is the
+ * raw request path (cut at 256 characters), so keep secrets out of URLs.
  *
  * @param request - A `RouterRequest` (preferred), or an API Gateway event
  * @param options - See {@link LogRequestOptions}

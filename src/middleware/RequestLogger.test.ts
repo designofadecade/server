@@ -274,6 +274,42 @@ describe('RequestLogger', () => {
     });
   });
 
+  describe('client-controlled field caps', () => {
+    const ctx = () => (logger.info as ReturnType<typeof vi.fn>).mock.calls.at(-1)![1];
+
+    it('cuts a long user agent at 256 characters', () => {
+      createRequestLogger({
+        requestContext: { requestId: 'id' },
+        httpMethod: 'GET',
+        path: '/x',
+        headers: { 'user-agent': 'U'.repeat(10_000) },
+      }).info('t');
+      expect(ctx().userAgent).toBe(`${'U'.repeat(256)}…[truncated, 10000 chars]`);
+    });
+
+    it('cuts a long event path at 256 characters', () => {
+      createRequestLogger({
+        requestContext: { requestId: 'id', http: { method: 'GET', path: `/${'p'.repeat(999)}` } },
+      }).info('t');
+      expect(ctx().path).toBe(`/${'p'.repeat(255)}…[truncated, 1000 chars]`);
+    });
+
+    it('cuts a long RouterRequest path and joined user agent', () => {
+      logRequest({
+        method: 'GET',
+        path: `/${'r'.repeat(300)}`,
+        headers: { 'user-agent': ['a'.repeat(200), 'b'.repeat(200)] },
+      });
+      expect(ctx().path).toHaveLength(256 + '…[truncated, 301 chars]'.length);
+      expect(ctx().userAgent).toMatch(/^a{200}, b{54}…\[truncated, 402 chars\]$/);
+    });
+
+    it('leaves short values untouched', () => {
+      logRequest({ method: 'GET', path: '/ok', headers: { 'user-agent': 'curl/8' } });
+      expect(ctx()).toMatchObject({ path: '/ok', userAgent: 'curl/8' });
+    });
+  });
+
   describe('logRequest', () => {
     it('should log incoming request', () => {
       const event = {
