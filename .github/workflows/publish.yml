@@ -1,11 +1,11 @@
 name: Publish Package
 
+# Tag pushes only. A `release: published` trigger also ran this for releases
+# created on any tag or commit from the UI, skipping the version check below.
 on:
   push:
     tags:
       - 'v*'
-  release:
-    types: [published]
 
 permissions:
   contents: read
@@ -33,7 +33,6 @@ jobs:
           node-version: '24'
 
       - name: Check tag matches package version
-        if: startsWith(github.ref, 'refs/tags/v')
         run: |
           version="$(node -p "require('./package.json').version")"
           if [ "v${version}" != "${GITHUB_REF_NAME}" ]; then
@@ -41,8 +40,11 @@ jobs:
             exit 1
           fi
 
+      # No install scripts: they are not needed to test or build this package,
+      # and a compromised dependency's script would run in the job that
+      # produces the tarball provenance attests.
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: Run tests
         run: npm test
@@ -66,6 +68,9 @@ jobs:
   publish-npm:
     needs: build
     runs-on: ubuntu-latest
+    # Give this environment required reviewers in GitHub settings and bind the
+    # npm trusted publisher to it, so no publish happens without approval.
+    environment: npm-publish
     permissions:
       # Trusted Publishing (OIDC) and npm provenance attestations.
       id-token: write
@@ -87,7 +92,6 @@ jobs:
 
   github-release:
     needs: publish-npm
-    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       # Creating the GitHub Release.

@@ -32,7 +32,7 @@ jobs:
           cache: 'npm'
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       # Gating, not advisory. `eslint .` exits non-zero only on errors, so the
       # pre-existing `no-explicit-any` warnings do not fail the build.
@@ -81,7 +81,7 @@ jobs:
           cache: 'npm'
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       # tsconfig.typecheck.json covers src plus the *.test-d.ts consumer-facing
       # type assertions, so a TS-next change to variance or inference shows up
