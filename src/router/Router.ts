@@ -308,6 +308,15 @@ export default class Router {
       );
   }
 
+  /**
+   * The largest request body this router accepts, in bytes (`maxBodyBytes`).
+   * `WebFunction.serve` passes it to `Server`, so an `Expect: 100-continue`
+   * upload over the limit is refused before the client sends it.
+   */
+  get maxBodyBytes(): number {
+    return this.#maxBodyBytes;
+  }
+
   #buildRoutesPatterns(routes: RouteRegistration[]): void {
     for (const route of routes) {
       if (typeof route.path !== 'string' || typeof route.handler !== 'function') {

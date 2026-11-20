@@ -36,6 +36,36 @@ export interface ServerOptions {
    * window Lambda gives a Web Function after `SIGTERM`.
    */
   shutdownTimeoutMs?: number;
+  /**
+   * Largest request body, in bytes, a client may start sending after
+   * `Expect: 100-continue`. When set, such a request whose `Content-Length`
+   * is over the limit is answered `413 PAYLOAD_TOO_LARGE` (with
+   * `Connection: close`) instead of `100 Continue`, so the client never
+   * uploads it; any other `Expect: 100-continue` request gets its
+   * `100 Continue` and reaches the handler as usual. Unset (the default),
+   * Node answers `100 Continue` to everything. `WebFunction.serve` sets it to
+   * the router's `maxBodyBytes`. The handler still enforces the limit on the
+   * bytes actually read.
+   */
+  maxBodyBytes?: number;
+  /**
+   * Milliseconds a client has to send the whole request (headers and body)
+   * before Node answers `408` and closes the connection: the defence against
+   * slow uploads holding sockets open. It does not limit how long a handler
+   * runs. Default `30000` on a plain Node host; `0` disables it.
+   *
+   * In a Lambda Web Function the default is Node's own (300 s): the only
+   * client is Lambda, which delivers each request whole and enforces the
+   * function's `timeoutSeconds` itself. An explicit value applies there too.
+   * Node checks this every 30 s, so a request can outlive it by up to that.
+   */
+  requestTimeout?: number;
+  /**
+   * Milliseconds a client has to send the complete request headers. Default
+   * `10000` on a plain Node host, Node's own (60 s) in a Web Function; must
+   * not exceed a non-zero `requestTimeout`.
+   */
+  headersTimeout?: number;
 }
 
 /** Where a server ended up listening. */
@@ -66,6 +96,11 @@ export default class Server extends EventEmitter {
   /** Environment variable Lambda sets, as `host:port`, in a Web Function. */
   static readonly WEB_FUNCTION_ENDPOINT_ENV = 'AWS_LAMBDA_HTTP_ENDPOINT';
 
+  /** Default `requestTimeout` off a Web Function, in milliseconds. */
+  static readonly DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+  /** Default `headersTimeout` off a Web Function, in milliseconds. */
+  static readonly DEFAULT_HEADERS_TIMEOUT_MS = 10_000;
+
   /** True when this process runs as an AWS Lambda Web Function. */
   static isWebFunction(env: NodeJS.ProcessEnv = process.env): boolean {
     return Boolean(env[Server.WEB_FUNCTION_ENDPOINT_ENV]);
@@ -92,6 +127,8 @@ export default class Server extends EventEmitter {
   #shutdownTimeoutMs: number = 800;
   #address: ServerAddress;
   #requestHandler: (req: IncomingMessage, res: ServerResponse) => void;
+  #maxBodyBytes: number | undefined;
+  #timeouts: { requestTimeout?: number; headersTimeout?: number };
   #signalHandler: (() => void) | null = null;
   #closing: Promise<void> | null = null;
   #listening = false;
@@ -108,6 +145,9 @@ export default class Server extends EventEmitter {
       exitOnError = false,
       handleSignals,
       shutdownTimeoutMs = 800,
+      maxBodyBytes,
+      requestTimeout,
+      headersTimeout,
     }: ServerOptions = {},
     requestHandler: (req: IncomingMessage, res: ServerResponse) => void
   ) {
@@ -121,7 +161,43 @@ export default class Server extends EventEmitter {
       throw new Error('Request handler must be a function');
     }
 
+    if (maxBodyBytes !== undefined && (!Number.isSafeInteger(maxBodyBytes) || maxBodyBytes < 1)) {
+      throw new Error('maxBodyBytes must be a positive integer');
+    }
+    for (const [name, value] of Object.entries({ requestTimeout, headersTimeout })) {
+      if (value !== undefined && (!Number.isSafeInteger(value) || value < 0)) {
+        throw new Error(`${name} must be a non-negative integer (milliseconds)`);
+      }
+    }
+
     const webFunction = Server.isWebFunction();
+    // Slow-client limits. Off a Web Function the defaults are tight (30 s for
+    // the whole request, 10 s for its headers); in one, Lambda is the only
+    // client and delivers requests whole, so Node's defaults stay unless the
+    // caller sets them.
+    const timeouts = webFunction
+      ? { requestTimeout, headersTimeout }
+      : {
+          requestTimeout: requestTimeout ?? Server.DEFAULT_REQUEST_TIMEOUT_MS,
+          headersTimeout:
+            headersTimeout ??
+            (requestTimeout !== undefined && requestTimeout > 0
+              ? Math.min(Server.DEFAULT_HEADERS_TIMEOUT_MS, requestTimeout)
+              : Server.DEFAULT_HEADERS_TIMEOUT_MS),
+        };
+    if (
+      timeouts.requestTimeout !== undefined &&
+      timeouts.requestTimeout > 0 &&
+      timeouts.headersTimeout !== undefined &&
+      timeouts.headersTimeout > timeouts.requestTimeout
+    ) {
+      throw new Error('headersTimeout must not exceed requestTimeout');
+    }
+    this.#timeouts = Object.fromEntries(
+      Object.entries(timeouts).filter(([, value]) => value !== undefined)
+    );
+    this.#maxBodyBytes = maxBodyBytes;
+
     this.#address = webFunction
       ? Server.parseEndpoint(process.env[Server.WEB_FUNCTION_ENDPOINT_ENV]!)
       : { host, port };
@@ -159,7 +235,38 @@ export default class Server extends EventEmitter {
   }
 
   #start(webFunction: boolean): void {
-    this.#server = Http.createServer(this.#requestHandler);
+    const server = Http.createServer(this.#timeouts, this.#requestHandler);
+    this.#server = server;
+
+    const maxBodyBytes = this.#maxBodyBytes;
+    if (maxBodyBytes !== undefined) {
+      // With a 'checkContinue' listener Node no longer answers
+      // `100 Continue` by itself, so a client announcing an oversized body
+      // can be refused before it sends a byte of it.
+      server.on('checkContinue', (req: IncomingMessage, res: ServerResponse) => {
+        const declared = Number(req.headers['content-length']);
+        if (Number.isFinite(declared) && declared > maxBodyBytes) {
+          logger.warn('Refused request body over the size limit', {
+            code: 'SERVER_PAYLOAD_TOO_LARGE',
+            source: 'Server.checkContinue',
+            method: req.method,
+            maxBodyBytes,
+          });
+          res.statusCode = 413;
+          res.setHeader('Content-Type', 'application/json');
+          res.setHeader('Connection', 'close');
+          res.end(
+            JSON.stringify({
+              success: false,
+              error: { code: 'PAYLOAD_TOO_LARGE', message: 'Request body too large' },
+            })
+          );
+          return;
+        }
+        res.writeContinue();
+        server.emit('request', req, res);
+      });
+    }
 
     // Attach error handler before listen to avoid race conditions
     this.#server.on('error', (error: NodeJS.ErrnoException) => {

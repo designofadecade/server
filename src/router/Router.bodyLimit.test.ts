@@ -188,6 +188,11 @@ describe('maxBodyBytes option', () => {
   it.each([0, -1, 1.5, NaN, Infinity])('rejects %s', (value) => {
     expect(() => new Router({ maxBodyBytes: value })).toThrow(/maxBodyBytes/);
   });
+
+  it('is readable as router.maxBodyBytes', () => {
+    expect(new Router().maxBodyBytes).toBe(1024 * 1024);
+    expect(new Router({ maxBodyBytes: 42 }).maxBodyBytes).toBe(42);
+  });
 });
 
 /** Streams `total` bytes in 1 MiB writes, as an uploading client does. */
