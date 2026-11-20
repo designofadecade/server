@@ -305,6 +305,34 @@ export default class Router {
   }
 
   /**
+   * MIME essences a browser may send cross-site without a CORS preflight
+   * (the Fetch standard's CORS-safelisted request-header rule for
+   * `Content-Type`).
+   */
+  static #CORS_SAFELISTED_CONTENT_TYPES = new Set([
+    'text/plain',
+    'application/x-www-form-urlencoded',
+    'multipart/form-data',
+  ]);
+
+  /**
+   * SECURITY: Whether a request Content-Type is one a cross-site page can
+   * send without a preflight. The JSON check below is a substring match, so
+   * `text/plain;application/json` used to be parsed as JSON even though its
+   * MIME essence is `text/plain` — letting a forged, cookie-carrying request
+   * from any site hand a route a parsed object. Bodies declared with one of
+   * these essences are never JSON-parsed. Only a single string header can
+   * come from a browser (API Gateway and Node both deliver `content-type` as
+   * one string), so an array, possible only in a hand-built Lambda event,
+   * keeps its previous handling.
+   */
+  static #isCorsSafelistedContentType(contentType: string | string[] | undefined): boolean {
+    if (typeof contentType !== 'string') return false;
+    const essence = contentType.split(';', 1)[0].trim().toLowerCase();
+    return Router.#CORS_SAFELISTED_CONTENT_TYPES.has(essence);
+  }
+
+  /**
    * Strip trailing slashes, keeping a lone "/" intact.
    *
    * `replace(/\/+$/, '')` looks equivalent but is quadratic: the anchored `+`
@@ -341,7 +369,11 @@ export default class Router {
         ? event.body
         : null;
 
-      if (event.headers['content-type']?.includes('application/json') && body) {
+      if (
+        event.headers['content-type']?.includes('application/json') &&
+        !Router.#isCorsSafelistedContentType(event.headers['content-type']) &&
+        body
+      ) {
         try {
           body = JSON.parse(body as string);
         } catch {
@@ -818,7 +850,10 @@ export default class Router {
         body += chunk.toString();
       });
       req.on('end', () => {
-        if (req.headers['content-type']?.includes('application/json')) {
+        if (
+          req.headers['content-type']?.includes('application/json') &&
+          !Router.#isCorsSafelistedContentType(req.headers['content-type'])
+        ) {
           try {
             resolve(JSON.parse(body));
           } catch {
