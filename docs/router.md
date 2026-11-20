@@ -158,6 +158,10 @@ the same path a proxy, CDN or WAF in front of it saw. `request.query` is the
 rest, parsed with `URLSearchParams` (a `?` inside a value stays in the value;
 for a repeated name the last value wins). Path parameters stay
 percent-encoded (`/files/a%20b` gives `params.name === 'a%20b'`), as before.
+Trailing slashes are stripped when a route is matched: `/admin/`, `/admin//`
+and `/admin` all run the `/admin` route, and `/users/42/` gives `/users/:id`
+its `id`. A proxy or WAF rule that guards a path must therefore match it with
+and without trailing slashes.
 A target that URL resolution would have read as a different path is refused
 with `400 INVALID_REQUEST` before CORS, the body, middleware or a route runs:
 

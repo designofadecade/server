@@ -365,7 +365,10 @@ export default class Router {
     const route = this.#routes.dynamic.get(method)!.find((route) => {
       if (!route.methods.includes(method)) return false;
       if (route.path === normalizedPath) return true;
-      return route.pattern?.test(normalizedPath);
+      // The init form, never a string: a string is parsed as a URL, which
+      // cuts it at `?`/`#`, trims trailing spaces and resolves dot segments,
+      // so an Event Function path `/admin/1#x/y` would match `/admin/:id`.
+      return route.pattern?.test({ pathname: normalizedPath });
     });
 
     this.#routes.cache.set(`${normalizedPath}::${method}`, route || null);
@@ -1164,8 +1167,16 @@ export default class Router {
     }
 
     // Match dynamic route parameters
-    if ('pattern' in route && route.path !== request.path && route.pattern) {
-      const match = route.pattern.exec(request.path);
+    // The init form, as in #findRouteHandler (a string is parsed as a URL).
+    // The route was found on the path with trailing slashes stripped, so fall
+    // back to that one: matching only the raw `/users/42/` ran `/users/:id`
+    // with no `id`. The raw path goes first so a `*` group keeps its trailing
+    // slash, as it always did.
+    const matchedPath = Router.#stripTrailingSlashes(request.path);
+    if ('pattern' in route && route.path !== matchedPath && route.pattern) {
+      const match =
+        route.pattern.exec({ pathname: request.path }) ??
+        route.pattern.exec({ pathname: matchedPath });
       if (match?.pathname?.groups) {
         // An optional pattern segment that did not match yields undefined. Drop
         // those rather than handing a handler a `params` entry that is typed

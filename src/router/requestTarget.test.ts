@@ -80,6 +80,10 @@ describe('parseRequestTarget', () => {
       '/search?',
       '/search?&&',
       '/q?redirect=/x/../y',
+      // URLSearchParams strips one leading `?`; URL parsing did not.
+      '/x??a=1',
+      '/x???a=1&b',
+      '/x??',
     ])('%j', (target) => {
       expect(parseRequestTarget(target)).toEqual(viaUrl(target));
     });

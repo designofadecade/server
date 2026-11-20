@@ -108,10 +108,12 @@ export function parseRequestTarget(
 
   return {
     path: rawPath.replace(PATH_ENCODE, encodePathCharacter),
-    // URLSearchParams on the raw query decodes exactly as `URL.searchParams`
-    // did: URL parsing only percent-encodes characters, which this decodes
-    // back. A `?` inside a value stays part of the value; for a repeated
-    // name the last value wins, as `Object.fromEntries` always gave.
-    query: Object.fromEntries(new URLSearchParams(rawQuery)),
+    // URLSearchParams decodes exactly as `URL.searchParams` did: URL parsing
+    // only percent-encodes characters, which this decodes back. The `?` is
+    // put back because URLSearchParams strips one leading `?`, and without
+    // it `/x??a=1` would give `{ a: '1' }` instead of `{ '?a': '1' }`. A `?`
+    // inside a value stays part of the value; for a repeated name the last
+    // value wins, as `Object.fromEntries` always gave.
+    query: Object.fromEntries(new URLSearchParams('?' + rawQuery)),
   };
 }

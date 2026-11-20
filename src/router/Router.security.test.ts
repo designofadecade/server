@@ -2,6 +2,8 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import Router from './Router.ts';
 import Routes from './Routes.ts';
 import { logger } from '../logger/Logger.ts';
+import { parseRequestTarget } from './requestTarget.ts';
+import type { RouterRequest } from './Router.ts';
 
 /**
  * Route paths are attacker-controlled. Trailing slashes were stripped with
@@ -310,5 +312,169 @@ describe('Router refuses request targets that resolution would rewrite', () => {
       headers: {},
     });
     expect(hash.statusCode).not.toBe(400);
+  });
+});
+
+describe('Router matches dynamic routes on the path, never a URL parsed from it', () => {
+  const handler = vi.fn(async (request: RouterRequest) => ({
+    status: 200,
+    body: { params: request.params },
+  }));
+
+  const build = () =>
+    new Router({
+      initRoutes: [
+        class extends Routes {
+          constructor(router: Router) {
+            super(router);
+            this.addRoute('/admin/:id', 'GET', handler);
+            this.addRoute('/files/:dir/:name', 'GET', handler);
+            this.addRoute('/assets/*', 'GET', handler);
+          }
+        },
+      ],
+    });
+
+  const viaEvent = (router: Router, path: string) =>
+    router.eventFunction({ requestContext: { http: { method: 'GET', path } }, headers: {} });
+
+  const viaNode = async (router: Router, url: string) => {
+    const req = { url, method: 'GET', headers: { host: 'localhost' }, socket: {}, on: vi.fn() };
+    const res = { statusCode: 0, setHeader: vi.fn(), end: vi.fn() };
+    await router.nodeJSRequest(req as never, res as never);
+    return { status: res.statusCode, body: JSON.parse(res.end.mock.calls[0]![0] as string) };
+  };
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    handler.mockClear();
+  });
+
+  // A string handed to URLPattern is parsed as a URL: cut at `?`/`#`, so these
+  // matched `/admin/:id` with id `1`.
+  it.each(['/admin/1#x/y', '/admin/1?/x/y'])(
+    'an Event Function path %j does not reach /admin/:id (404)',
+    async (path) => {
+      vi.spyOn(logger, 'error').mockImplementation(() => {});
+      const result = await viaEvent(build(), path);
+      expect(result.statusCode).toBe(404);
+      expect(handler).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([
+    ['/admin/1#', '1%23'],
+    ['/admin/1?x', '1%3Fx'],
+  ])('an Event Function path %j keeps the ?/# in the parameter: %j', async (path, id) => {
+    // Percent-encoded, exactly as the Node transport gives `/admin/1%3Fx`.
+    const result = await viaEvent(build(), path);
+    expect(result.statusCode).toBe(200);
+    expect(handler.mock.calls[0]![0].params).toEqual({ id });
+  });
+
+  it('keeps a trailing space in the parameter instead of trimming it to id 1', async () => {
+    const result = await viaEvent(build(), '/admin/1 ');
+    expect(result.statusCode).toBe(200);
+    expect(handler.mock.calls[0]![0].params).toEqual({ id: '1%20' });
+    // The same parameter the Node transport gives for the encoded target.
+    const node = await viaNode(build(), '/admin/1%20');
+    expect(node.body.params).toEqual({ id: '1%20' });
+  });
+
+  it.each([
+    ['/admin/42', '/admin/42', { id: '42' }],
+    ['/admin/42/', '/admin/42/', { id: '42' }],
+    ['/admin/a%20b', '/admin/a b', { id: 'a%20b' }],
+    ['/admin/caf%C3%A9', '/admin/café', { id: 'caf%C3%A9' }],
+    ['/admin/a%3Fb', '/admin/a?b', { id: 'a%3Fb' }],
+    ['/admin/a%23b', '/admin/a#b', { id: 'a%23b' }],
+    ['/admin/a%2Fb', '/admin/a%2Fb', { id: 'a%2Fb' }],
+    ['/admin/x?q=1', '/admin/x', { id: 'x' }],
+    ['/files/docs/report.pdf', '/files/docs/report.pdf', { dir: 'docs', name: 'report.pdf' }],
+    ['/assets/a/b/c.js', '/assets/a/b/c.js', { '0': 'a/b/c.js' }],
+    // A trailing slash: the route is found without it, and so are its params
+    // (they were empty); a `*` group keeps the slash, as before.
+    ['/files/docs/x//', '/files/docs/x//', { dir: 'docs', name: 'x' }],
+    ['/assets/a/b/', '/assets/a/b/', { '0': 'a/b/' }],
+  ])('Node %j and Event Function %j give params %j', async (target, path, params) => {
+    const node = await viaNode(build(), target);
+    expect(node.status).toBe(200);
+    expect(node.body.params).toEqual(params);
+
+    const event = await viaEvent(build(), path);
+    expect(event.statusCode).toBe(200);
+    expect(JSON.parse(event.body as string).params).toEqual(params);
+  });
+
+  it('matches every accepted Node target exactly as the string form did', () => {
+    // Old behaviour: `pattern.exec(path)`. For a Node path (already split at
+    // `?`, `#` refused, the URL-encoded characters encoded) the init form
+    // must give the same match and groups.
+    const patterns = [
+      '/a/:id',
+      '/a/:id/b',
+      '/a/*',
+      '/:x/:y',
+      '/a/:id?',
+      '/a/:id(\\d+)',
+      '/a{/:opt}?/c',
+      '/*',
+    ].map((pathname) => new URLPattern({ pathname }));
+    const alphabet = [
+      'a',
+      '1',
+      '/',
+      '/',
+      '-',
+      '~',
+      '%',
+      '%20',
+      '%2F',
+      '%3F',
+      '%23',
+      '%25',
+      'é',
+      ' ',
+      '"',
+      '<',
+      '>',
+      '^',
+      '`',
+      '{',
+      '}',
+      '|',
+      '!',
+      '$',
+      '&',
+      "'",
+      '(',
+      '*',
+      '+',
+      ';',
+      '=',
+      ':',
+      '@',
+      '[',
+      ']',
+      '.',
+      '%2e',
+      '?',
+    ];
+    let seed = 1;
+    const next = () => (seed = (seed * 48271) % 2147483647) % alphabet.length;
+    let compared = 0;
+    for (let i = 0; i < 20000; i++) {
+      let target = '/';
+      for (let j = 0, n = 1 + (next() % 8); j < n; j++) target += alphabet[next()];
+      const parsed = parseRequestTarget(target);
+      if ('refused' in parsed) continue;
+      for (const pattern of patterns) {
+        const old = pattern.exec(parsed.path);
+        const now = pattern.exec({ pathname: parsed.path });
+        expect([now !== null, now?.pathname.groups]).toEqual([old !== null, old?.pathname.groups]);
+        compared++;
+      }
+    }
+    expect(compared).toBeGreaterThan(50000);
   });
 });

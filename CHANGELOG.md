@@ -395,7 +395,12 @@ Every item is a rename unless marked otherwise. There are no aliases.
   path saw `//x/admin` or `/pub/%2e%2e/admin`, let it through, and the router
   ran the `/admin` route. The path is now taken verbatim and every such target
   is refused with `400 INVALID_REQUEST` on both transports, so the router
-  never dispatches on a path other than the one it received. The refusal is
+  never dispatches on a path other than the one it received. Dynamic routes
+  are matched on the path itself, no longer on a URL parsed from it: parsing
+  cut an Event Function path at `?` or `#` and trimmed trailing spaces, so
+  `/admin/1#x/y` and `/admin/1?/x/y` ran `/admin/:id` with `id` `1`; they now
+  get `404`, and `/admin/1 ` gives `id` `1%20`, as `/admin/1%20` does on the
+  Node transport. Matching ordinary paths is unchanged. The refusal is
   logged as `ROUTER_INVALID_REQUEST_URL` with a fixed `reason` and the method
   (cut at 16 characters), never the target; the logged `Host` of a malformed
   Host refusal is dropped for the same reason.
@@ -417,6 +422,11 @@ Every item is a rename unless marked otherwise. There are no aliases.
 
 ### Fixed
 
+- **A dynamic route reached with a trailing slash gets its path parameters.**
+  The route was found on the path with trailing slashes stripped but its
+  parameters were read from the path as received, so `/users/42/` ran
+  `/users/:id` with an empty `params`. A `*` group keeps its trailing slash,
+  as before.
 - **Request bodies over the size limit get `413`, on every transport.** Found
   by running the package in the Lambda Node 24 image. The Node transport
   destroyed the socket instead of answering, so clients saw a dropped
