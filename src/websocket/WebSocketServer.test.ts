@@ -779,7 +779,12 @@ describe('WebSocketServer', () => {
     });
 
     it('should reject a non-function authenticate', () => {
-      expect(() => new WebSocketServer({ authenticate: 'yes' as never })).toThrow('authenticate');
+      expect(() => new WebSocketServer({ authenticate: 'yes' as never })).toThrow(
+        'authenticate must be a function.'
+      );
+      expect(() => new WebSocketServer({ authenticate: null as never })).toThrow(
+        'authenticate must be a function.'
+      );
     });
 
     it.each([0, -1, NaN, Infinity, 2_147_483_648, Number.MAX_SAFE_INTEGER])(

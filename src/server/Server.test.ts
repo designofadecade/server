@@ -44,7 +44,10 @@ describe('Server', () => {
       server = new Server({}, mockRequestHandler);
 
       expect(server).toBeInstanceOf(Server);
-      expect(Http.createServer).toHaveBeenCalledWith(mockRequestHandler);
+      expect(Http.createServer).toHaveBeenCalledWith(
+        { requestTimeout: 30_000, headersTimeout: 10_000 },
+        mockRequestHandler
+      );
       expect(mockHttpServer.listen).toHaveBeenCalledWith(3000, '0.0.0.0', expect.any(Function));
 
       consoleSpy.mockRestore();
@@ -346,7 +349,7 @@ describe('Server', () => {
 
       server = new Server({}, customHandler);
 
-      expect(Http.createServer).toHaveBeenCalledWith(customHandler);
+      expect(Http.createServer).toHaveBeenCalledWith(expect.any(Object), customHandler);
 
       consoleSpy.mockRestore();
     });
@@ -357,7 +360,7 @@ describe('Server', () => {
       server = new Server({}, mockRequestHandler);
 
       // Get the handler that was passed to createServer
-      const handler = Http.createServer.mock.calls[0][0];
+      const handler = Http.createServer.mock.calls[0][1];
 
       expect(handler).toBe(mockRequestHandler);
 

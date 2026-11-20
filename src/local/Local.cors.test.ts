@@ -699,6 +699,24 @@ describe('Local.EventFunctionProxy cross-origin writes (CSRF)', () => {
       }
     );
 
+    it('sends Vary: Origin on its 403, as on every array-mode answer', async () => {
+      const refused = await runWithBody(
+        {
+          method: 'POST',
+          headers: { origin: 'https://evil.example', 'sec-fetch-site': 'cross-site' },
+        },
+        options
+      );
+      forbidden(refused.res);
+      expect(refused.headers['vary']).toBe('Origin');
+
+      const served = await runWithBody(
+        { method: 'POST', headers: { origin: 'https://app.example.test' } },
+        options
+      );
+      expect(served.headers['vary']).toBe('Origin');
+    });
+
     it('allows a same-origin POST that is not listed', async () => {
       const { res } = await runWithBody(
         { method: 'POST', headers: { origin: 'http://localhost:3000' } },

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { createHmac } from 'node:crypto';
 import Router from './Router.ts';
 import Routes from './Routes.ts';
+import { logger } from '../logger/Logger.ts';
 
 describe('Router', () => {
   let router: Router;
@@ -579,6 +580,31 @@ describe('Router', () => {
       );
     });
 
+    it('passes proxyOptions through to request.proxyOptions ({} when omitted)', async () => {
+      const seen: unknown[] = [];
+      class ProxyRoutes extends Routes {
+        constructor(r: Router) {
+          super(r);
+          this.addRoute('/test', 'GET', async (request) => {
+            seen.push(request.proxyOptions);
+            return { body: {} };
+          });
+        }
+      }
+      const proxyRouter = new Router({ initRoutes: [ProxyRoutes] });
+      mockReq.on.mockImplementation((event: string, callback: () => void) => {
+        if (event === 'end') callback();
+        return mockReq;
+      });
+      const proxyOptions = { event: { stageVariables: { a: '1' } } };
+
+      await proxyRouter.nodeJSRequest(mockReq, mockRes, { proxyOptions });
+      await proxyRouter.nodeJSRequest(mockReq, mockRes);
+
+      expect(seen).toEqual([proxyOptions, {}]);
+      expect(seen[0]).toBe(proxyOptions);
+    });
+
     describe('CORS allowlist enforcement', () => {
       const allowlist = ['https://app.example.com'];
       let handler: ReturnType<typeof vi.fn>;
@@ -673,6 +699,52 @@ describe('Router', () => {
           'Access-Control-Allow-Credentials',
           'true'
         );
+      });
+
+      it('refuses a HEAD from a non-allowlisted origin, as Local does (only GET is exempt)', async () => {
+        vi.spyOn(logger, 'warn').mockImplementation(() => {});
+        mockReq.method = 'HEAD';
+        mockReq.headers.origin = 'https://evil.example';
+
+        await router.nodeJSRequest(mockReq, mockRes, { cors: allowlist });
+
+        expect(mockRes.statusCode).toBe(403);
+        expect(errorBody().error.code).toBe('CORS_ORIGIN_FORBIDDEN');
+        expect(handler).not.toHaveBeenCalled();
+        expect(mockRes.setHeader).toHaveBeenCalledWith('Vary', 'Origin');
+      });
+
+      it('logs ROUTER_CORS_ORIGIN_BLOCKED, flagging whether the request was refused', async () => {
+        const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+        mockReq.headers.origin = 'https://evil.example';
+
+        await router.nodeJSRequest(mockReq, mockRes, { cors: allowlist });
+        mockReq.method = 'POST';
+        await router.nodeJSRequest(mockReq, mockRes, { cors: allowlist });
+
+        expect(warn).toHaveBeenNthCalledWith(1, expect.any(String), {
+          code: 'ROUTER_CORS_ORIGIN_BLOCKED',
+          source: 'Router.nodeJSRequest',
+          origin: 'https://evil.example',
+          method: 'GET',
+          rejected: false,
+        });
+        expect(warn).toHaveBeenNthCalledWith(
+          2,
+          expect.any(String),
+          expect.objectContaining({ method: 'POST', rejected: true })
+        );
+      });
+
+      it('bounds the logged origin and method', async () => {
+        const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+        mockReq.method = 'POST';
+        mockReq.headers.origin = `https://${'a'.repeat(500)}.example`;
+
+        await router.nodeJSRequest(mockReq, mockRes, { cors: allowlist });
+
+        const fields = warn.mock.calls[0][1] as { origin: string };
+        expect(fields.origin).toHaveLength(200);
       });
 
       it('runs a POST from an allowlisted origin with credentialed CORS headers', async () => {
@@ -875,6 +947,35 @@ describe('Router', () => {
       await router.nodeJSRequest(mockReq, mockRes);
 
       expect(mockRes.statusCode).toBe(500);
+    });
+
+    it('treats an ECONNRESET while reading the body as a client abort (debug, no 500)', async () => {
+      const debug = vi.spyOn(logger, 'debug').mockImplementation(() => {});
+      const error = vi.spyOn(logger, 'error').mockImplementation(() => {});
+      class PostRoutes extends Routes {
+        constructor(router: Router) {
+          super(router);
+          this.addRoute('/test', 'POST', async () => ({ status: 200, body: {} }));
+        }
+      }
+      router = new Router({ initRoutes: [PostRoutes] });
+      mockReq.method = 'POST';
+      mockReq.on.mockImplementation((event: string, callback: (error?: Error) => void) => {
+        if (event === 'error') {
+          callback(Object.assign(new Error('aborted'), { code: 'ECONNRESET' }));
+        }
+        return mockReq;
+      });
+
+      await router.nodeJSRequest(mockReq, mockRes);
+
+      expect(mockRes.end).not.toHaveBeenCalled();
+      expect(mockRes.statusCode).toBe(0);
+      expect(error).not.toHaveBeenCalled();
+      expect(debug).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ code: 'ROUTER_CLIENT_ABORTED', method: 'POST' })
+      );
     });
 
     it('should handle Buffer responses', async () => {

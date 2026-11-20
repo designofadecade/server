@@ -21,6 +21,8 @@
  */
 
 import Router from '../router/Router.js';
+import { RAW_BODY } from '../router/internal.js';
+import { isCorsSafelistedContentType, isSameOriginRequest } from '../router/origin.js';
 import Routes from '../router/Routes.js';
 import type { RouterRequest, RouterResponse } from '../router/Router.js';
 import { logger } from '../logger/Logger.js';
@@ -71,6 +73,26 @@ export interface EventFunctionProxyOptions {
    * port ignored. `true` disables the check.
    */
   allowedHosts?: string[] | true;
+  /**
+   * Largest request body the proxy accepts, in bytes; a larger one is
+   * answered `413 PAYLOAD_TOO_LARGE` before the handler runs. Default 1 MiB,
+   * the router's default. Set it to the `maxBodyBytes` of the router the
+   * handler wraps, so local dev refuses (and accepts) what deployment does.
+   */
+  maxBodyBytes?: number;
+}
+
+/**
+ * Decodes a request body that is valid UTF-8 to text; anything else is
+ * `null`. Used to tell a text body from a binary one.
+ */
+const strictUtf8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
+function utf8OrNull(bytes: Buffer): string | null {
+  try {
+    return strictUtf8.decode(bytes);
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -124,43 +146,21 @@ function isLoopbackOrigin(origin: string): boolean {
 }
 
 /**
- * Whether a request is same-origin with the backend it reached. A browser's
- * `Sec-Fetch-Site` is authoritative when present; otherwise the Origin's host
- * must equal the Host header. Mirrors the router's same-origin test.
+ * Whether a request is same-origin with the backend it reached: the router's
+ * own test (`Sec-Fetch-Site` when present, else Origin host equals Host).
  *
  * With the Host check off (`allowedHosts: true`) neither signal can be
  * trusted for a non-loopback Origin: a DNS-rebinding page is same-origin with
  * the backend as far as its browser knows, and its Origin host equals the Host
  * it sends. Only a loopback Origin can then count as same-origin.
  */
-function isSameOriginRequest(req: IncomingMessage, origin: string, hostCheckOff: boolean): boolean {
+function isSameOriginLocalRequest(
+  req: IncomingMessage,
+  origin: string,
+  hostCheckOff: boolean
+): boolean {
   if (hostCheckOff && !isLoopbackOrigin(origin)) return false;
-  const fetchSite = req.headers['sec-fetch-site'];
-  if (fetchSite !== undefined) return fetchSite === 'same-origin';
-  const host = req.headers.host;
-  if (typeof host !== 'string' || !host) return false;
-  try {
-    return new URL(origin).host.toLowerCase() === host.toLowerCase();
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Request body types a page can send cross-site without a CORS preflight
- * (an HTML form, or a `no-cors` fetch). Compared on the MIME essence, as the
- * router does.
- */
-const CORS_SAFELISTED_CONTENT_TYPES = new Set([
-  'application/x-www-form-urlencoded',
-  'multipart/form-data',
-  'text/plain',
-]);
-
-function isCorsSafelistedContentType(contentType: string | undefined): boolean {
-  if (typeof contentType !== 'string') return false;
-  const essence = contentType.split(';', 1)[0].trim().toLowerCase();
-  return CORS_SAFELISTED_CONTENT_TYPES.has(essence);
+  return isSameOriginRequest(req.headers, origin);
 }
 
 function hasRequestBody(req: IncomingMessage): boolean {
@@ -196,7 +196,7 @@ function isForbiddenCrossOriginWrite(
   const allowed =
     origin !== undefined &&
     (Array.isArray(cors)
-      ? cors.includes(origin) || isSameOriginRequest(req, origin, hostCheckOff)
+      ? cors.includes(origin) || isSameOriginLocalRequest(req, origin, hostCheckOff)
       : isLoopbackOrigin(origin));
   if (origin !== undefined && !allowed) return true;
   // SECURITY (fail closed): a browser that says the request is cross-site or
@@ -352,6 +352,8 @@ export default class Local {
     options: EventFunctionProxyOptions = {}
   ) {
     const router = new Router({
+      // Validated by the router: a positive integer, default 1 MiB.
+      ...(options.maxBodyBytes !== undefined ? { maxBodyBytes: options.maxBodyBytes } : {}),
       initRoutes: [
         class LocalRoutes extends Routes {
           constructor(router: Router) {
@@ -366,6 +368,16 @@ export default class Local {
                     requestContext?: Record<string, unknown>;
                     event?: Record<string, unknown>;
                   }) || {};
+
+                // The body as API Gateway sends it: the raw text, unparsed
+                // (the wrapped handler parses it), or base64 with
+                // `isBase64Encoded` when it is not valid UTF-8. Re-encoding a
+                // parsed body (as this once did with JSON.stringify) turned a
+                // text body into a quoted JSON string and grew its size.
+                const rawBody = Buffer.isBuffer(request.body) ? request.body : null;
+                const text = rawBody ? utf8OrNull(rawBody) : null;
+                const body =
+                  rawBody === null ? undefined : text !== null ? text : rawBody.toString('base64');
 
                 const rawQueryString = new URLSearchParams(request.query).toString();
                 const now = new Date();
@@ -414,8 +426,8 @@ export default class Local {
                     authorizer: request.authorizer || null,
                     ...(proxyOptions.requestContext || {}),
                   } as EventFunctionProxyEvent['requestContext'],
-                  body: request.body ? JSON.stringify(request.body) : undefined,
-                  isBase64Encoded: false,
+                  body,
+                  isBase64Encoded: rawBody !== null && text === null,
                   ...(proxyOptions.event || {}),
                 });
 
@@ -557,7 +569,11 @@ export default class Local {
           });
           res.statusCode = 403;
           res.setHeader('Content-Type', 'application/json');
-          if (options.cors === undefined) res.setHeader('Vary', 'Origin');
+          // The answer depends on Origin whenever the mode reflects
+          // origins, so caches must key on it.
+          if (options.cors === undefined || Array.isArray(options.cors)) {
+            res.setHeader('Vary', 'Origin');
+          }
           res.end(
             JSON.stringify({
               success: false,
@@ -588,7 +604,7 @@ export default class Local {
           }
         }
 
-        return router.nodeJSRequest(req, res, {
+        const routerOptions = {
           cors: options.cors === undefined ? false : options.cors,
           proxyOptions: {
             requestContext: {
@@ -600,7 +616,9 @@ export default class Local {
               ...requestOptions.event,
             },
           },
-        });
+        };
+        // Internal flag: hand the route the raw body bytes (see RAW_BODY).
+        return router.nodeJSRequest(req, res, Object.assign(routerOptions, { [RAW_BODY]: true }));
       },
     };
   }
