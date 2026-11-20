@@ -115,19 +115,26 @@ export interface LogRequestOptions {
    * body can hold personal data under any field name, and a list of names to
    * redact can never be complete.
    *
-   * When on, object and array bodies are logged with every sensitive key
-   * (passwords, tokens, card numbers, ...) redacted and long strings
-   * truncated. Text bodies (form posts, multipart, plain text, base64) are
-   * never logged, since key-based redaction cannot see inside a string.
+   * Requires a non-empty `bodyFields`; without one only the summary is
+   * logged (and a warning is written once). Text bodies (form posts,
+   * multipart, plain text, base64) are never logged, since key-based
+   * redaction cannot see inside a string.
    */
   logBody?: boolean;
   /**
-   * With `logBody`, the field names to log verbatim (exact, case-sensitive).
-   * Every other field, at any depth, is logged as `'[REDACTED]'`; a nested
-   * object or array is walked only when its own key is listed. Sensitive keys
-   * stay redacted even when listed. Recommended whenever `logBody` is on.
+   * With `logBody`, the field names to log (exact, case-sensitive). Every
+   * other field, at any depth, is logged as `'[REDACTED]'`; a nested object
+   * or array is walked only when its own key is listed. Sensitive keys
+   * (passwords, tokens, card numbers, ...) stay redacted even when listed,
+   * and strings are cut at 256 characters.
    */
   bodyFields?: readonly string[];
+  /**
+   * Query-string and path parameter names whose values are logged, under the
+   * same rules as `bodyFields`. By default only parameter names are logged,
+   * never values.
+   */
+  paramFields?: readonly string[];
 }
 
 const REDACTED = '[REDACTED]';
@@ -142,13 +149,13 @@ const capString = (value: string): string =>
     : value;
 
 /**
- * Walks a parsed body, redacting sensitive keys always and, with an
- * allowlist, every key not on it. `allowed` says whether the nearest
- * enclosing key permits a primitive to be logged.
+ * Walks a parsed body, redacting every key not on the allowlist and every
+ * sensitive key even if it is. `allowed` says whether the nearest enclosing
+ * key permits a primitive to be logged.
  */
 function redactBody(
   value: unknown,
-  fields: ReadonlySet<string> | null,
+  fields: ReadonlySet<string>,
   allowed: boolean,
   depth: number,
   seen: WeakSet<object>
@@ -169,7 +176,7 @@ function redactBody(
   }
   const out: Record<string, unknown> = {};
   for (const [key, child] of Object.entries(value)) {
-    if (isSensitiveKey(key) || (fields !== null && !fields.has(key))) {
+    if (isSensitiveKey(key) || !fields.has(key)) {
       out[key] = REDACTED;
     } else {
       out[key] = redactBody(child, fields, true, depth + 1, seen);
@@ -197,7 +204,7 @@ function bodySummary(body: unknown, contentType: string | undefined): unknown {
 }
 
 /**
- * Opted in with `logBody`. A raw event body is a string that is usually, but
+ * Opted in with `logBody` and `bodyFields`. A raw event body is a string that is usually, but
  * not always, JSON; it is parsed defensively so a non-JSON body never makes
  * the logging call throw.
  *
@@ -206,7 +213,7 @@ function bodySummary(body: unknown, contentType: string | undefined): unknown {
  * redaction works by object key, and a string has none, so credentials in it
  * would reach the log verbatim. Only its length is kept.
  */
-function bodyContent(body: unknown, bodyFields: readonly string[] | undefined): unknown {
+function bodyContent(body: unknown, fields: ReadonlySet<string>): unknown {
   if (body === null || body === undefined || body === '') return undefined;
   if (Buffer.isBuffer(body)) return `[binary body omitted, ${body.length} bytes]`;
   let parsed: unknown = body;
@@ -220,14 +227,40 @@ function bodyContent(body: unknown, bodyFields: readonly string[] | undefined): 
       return `[text body omitted, ${body.length} chars]`;
     }
   }
-  const fields = bodyFields ? new Set(bodyFields) : null;
-  return redactBody(parsed, fields, fields === null, 0, new WeakSet());
+  return redactBody(parsed, fields, false, 0, new WeakSet());
 }
 
+/** At most this many parameter names are logged per request. */
+const MAX_PARAM_NAMES = 50;
+
 /**
- * Logs an incoming request: method, path, client IP, user agent, query and
- * path parameters, and a summary of the body. Body content is logged only
- * with `options.logBody`.
+ * Query or path parameters. By default only their names (client-controlled,
+ * so bounded in count and length); with `paramFields`, an object whose
+ * unlisted and sensitive values are `'[REDACTED]'`.
+ */
+function paramsForLog(
+  params: Record<string, unknown> | null | undefined,
+  fields: ReadonlySet<string> | null
+): unknown {
+  if (!params || typeof params !== 'object') return undefined;
+  if (fields) return redactBody(params, fields, false, 0, new WeakSet());
+  const names = Object.keys(params);
+  const logged = names.slice(0, MAX_PARAM_NAMES).map(capString);
+  if (names.length > MAX_PARAM_NAMES) logged.push(`…[${names.length - MAX_PARAM_NAMES} more]`);
+  return logged;
+}
+
+/** A non-empty allowlist as a set, or null. */
+const fieldSet = (fields: readonly string[] | undefined): ReadonlySet<string> | null =>
+  fields && fields.length > 0 ? new Set(fields) : null;
+
+let warnedLogBodyWithoutFields = false;
+
+/**
+ * Logs an incoming request: method, path, client IP, user agent, the names
+ * of its query and path parameters, and a summary of the body. Body content
+ * is logged only with `options.logBody` and a `bodyFields` allowlist;
+ * parameter values only for names in `options.paramFields`.
  *
  * @param request - A `RouterRequest` (preferred), or an API Gateway event
  * @param options - See {@link LogRequestOptions}
@@ -240,12 +273,34 @@ export function logRequest(
   const routerRequest = isRouterRequest(request) ? request : null;
   const event = request as RequestEvent;
 
+  const bodyFields = options.logBody ? fieldSet(options.bodyFields) : null;
+  if (options.logBody && !bodyFields && !warnedLogBodyWithoutFields) {
+    // Fail closed: logging every field but a fixed list of sensitive names is
+    // what leaked personal data. Warn rather than throw, so a misconfigured
+    // logger never takes a request down.
+    warnedLogBodyWithoutFields = true;
+    logger.warn(
+      'logRequest: logBody needs a non-empty bodyFields allowlist; logging summary only',
+      {
+        code: 'REQUEST_LOGGER_BODY_FIELDS_REQUIRED',
+        source: 'RequestLogger.logRequest',
+      }
+    );
+  }
+  const paramFields = fieldSet(options.paramFields);
+
   requestLogger.info('Incoming request', {
-    body: options.logBody
-      ? bodyContent(request.body, options.bodyFields)
+    body: bodyFields
+      ? bodyContent(request.body, bodyFields)
       : bodySummary(request.body, contentTypeOf(request)),
-    queryParams: routerRequest ? routerRequest.query : event.queryStringParameters,
-    pathParams: routerRequest ? routerRequest.params : event.pathParameters,
+    queryParams: paramsForLog(
+      routerRequest ? routerRequest.query : event.queryStringParameters,
+      paramFields
+    ),
+    pathParams: paramsForLog(
+      routerRequest ? routerRequest.params : event.pathParameters,
+      paramFields
+    ),
   });
 }
 

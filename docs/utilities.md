@@ -371,40 +371,54 @@ top-level `method`, so the two are told apart by that. A raw API Gateway event
 `requestContext.http.sourceIp` / `requestContext.identity.sourceIp`, never from
 `X-Forwarded-For`.
 
-`logRequest` logs query and path parameters and a summary of the body, never
-its content by default: `{ contentType, bytes }` for a raw body,
-`{ contentType, fields }` for a parsed object, `{ contentType, items }` for an
-array. A body can hold personal data under any field name (`dob`, `diagnosis`,
-`address`), and a list of names to redact can never be complete, so logging
-content is an explicit choice:
+By default `logRequest` logs no request data values at all:
+
+- the body as a summary only: `{ contentType, bytes }` for a raw body,
+  `{ contentType, fields }` for a parsed object, `{ contentType, items }` for
+  an array;
+- query and path parameters as their names only, e.g.
+  `queryParams: ['page', 'email']` (at most 50 names, each cut at 256
+  characters).
+
+A body or query string can hold personal data under any name (`dob`,
+`diagnosis`, `address`), and a list of names to redact can never be complete,
+so logging values means naming the fields you want:
 
 ```typescript
 interface LogRequestOptions {
-  /** Log body content. Default false. */
+  /** Log body content. Default false. Needs a non-empty bodyFields. */
   logBody?: boolean;
-  /** With logBody: field names logged verbatim; all others become '[REDACTED]'. */
+  /** Body field names to log; every other field becomes '[REDACTED]'. */
   bodyFields?: readonly string[];
+  /** Query and path parameter names whose values are logged. */
+  paramFields?: readonly string[];
 }
 
-// Recommended when you need body content: name the fields.
-logRequest(req, { logBody: true, bodyFields: ['orderId', 'items', 'sku', 'qty'] });
+logRequest(req, {
+  logBody: true,
+  bodyFields: ['orderId', 'items', 'sku', 'qty'],
+  paramFields: ['page', 'id'],
+});
 ```
 
-With `logBody: true`:
+`logBody: true` without a non-empty `bodyFields` logs the summary only and
+writes one `REQUEST_LOGGER_BODY_FIELDS_REQUIRED` warning per process (it never
+throws at request time).
 
-- A raw event body is parsed as JSON (never thrown on). A body that is text
-  rather than JSON (form posts, multipart, plain text, base64) is still not
-  logged, because redaction cannot see inside a string; it appears as
-  `[text body omitted, N chars]`.
+The allowlists follow the same rules:
+
+- Every key not listed is `[REDACTED]`, at any depth. Names match exactly. A
+  nested object or array is walked only when its own key is listed, so
+  `{ order: { id } }` needs both `order` and `id`. Primitives in a top-level
+  array have no field name and are redacted.
 - Keys matching the logger's sensitive list (`password`, `token`, `secret`,
   `apiKey`, `authorization`, `cookie`, `session`, `cardNumber`, `cvv`, `ssn`,
-  ...) are always `[REDACTED]`, even when listed in `bodyFields`.
-- With `bodyFields`, every key not listed is `[REDACTED]`, at any depth. Names
-  match exactly. A nested object or array is walked only when its own key is
-  listed, so `{ order: { id } }` needs both `order` and `id`. Primitives in a
-  top-level array have no field name and are redacted.
-- Without `bodyFields`, every other field is logged. Prefer an allowlist.
+  ...) are always `[REDACTED]`, even when listed.
 - String values are cut at 256 characters and nesting at 10 levels.
+- A raw event body is parsed as JSON (never thrown on). A body that is text
+  rather than JSON (form posts, multipart, plain text, base64) is never logged,
+  because redaction cannot see inside a string; it appears as
+  `[text body omitted, N chars]`.
 
 `logResponse` accepts a
 `RouterResponse` (`status`) or an Event Function result (`statusCode`) and logs

@@ -290,7 +290,7 @@ describe('RequestLogger', () => {
         headers: {},
       };
 
-      logRequest(event, { logBody: true });
+      logRequest(event, { logBody: true, bodyFields: ['name'], paramFields: ['filter', 'id'] });
 
       expect(logger.info).toHaveBeenCalledWith(
         'Incoming request',
@@ -300,6 +300,23 @@ describe('RequestLogger', () => {
           pathParams: { id: '123' },
         })
       );
+    });
+
+    it('logs only parameter names by default', () => {
+      logRequest({
+        requestContext: { requestId: 'test-id', http: { method: 'GET', path: '/api/users' } },
+        queryStringParameters: { email: 'ana@example.test', page: '2' },
+        pathParameters: { id: '123' },
+        headers: {},
+      });
+
+      expect(logger.info).toHaveBeenCalledWith(
+        'Incoming request',
+        expect.objectContaining({ queryParams: ['email', 'page'], pathParams: ['id'] })
+      );
+      const logged = JSON.stringify(vi.mocked(logger.info).mock.calls);
+      expect(logged).not.toContain('ana@example.test');
+      expect(logged).not.toContain('123');
     });
 
     it('should handle request without body', () => {
@@ -338,7 +355,7 @@ describe('RequestLogger', () => {
         headers: {},
       };
 
-      expect(() => logRequest(event, { logBody: true })).not.toThrow();
+      expect(() => logRequest(event, { logBody: true, bodyFields: ['name'] })).not.toThrow();
       expect(logger.info).toHaveBeenCalledWith(
         'Incoming request',
         expect.objectContaining({ body: '[text body omitted, 12 chars]' })
@@ -352,7 +369,7 @@ describe('RequestLogger', () => {
         headers: { 'content-type': 'application/x-www-form-urlencoded' },
         body,
       };
-      logRequest(event, { logBody: true });
+      logRequest(event, { logBody: true, bodyFields: ['name'] });
 
       expect(logger.info).toHaveBeenCalledWith(
         'Incoming request',
@@ -372,7 +389,7 @@ describe('RequestLogger', () => {
         body,
       };
       logRequest(event);
-      logRequest(event, { logBody: true });
+      logRequest(event, { logBody: true, bodyFields: ['name'] });
 
       expect(JSON.stringify(vi.mocked(logger.info).mock.calls)).not.toContain(body);
     });
@@ -384,7 +401,7 @@ describe('RequestLogger', () => {
           headers: {},
           body: '"hunter2"',
         },
-        { logBody: true }
+        { logBody: true, bodyFields: ['name'] }
       );
 
       expect(logger.info).toHaveBeenCalledWith(
@@ -542,15 +559,15 @@ describe('RequestLogger with a RouterRequest', () => {
       'Incoming request',
       expect.objectContaining({
         body: { contentType: undefined, fields: 1 },
-        queryParams: { q: '1' },
-        pathParams: { id: '7' },
+        queryParams: ['q'],
+        pathParams: ['id'],
       })
     );
     expect(JSON.stringify(vi.mocked(logger.info).mock.calls)).not.toContain('John');
   });
 
   it('logs the parsed body when opted in', () => {
-    logRequest(request, { logBody: true });
+    logRequest(request, { logBody: true, bodyFields: ['name'] });
     expect(logger.info).toHaveBeenCalledWith(
       'Incoming request',
       expect.objectContaining({ body: { name: 'John' } })
@@ -565,7 +582,7 @@ describe('RequestLogger with a RouterRequest', () => {
         headers: { 'content-type': 'application/x-www-form-urlencoded' },
         body,
       },
-      { logBody: true }
+      { logBody: true, bodyFields: ['name'] }
     );
     expect(logger.info).toHaveBeenCalledWith(
       'Incoming request',
@@ -664,15 +681,62 @@ describe('logRequest body logging options', () => {
     expect((loggedBody() as { contentType: string }).contentType).toHaveLength(100);
   });
 
-  it('with logBody and no allowlist, redacts sensitive keys but logs other fields', () => {
+  it('logs only the summary when logBody has no (or an empty) bodyFields allowlist', () => {
     logRequest(event(patient), { logBody: true });
-    expect(loggedBody()).toEqual({
-      name: 'Ana',
-      ssn: '[REDACTED]',
-      dob: '1990-01-01',
-      cardNumber: '[REDACTED]',
-      diagnosis: 'private',
+    logRequest(event(patient), { logBody: true, bodyFields: [] });
+    for (const call of vi.mocked(logger.info).mock.calls) {
+      expect((call[1] as Record<string, unknown>).body).toEqual({
+        contentType: 'application/json',
+        fields: 5,
+      });
+    }
+    expect(JSON.stringify(vi.mocked(logger.info).mock.calls)).not.toContain('Ana');
+  });
+
+  it('warns once, not per request, when logBody lacks bodyFields', async () => {
+    vi.resetModules();
+    const fresh = await import('./RequestLogger.ts');
+    const { logger: freshLogger } = await import('@designofadecade/logger/Logger');
+    vi.mocked(freshLogger.warn).mockClear();
+
+    expect(() => {
+      fresh.logRequest(event(patient), { logBody: true });
+      fresh.logRequest(event(patient), { logBody: true });
+    }).not.toThrow();
+
+    expect(freshLogger.warn).toHaveBeenCalledTimes(1);
+    expect(freshLogger.warn).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ code: 'REQUEST_LOGGER_BODY_FIELDS_REQUIRED' })
+    );
+  });
+
+  it('logs allowlisted parameter values, redacting the rest and sensitive names', () => {
+    logRequest(
+      {
+        ...event(undefined),
+        query: { page: '2', email: 'ana@example.test', token: 't-1', q: 'x'.repeat(400) },
+        params: { id: '7', slug: 'private-slug' },
+      },
+      { paramFields: ['page', 'id', 'token', 'q'] }
+    );
+    const context = vi.mocked(logger.info).mock.calls[0][1] as Record<string, unknown>;
+    expect(context.queryParams).toEqual({
+      page: '2',
+      email: '[REDACTED]',
+      token: '[REDACTED]',
+      q: expect.stringContaining('[truncated, 400 chars]'),
     });
+    expect(context.pathParams).toEqual({ id: '7', slug: '[REDACTED]' });
+  });
+
+  it('bounds the number of parameter names logged', () => {
+    const query = Object.fromEntries(Array.from({ length: 60 }, (_, i) => [`k${i}`, 'v']));
+    logRequest({ ...event(undefined), query });
+    const names = (vi.mocked(logger.info).mock.calls[0][1] as { queryParams: string[] })
+      .queryParams;
+    expect(names).toHaveLength(51);
+    expect(names[50]).toBe('…[10 more]');
   });
 
   it('with bodyFields, logs only the listed fields', () => {
@@ -763,7 +827,7 @@ describe('logRequest body logging options', () => {
   it('stops at a depth limit', () => {
     let deep: Record<string, unknown> = { leaf: 1 };
     for (let i = 0; i < 20; i++) deep = { n: deep };
-    logRequest(event(deep), { logBody: true });
+    logRequest(event(deep), { logBody: true, bodyFields: ['n', 'leaf'] });
     expect(JSON.stringify(loggedBody())).toContain('[MAX_DEPTH]');
   });
 });
