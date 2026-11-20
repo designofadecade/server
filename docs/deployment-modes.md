@@ -383,7 +383,7 @@ are "the default does this; do not undo it".
 
 - [ ] Grep for module-level mutable state that assumes one request at a time (see [Concurrency](#concurrency-inside-one-environment)).
 - [ ] Size connection pools for 64 concurrent requests per environment (or whatever you configure), not for one.
-- [ ] Set `cors` to an explicit origin allowlist if browsers send credentials. Lambda adds no CORS headers of its own.
+- [ ] Set `cors` to an explicit origin allowlist if browsers send credentials. Lambda adds no CORS headers of its own. Non-safe methods and preflights from an origin off the list (and not same-origin) get a `403`; see [CORS](router.md#cors).
 - [ ] Keep request bodies under 1 MB or handle large uploads out of band (pre-signed S3 URLs). `nodeJSRequest` rejects larger bodies.
 - [ ] Only `GET HEAD POST PUT PATCH OPTIONS DELETE` reach the function; Lambda answers 400 to anything else before your code runs.
 - [ ] Request line plus headers must fit in 128 KiB (Lambda answers 431 otherwise). Large cookies and bearer tokens count.

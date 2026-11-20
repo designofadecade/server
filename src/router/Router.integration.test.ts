@@ -249,6 +249,81 @@ describe('Router integration', () => {
       });
       expect(blocked.headers['access-control-allow-origin']).toBeUndefined();
       expect(blocked.headers['access-control-allow-credentials']).toBeUndefined();
+      // A safe method still runs; only the response is unreadable cross-origin.
+      expect(blocked.status).toBe(200);
+    });
+
+    it('should refuse a forged cross-origin POST before the route runs', async () => {
+      let reached = false;
+      class SpyRoutes extends Routes {
+        constructor(router: Router) {
+          super(router);
+          this.addRoute('/account/email', 'POST', async () => {
+            reached = true;
+            return { status: 200, body: 'changed' };
+          });
+        }
+      }
+      live = await listen(new Router({ initRoutes: [SpyRoutes] }), {
+        cors: ['https://app.example.com'],
+      });
+
+      const forged = await request(live.port, '/account/email', {
+        method: 'POST',
+        headers: {
+          origin: 'https://evil.example',
+          'content-type': 'text/plain;application/json',
+          cookie: 'session=victim',
+        },
+        body: JSON.stringify({ email: 'attacker@evil.test' }),
+      });
+      expect(forged.status).toBe(403);
+      expect(JSON.parse(forged.body).error.code).toBe('CORS_ORIGIN_FORBIDDEN');
+      expect(forged.headers['vary']).toBe('Origin');
+      expect(reached).toBe(false);
+
+      const preflight = await request(live.port, '/account/email', {
+        method: 'OPTIONS',
+        headers: { origin: 'https://evil.example', 'access-control-request-method': 'POST' },
+      });
+      expect(preflight.status).toBe(403);
+      expect(preflight.headers['access-control-allow-methods']).toBeUndefined();
+
+      // The site's own pages: Origin host matches Host.
+      const sameOrigin = await request(live.port, '/account/email', {
+        method: 'POST',
+        headers: { origin: `http://127.0.0.1:${live.port}` },
+        body: '{}',
+      });
+      expect(sameOrigin.status).toBe(200);
+      expect(reached).toBe(true);
+    });
+
+    it('should let an allowlisted origin POST with credentials', async () => {
+      live = await listen(new Router({ initRoutes: [EchoRoutes] }), {
+        cors: ['https://app.example.com'],
+      });
+
+      const response = await request(live.port, '/echo', {
+        method: 'POST',
+        headers: { origin: 'https://app.example.com', 'content-type': 'application/json' },
+        body: JSON.stringify({ a: 1 }),
+      });
+      expect(response.status).toBe(200);
+      expect(JSON.parse(response.body)).toEqual({ received: { a: 1 } });
+      expect(response.headers['access-control-allow-credentials']).toBe('true');
+    });
+
+    it('should leave cors: true permissive for cross-origin POSTs', async () => {
+      live = await listen(new Router({ initRoutes: [EchoRoutes] }), { cors: true });
+
+      const response = await request(live.port, '/echo', {
+        method: 'POST',
+        headers: { origin: 'https://evil.example', 'content-type': 'application/json' },
+        body: '{}',
+      });
+      expect(response.status).toBe(200);
+      expect(response.headers['access-control-allow-origin']).toBe('*');
     });
   });
 
