@@ -109,7 +109,11 @@ describe('Local.EventFunctionProxy event shape', () => {
       socket: { remoteAddress: '192.0.2.10' },
     });
 
-    await Local.EventFunctionProxy(handler).request(req, res);
+    // A non-loopback Host is refused by default (DNS rebinding); opt it in.
+    await Local.EventFunctionProxy(handler, { allowedHosts: ['api.example.com'] }).request(
+      req,
+      res
+    );
 
     const ctx = seenEvent.requestContext;
     expect(ctx.http.protocol).toBe('HTTP/1.1');

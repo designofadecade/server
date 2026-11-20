@@ -45,7 +45,11 @@ export { logger } from './logger/Logger.js';
 export { default as ApiClient } from './client/ApiClient.js';
 export { default as RouteError } from './router/RouteError.js';
 export type { FromErrorOptions, RouteErrorResponse, RouteErrorBody } from './router/RouteError.js';
-export type { EventFunctionProxyEvent, EventFunctionProxyResult } from './local/Local.js';
+export type {
+  EventFunctionProxyEvent,
+  EventFunctionProxyOptions,
+  EventFunctionProxyResult,
+} from './local/Local.js';
 
 // Documentation
 export { OpenApiGenerator, generateSwaggerUI } from './docs/OpenApiGenerator.js';
