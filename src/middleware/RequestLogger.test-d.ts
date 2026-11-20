@@ -1,3 +1,4 @@
+import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 import { describe, it, assertType, expectTypeOf } from 'vitest';
 import {
   logRequest,
@@ -7,6 +8,7 @@ import {
   type RequestLogOptions,
   type LoggableRequest,
   type RouterRequest,
+  type EventFunctionEvent,
 } from '../index.js';
 
 describe('LogRequestOptions', () => {
@@ -46,5 +48,16 @@ describe('LoggableRequest', () => {
     expectTypeOf<RouterRequest>().toMatchTypeOf<LoggableRequest>();
     const request = {} as RouterRequest;
     logRequest(request, { logPath: true });
+  });
+});
+
+describe('API Gateway events', () => {
+  it('accepts an EventFunctionEvent or an APIGatewayProxyEventV2 without a cast', () => {
+    const event = {} as EventFunctionEvent;
+    const official = {} as APIGatewayProxyEventV2;
+    logRequest(event);
+    logRequest(official, { paramFields: ['page'] });
+    createRequestLogger(event).info('x');
+    logResponse(official, { statusCode: 200 }, 5);
   });
 });
