@@ -10,8 +10,11 @@ change, see [CHANGELOG.md](./CHANGELOG.md).
 11.0 adds AWS Lambda **Web Function** support (the function is a real HTTP
 server) and renames everything that was called "Lambda" after the model it
 actually implements, the Lambda **Event Function** (API Gateway HTTP API v2).
-The renames are mechanical; the behavioural changes are the client IP and
-request id, which are now taken only from sources the caller cannot forge.
+The renames are mechanical. The behavioural changes are security defaults:
+the client IP and request id are taken only from sources the caller cannot
+forge, the CORS allowlist refuses cross-origin writes, `logRequest` logs only
+the values you name, WebSocket checks have a deadline, and the local Event
+Function proxy serves loopback only (items 6 and 10 to 14).
 
 Work through the greps. Nothing returned means that item does not apply.
 
@@ -230,17 +233,56 @@ grep -rn "on('message'\|EventsManager\|\.register(" --include="*.ts" --include="
 `EventsManager` calls handlers as `handler(msg, ws, req)`. One-argument
 listeners are unaffected; a handler that already took an optional second
 parameter, or logs all its arguments, now receives the socket there. Frames
-from a socket the server has started closing are dropped. Do asynchronous
-authentication in `verifyClient`; a `connection` listener that refuses a
-client must do so synchronously (`ws.terminate()`), or check `ws`/`req` in each
-handler. See [docs/websocket.md](./docs/websocket.md).
+from a socket the server has started closing are dropped.
 
-### 11. `logRequest` omits text bodies
+Authenticate with the new `authenticate` option, not in the `connection`
+handler. Frames sent while an asynchronous check in `connection` is pending
+are dispatched to handlers:
 
-A request body that is not JSON (form-encoded, multipart, plain text, base64)
-is now logged as `[text body omitted, N chars]` instead of verbatim. JSON
-object and array bodies are logged and redacted by key as before. Nothing to
-change unless a log query relied on raw text bodies.
+```ts
+// Before
+wss.on('connection', async (ws, req) => {
+  if (!(await sessionFrom(req))) ws.close(4401);
+});
+
+// After
+const wss = new WebSocketServer({
+  port: 8080,
+  allowedOrigins: ['https://app.example.com'],
+  authenticate: (req) => sessionFrom(req), // null -> 401, no socket opens
+});
+wss.on('message', (parsed, ws, req, session) => {
+  /* authorize from session */
+});
+```
+
+A check kept in the `connection` handler must be synchronous and use
+`ws.terminate()`, not `ws.close()`. `verifyClient` and `authenticate` now share
+a 10 s `upgradeTimeoutMs`; an upgrade whose checks take longer is refused (403
+while `verifyClient` is pending, 401 while `authenticate` is). Raise
+`upgradeTimeoutMs` if your checks are slow. See
+[docs/websocket.md](./docs/websocket.md).
+
+### 11. `logRequest` logs values only for fields you name
+
+`logRequest(req)` now logs the body's content type and size, and only the
+names of query and path parameters. Text and binary bodies are never logged.
+To keep logging values, list them:
+
+```ts
+logRequest(req, {
+  logBody: true,
+  bodyFields: ['orderId', 'items', 'sku', 'qty'],
+  paramFields: ['page', 'id'],
+});
+```
+
+Unlisted fields become `'[REDACTED]'`. Nested keys must be listed too, so
+`{ order: { id } }` needs `'order'` and `'id'`. Sensitive keys stay redacted
+even when listed. `logBody: true` without a non-empty `bodyFields` logs only
+the summary and warns once. `queryParams` and `pathParams` in log lines are now
+arrays of names unless `paramFields` is set, so update any log queries that
+read their values.
 
 ### 12. CORS-safelisted content types are not JSON-parsed
 
@@ -248,6 +290,33 @@ A body sent as `text/plain`, `application/x-www-form-urlencoded` or
 `multipart/form-data` reaches the route as a string even if the header also
 contains `application/json` (for example `text/plain;application/json`).
 Legitimate JSON clients send `application/json` and are unaffected.
+
+### 13. The CORS allowlist rejects cross-origin writes
+
+If you pass `cors: [...]`, non-safe requests (POST/PUT/PATCH/DELETE, and
+preflights) from an origin that is neither on the list nor same-origin now get
+403 `CORS_ORIGIN_FORBIDDEN` instead of reaching the route. Add every browser
+origin that legitimately calls the API to the list. The site's own pages pass
+automatically (`Sec-Fetch-Site: same-origin`, or Origin host = `Host`). If a
+proxy rewrites `Host` and you must support browsers without `Sec-Fetch-Site`,
+add the public origin too. Non-browser clients that send no Origin are
+unaffected.
+
+### 14. `Local.EventFunctionProxy` is loopback-only by default
+
+Nothing changes if you open your frontend at `localhost`, `127.0.0.1` or
+`*.localhost` and point it at the proxy on a loopback address. Otherwise:
+
+- **Proxy reached by a LAN IP, a custom hostname or a tunnel** now answers
+  `403 HOST_NOT_ALLOWED`. Add the names:
+  `Local.EventFunctionProxy(handler, { allowedHosts: ['192.168.1.20', 'my-app.tunnel.example'] })`.
+- **Frontend served from a non-loopback origin** (LAN IP, custom host, tunnel,
+  `file:`/`null`) no longer gets CORS. List it:
+  `cors: ['http://192.168.1.20:5173']`. This allowlist also sends
+  `Access-Control-Allow-Credentials: true`, as the router does.
+- **To restore the old behaviour exactly:** `{ cors: true, allowedHosts: true }`.
+  This is unsafe: any website you visit can use the proxy with its injected
+  authorizer. Both settings log a warning at startup.
 
 ---
 

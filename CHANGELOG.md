@@ -92,6 +92,21 @@ Every item is a rename unless marked otherwise. There are no aliases.
   address through the header, or asserted the literal `127.0.0.1`, should use
   the `requestContext` option instead. (behaviour, see Security)
 
+- **`Local.EventFunctionProxy` serves loopback only by default.** Any other,
+  missing or malformed `Host` gets `403 HOST_NOT_ALLOWED`, and only loopback
+  origins get CORS (reflected, `Vary: Origin`, no credentials). Opt hosts in
+  with `allowedHosts: [...]` and origins with `cors: [...]`. (behaviour, see
+  Security)
+- **`cors: string[]` refuses cross-origin writes** from origins that are
+  neither on the list nor same-origin: `403 CORS_ORIGIN_FORBIDDEN`.
+  (behaviour, see Security)
+- **`logRequest` logs no request values by default**, only the body's content
+  type and size and the names of query and path parameters. New options
+  `logBody` + `bodyFields` and `paramFields`. (behaviour, see Security)
+- **`WebSocketServer` refuses upgrades whose checks run past
+  `upgradeTimeoutMs`** (default 10 000 ms), including a `verifyClient` that
+  never settles. (behaviour, see Security)
+
 ### Security
 
 - **Client IP is never taken from the first `X-Forwarded-For` value.** That
@@ -152,12 +167,62 @@ Every item is a rename unless marked otherwise. There are no aliases.
     terminating a client in the `connection` handler stops its messages at once.
     **Behaviour change:** frames that arrive after the server has started closing
     a socket are no longer emitted.
-- **`logRequest` no longer logs text bodies.** A body that was not JSON (a
-  form-encoded login, multipart, plain text, a base64 event body) was logged
-  as a raw string. The logger redacts secrets by object key, and a string has
-  no keys, so passwords and tokens in such a body reached the log verbatim. It
-  is now logged as `[text body omitted, N chars]`. JSON object and array
-  bodies are logged and redacted as before.
+- **`logRequest` logs no request values by default** (F4). A body that was
+  not JSON (a form-encoded login, multipart, plain text, a base64 event body)
+  used to be logged as a raw string, and JSON bodies were filtered only by a
+  list of sensitive key names, so fields with other names (`dob`, a diagnosis,
+  an address) reached the log. Now the body is logged as
+  `{ contentType, bytes | fields | items }` and query and path parameters as
+  their names only. To log values, name them: `{ logBody: true, bodyFields:
+[...] }` and `paramFields: [...]`. A missing or empty `bodyFields` logs the
+  summary and warns once (`REQUEST_LOGGER_BODY_FIELDS_REQUIRED`). Unlisted
+  keys are `'[REDACTED]'` at any depth, sensitive keys (password, token, ssn,
+  cardNumber, ...) stay redacted even when listed, strings are capped at 256
+  characters, and text and binary bodies are never logged.
+- **The CORS allowlist rejects, not just logs** (F2). With `cors: string[]`, a
+  request whose `Origin` is neither on the list nor same-origin gets
+  `403 CORS_ORIGIN_FORBIDDEN` for preflights and every method but GET/HEAD,
+  before the body is read or any middleware or route runs. Same-origin means
+  `Sec-Fetch-Site: same-origin`, or, with no `Sec-Fetch-Site`, an `Origin`
+  whose host:port equals `Host`; any other `Sec-Fetch-Site` value wins over a
+  matching Host, and a `null` or unparseable Origin never counts. GET/HEAD
+  still run with CORS headers withheld. `Vary: Origin` is on every allowlist
+  response, the 403s included. `cors: true` and no `cors` are unchanged.
+  `eventFunction` does no CORS handling (configure it on API Gateway). CORS is
+  not a CSRF defence on its own; see docs/router.md.
+- **`Local.EventFunctionProxy` no longer sends `Access-Control-Allow-Origin: *`
+  or serves any Host** (F5, F6). The proxy injects an authorizer into every
+  event, so any website the developer visited could drive the local backend
+  and read responses as that identity, and DNS rebinding reached it as
+  same-origin. By default it now serves only loopback `Host` names
+  (`localhost`, `*.localhost`, `127.0.0.0/8`, `[::1]`); any other, missing or
+  malformed Host gets `403 HOST_NOT_ALLOWED` before the body, authorizer or
+  handler is touched. Only loopback origins get CORS, with `Vary: Origin` and
+  no credentials. New options: `cors?: boolean | string[]` (`false` = no CORS
+  headers, `string[]` = router allowlist with credentials, `true` = the old
+  wildcard) and `allowedHosts?: string[] | true` (extra names, case-insensitive,
+  port ignored; `true` disables the check). Both unsafe settings log a warning
+  at startup. `EventFunctionProxyOptions` is now exported.
+- **`WebSocketServer` `authenticate` option** (F3). `authenticate(req)` runs at
+  upgrade time, after `allowedOrigins` and `verifyClient`. A falsy result, a
+  throw, a rejection or running past `upgradeTimeoutMs` refuses the upgrade
+  with 401, so no socket opens and none of the client's frames is dispatched;
+  the error is logged, never sent to the client. A truthy result is stored per
+  connection, passed as a trailing argument to `connection` (`ws, req, auth`)
+  and `message` (`parsed, ws, req, auth`) events and to `EventsManager`
+  handlers, and returned by the new `getAuth(ws)`. Without `authenticate`,
+  event arguments are unchanged.
+- **`WebSocketServer` `upgradeTimeoutMs`.** One deadline (default 10 000 ms)
+  for the whole upgrade gate, `verifyClient` then `authenticate`. Past it the
+  upgrade is refused: 403 while `verifyClient` is pending, 401 while
+  `authenticate` is. A `verifyClient` that never settles no longer holds the
+  pending socket open.
+- **Release pipeline.** The publish job no longer runs `npm ci` (and with it
+  every dependency's install scripts) while holding the npm OIDC token: build,
+  publish and GitHub-release are separate jobs, publishing the packed tarball
+  with `--ignore-scripts`. Every action is pinned to a commit SHA, checkouts
+  do not persist the token, and a tag that does not match `package.json` is
+  refused.
 
 ### Fixed
 
